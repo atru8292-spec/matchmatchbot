@@ -1,8 +1,10 @@
 """FastAPI-сервер бота Anna.
 
-Блок 1 (скелет): приём вебхука Wazzup24 + health-check.
-Блок 2: пул БД поднимается/закрывается через lifespan.
+Входящая труба (без AI): вебхук Wazzup → normalize → insert в БД → debounce → on_flush.
+on_flush пока просто читает склеенный залп из БД и логирует (AI встанет сюда в блоке 6).
 """
+from __future__ import annotations
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -10,6 +12,8 @@ from fastapi import FastAPI, HTTPException, Request, Response
 
 import db
 from config import settings
+from debounce import Debouncer
+from normalize import normalize_wazzup_message
 
 # Логи в stdout → journald (systemd). Помечаем время/уровень/модуль.
 logging.basicConfig(
@@ -18,20 +22,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger("matchmatch")
 
+# Debouncer создаётся в lifespan (склейка серии быстрых сообщений одного лида).
+debouncer: Debouncer | None = None
+
+
+async def _process_burst(phone: str) -> None:
+    """on_flush для debounce (пока БЕЗ AI).
+
+    Читаем склеенный залп непроцессенных inbound из БД (источник истины — не память),
+    логируем и помечаем processed. В блоке 6 вместо лога встанет вызов AI.
+    """
+    msgs = await db.get_unprocessed_inbound(phone)
+    if not msgs:
+        # уже обработано параллельным флашем — нечего делать
+        return
+    combined = "\n".join((m.get("text") or "") for m in msgs)
+    content_types = [(m.get("meta") or {}).get("content_type") for m in msgs]
+    logger.info(
+        "склеенный залп от %s (%d сообщ., типы: %s): %r",
+        phone, len(msgs), content_types, combined,
+    )
+    await db.mark_messages_processed([m["id"] for m in msgs])
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Жизненный цикл: поднять пул БД при старте, закрыть при остановке.
-
-    Если DSN не задан — работаем без БД (пул не создаётся), чтобы приём вебхука
-    поднимался и без настроенной базы. Как только БД станет обязательной на
-    горячем пути — сделаем DSN строго обязательным.
-    """
+    """Поднять пул БД и debouncer при старте, аккуратно закрыть при остановке."""
+    global debouncer
     if settings.supabase_db_dsn:
         await db.init_pool()
     else:
         logger.warning("SUPABASE_DB_DSN не задан — БД не подключена")
+    debouncer = Debouncer(_process_burst, delay=4.0, max_wait=15.0)
     yield
+    if debouncer is not None:
+        await debouncer.shutdown()
     await db.close_pool()
 
 
@@ -50,20 +75,16 @@ async def wazzup_webhook(secret: str, request: Request):
 
     - Сверяем секрет в пути (у Wazzup нет подписи — это наша защита).
     - Отвечаем 200 на тестовый пинг {test: true}.
-    - Логируем входящие сообщения и статусы доставки.
-    - ВСЕГДА возвращаем 200, даже при ошибке обработки (иначе Wazzup уходит
-      в ретрай-шторм). Ошибку логируем ПЕРЕД возвратом, чтобы видеть её.
+    - Каждое сообщение: normalize → insert (persist) → debounce.trigger.
+    - ВСЕГДА возвращаем 200 (кроме неверного секрета), ошибки логируем перед 200.
 
-    ВНИМАНИЕ (деплой): секрет — часть URL, поэтому он попадёт в access-log
-    uvicorn. На проде запускать с `--no-access-log` (см. systemd-юнит, блок 12),
-    иначе секрет утечёт в journald.
+    ВНИМАНИЕ (деплой): секрет — часть URL, попадёт в access-log uvicorn.
+    На проде запускать с `--no-access-log` (см. systemd-юнит, блок 12).
     """
-    # Неверный секрет — единственный случай не-200 (это не Wazzup, а чужой запрос).
     if secret != settings.wazzup_webhook_secret:
         logger.warning("Webhook: неверный секрет в пути")
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    # Парсинг тела. Битый JSON не должен ронять эндпоинт.
     try:
         body = await request.json()
     except Exception:
@@ -82,41 +103,51 @@ async def wazzup_webhook(secret: str, request: Request):
 
         if messages:
             for msg in messages:
-                _log_incoming_message(msg)
+                await _handle_incoming(msg)
 
         if statuses:
-            # Статусы доставки/прочтения обрабатывать будем позже — пока только счётчик.
             logger.info("Webhook: статусов доставки: %d (пока игнор)", len(statuses))
 
         if not messages and not statuses:
             logger.info("Webhook: пейлоад без messages/statuses: %r", str(body)[:300])
 
     except Exception:
-        # Любая ошибка обработки — логируем стектрейс, но отвечаем 200.
         logger.exception("Webhook: ошибка обработки пейлоада")
 
     return Response(status_code=200)
 
 
-def _log_incoming_message(msg) -> None:
-    """Кратко логируем входящее сообщение.
+async def _handle_incoming(msg) -> None:
+    """Обработать одно входящее: normalize → persist → debounce.
 
-    Помечаем channelId и type (text/image/audio/video/document) — пригодится
-    при отладке нормализации в блоке 2.
+    Ошибка одного сообщения не должна рушить остальной батч и ответ 200.
+    Порядок: insert ДО trigger (сообщение persist'ится раньше ack и раньше on_flush).
+    trigger только если сообщение реально вставлено (не дубль Wazzup-ретрая).
     """
-    if not isinstance(msg, dict):
-        logger.info("Webhook: элемент messages не dict: %r", str(msg)[:200])
-        return
-    logger.info(
-        "Webhook inbound: channelId=%s type=%s chatType=%s chatId=%s "
-        "isEcho=%s status=%s has_text=%s has_media=%s messageId=%s",
-        msg.get("channelId"),
-        msg.get("type"),
-        msg.get("chatType"),
-        msg.get("chatId"),
-        msg.get("isEcho"),
-        msg.get("status"),
-        bool(msg.get("text")),
-        bool(msg.get("contentUri")),
-        msg.get("messageId"),
-    )
+    try:
+        nm = normalize_wazzup_message(msg)
+        if nm is None:
+            return  # дроп (echo/статус/не-whatsapp/пустой/неизвестный тип)
+
+        if not db.is_ready():
+            logger.warning("Webhook: БД не готова, сообщение %s не сохранено", nm.external_message_id)
+            return
+
+        inserted = await db.insert_message(
+            nm.phone,
+            "inbound",
+            "lead",
+            nm.user_text,
+            external_message_id=nm.external_message_id,
+            meta={"content_type": nm.content_type},
+        )
+        logger.info(
+            "inbound %s: phone=%s type=%s inserted=%s",
+            nm.external_message_id, nm.phone, nm.content_type, inserted,
+        )
+
+        if inserted and debouncer is not None:
+            await debouncer.trigger(nm.phone)
+
+    except Exception:
+        logger.exception("Webhook: ошибка обработки сообщения")

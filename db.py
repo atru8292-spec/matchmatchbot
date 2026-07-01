@@ -94,6 +94,11 @@ def _get_pool() -> asyncpg.Pool:
     return _pool
 
 
+def is_ready() -> bool:
+    """Готова ли БД (пул создан). Позволяет обработчику не падать без БД."""
+    return _pool is not None
+
+
 def _validate_columns(fields: dict) -> None:
     """Проверить, что все имена колонок из whitelist (защита от инъекции в имя)."""
     unknown = set(fields) - LEAD_COLUMNS
@@ -250,3 +255,34 @@ async def update_lead_fields(phone: str, **fields) -> dict | None:
         logger.exception("update_lead_fields failed: phone=%s fields=%s", phone, list(fields))
         raise
     return dict(row) if row else None
+
+
+async def get_unprocessed_inbound(phone: str) -> list[dict]:
+    """Непроцессенные входящие сообщения лида (для склейки залпа на флаше debounce)."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT * FROM messages "
+            "WHERE lead_phone = $1 AND direction = 'inbound' AND processed = false "
+            "ORDER BY created_at ASC",
+            phone,
+        )
+    except Exception:
+        logger.exception("get_unprocessed_inbound failed: phone=%s", phone)
+        raise
+    return [dict(r) for r in rows]
+
+
+async def mark_messages_processed(ids: list) -> int:
+    """Пометить сообщения processed=true, processed_at=now(). Вернуть число обновлённых."""
+    if not ids:
+        return 0
+    try:
+        rows = await _get_pool().fetch(
+            "UPDATE messages SET processed = true, processed_at = now() "
+            "WHERE id = ANY($1::uuid[]) RETURNING id",
+            ids,
+        )
+    except Exception:
+        logger.exception("mark_messages_processed failed: ids=%s", ids)
+        raise
+    return len(rows)

@@ -52,6 +52,8 @@ class Debouncer:
         self._delay = delay
         self._max_wait = max_wait
         self._states: dict[str, _PhoneState] = {}
+        self._active_flushes: set[asyncio.Task] = set()   # идущие on_flush (для shutdown)
+        self._shutting_down = False
 
     async def trigger(self, phone: str) -> None:
         """Зарегистрировать входящее сообщение номера и (пере)запустить таймер."""
@@ -100,16 +102,22 @@ class Debouncer:
 
     async def _flush(self, phone: str, state: _PhoneState) -> None:
         """Вызвать on_flush(phone) один раз, с защитой от параллельного флаша номера."""
-        # flushing=True ставим ДО await — так trigger() не запустит второй флаш
+        # flushing=True ставим ДО await — так trigger() не запустит второй флаш.
+        # Регистрируем таск в _active_flushes (state.timer уже None), чтобы shutdown
+        # дождался идущего on_flush и не закрыл пул из-под него.
         state.flushing = True
         state.timer = None
+        task = asyncio.current_task()
+        self._active_flushes.add(task)
         try:
             await self._on_flush(phone)
         except Exception:
-            # ошибку не проглатываем молча — лог (алерт в Telegram навесит блок эскалации)
+            # ошибку не проглатываем молча — лог. TODO (блок 8/9 эскалация):
+            # добавить сюда алерт в Telegram о падении обработки залпа.
             logger.exception("debounce: on_flush упал для phone=%s", phone)
         finally:
-            if state.re_trigger:
+            self._active_flushes.discard(task)
+            if state.re_trigger and not self._shutting_down:
                 # за время обработки пришли новые сообщения → новый бурст
                 state.re_trigger = False
                 state.flushing = False
@@ -119,16 +127,24 @@ class Debouncer:
                 self._states.pop(phone, None)
 
     async def shutdown(self) -> None:
-        """Погасить все таймеры (MVP: молча; недосклеенный бурст подхватит следующий inbound)."""
+        """Погасить ожидающие таймеры и ДОЖДАТЬСЯ идущих on_flush.
+
+        Таймеры (в ожидании) отменяем — недосклеенный бурст подхватит следующий inbound.
+        Активные on_flush НЕ убиваем, а ждём: иначе close_pool() в lifespan закроет пул
+        из-под работающего запроса. _shutting_down не даёт флашам перезапускать таймеры.
+        """
+        self._shutting_down = True
         timers = [s.timer for s in self._states.values() if s.timer is not None]
         for t in timers:
             t.cancel()
-        for t in timers:
+        # ждём и отменённые таймеры, и активные флаши (снимок, флаши не отменяем)
+        pending = set(timers) | set(self._active_flushes)
+        for t in pending:
             try:
                 await t
             except asyncio.CancelledError:
                 pass
             except Exception:
-                logger.exception("debounce: ошибка таймера при shutdown")
+                logger.exception("debounce: ошибка задачи при shutdown")
         self._states.clear()
-        logger.info("debounce: shutdown, таймеры погашены")
+        logger.info("debounce: shutdown, задачи завершены")

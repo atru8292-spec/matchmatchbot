@@ -386,3 +386,166 @@ class TestUpdateLeadFields:
         result = await db.update_lead_fields("wa_1", name="Ghost")
 
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# is_ready
+# ---------------------------------------------------------------------------
+
+
+class TestIsReady:
+    def test_false_when_pool_is_none(self):
+        """db._pool is None → is_ready() возвращает False."""
+        original = db._pool
+        db._pool = None
+        try:
+            assert db.is_ready() is False
+        finally:
+            db._pool = original
+
+    def test_true_when_pool_is_set(self):
+        """db._pool = <объект> → is_ready() возвращает True."""
+        original = db._pool
+        db._pool = object()  # любой не-None объект
+        try:
+            assert db.is_ready() is True
+        finally:
+            db._pool = original
+
+
+# ---------------------------------------------------------------------------
+# get_unprocessed_inbound
+# ---------------------------------------------------------------------------
+
+
+class TestGetUnprocessedInbound:
+    async def test_returns_list_of_dicts(self, pool):
+        """fetch вернул 2 записи → список из 2 dict."""
+        pool.fetch.return_value = [
+            {"id": "uuid-1", "lead_phone": "wa_1", "text": "Hola", "processed": False},
+            {"id": "uuid-2", "lead_phone": "wa_1", "text": "Como estas", "processed": False},
+        ]
+
+        result = await db.get_unprocessed_inbound("wa_1")
+
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert all(isinstance(r, dict) for r in result)
+
+    async def test_empty_returns_empty_list(self, pool):
+        """fetch вернул [] → пустой список (уже обработано или нет сообщений)."""
+        pool.fetch.return_value = []
+
+        result = await db.get_unprocessed_inbound("wa_1")
+
+        assert result == []
+
+    async def test_sql_contains_direction_inbound(self, pool):
+        """SQL фильтрует direction = 'inbound'."""
+        pool.fetch.return_value = []
+
+        await db.get_unprocessed_inbound("wa_1")
+
+        sql = pool.fetch.call_args.args[0]
+        assert "direction = 'inbound'" in sql
+
+    async def test_sql_contains_processed_false(self, pool):
+        """SQL фильтрует processed = false."""
+        pool.fetch.return_value = []
+
+        await db.get_unprocessed_inbound("wa_1")
+
+        sql = pool.fetch.call_args.args[0]
+        assert "processed = false" in sql
+
+    async def test_sql_contains_order_by_created_at_asc(self, pool):
+        """SQL содержит ORDER BY created_at ASC (хронологический порядок)."""
+        pool.fetch.return_value = []
+
+        await db.get_unprocessed_inbound("wa_1")
+
+        sql = pool.fetch.call_args.args[0]
+        assert "ORDER BY created_at ASC" in sql
+
+    async def test_phone_passed_as_param_not_in_sql_text(self, pool):
+        """phone передаётся отдельным параметром $1, не вставляется в строку SQL."""
+        pool.fetch.return_value = []
+        phone = "wa_521234567890"
+
+        await db.get_unprocessed_inbound(phone)
+
+        sql, *params = pool.fetch.call_args.args
+        assert phone not in sql
+        assert "$1" in sql
+        assert params[0] == phone
+
+
+# ---------------------------------------------------------------------------
+# mark_messages_processed
+# ---------------------------------------------------------------------------
+
+
+class TestMarkMessagesProcessed:
+    async def test_empty_ids_returns_zero_without_pool(self, pool):
+        """Пустой список ids → немедленный return 0, fetch НЕ вызван."""
+        result = await db.mark_messages_processed([])
+
+        assert result == 0
+        pool.fetch.assert_not_called()
+
+    async def test_non_empty_ids_returns_count(self, pool):
+        """Непустой список → fetch вызван, возвращает len(результата)."""
+        pool.fetch.return_value = [
+            {"id": "uuid-1"},
+            {"id": "uuid-2"},
+        ]
+
+        result = await db.mark_messages_processed(["uuid-1", "uuid-2"])
+
+        assert result == 2
+
+    async def test_sql_contains_set_processed_true(self, pool):
+        """SQL содержит SET processed = true."""
+        pool.fetch.return_value = [{"id": "uuid-1"}]
+
+        await db.mark_messages_processed(["uuid-1"])
+
+        sql = pool.fetch.call_args.args[0]
+        assert "processed = true" in sql
+
+    async def test_sql_contains_processed_at_now(self, pool):
+        """SQL содержит processed_at = now()."""
+        pool.fetch.return_value = [{"id": "uuid-1"}]
+
+        await db.mark_messages_processed(["uuid-1"])
+
+        sql = pool.fetch.call_args.args[0]
+        assert "processed_at = now()" in sql
+
+    async def test_sql_contains_any_uuid_array(self, pool):
+        """SQL содержит ANY($1::uuid[]) — параметризованный массив UUID."""
+        pool.fetch.return_value = [{"id": "uuid-1"}]
+
+        await db.mark_messages_processed(["uuid-1"])
+
+        sql = pool.fetch.call_args.args[0]
+        assert "ANY($1::uuid[])" in sql
+
+    async def test_sql_contains_returning_id(self, pool):
+        """SQL содержит RETURNING id для подсчёта реально обновлённых строк."""
+        pool.fetch.return_value = []
+
+        await db.mark_messages_processed(["uuid-x"])
+
+        sql = pool.fetch.call_args.args[0]
+        assert "RETURNING id" in sql
+
+    async def test_ids_passed_as_single_param(self, pool):
+        """Список ids передаётся как единственный параметр $1."""
+        ids = ["uuid-a", "uuid-b", "uuid-c"]
+        pool.fetch.return_value = [{"id": i} for i in ids]
+
+        await db.mark_messages_processed(ids)
+
+        _, *params = pool.fetch.call_args.args
+        assert params[0] == ids

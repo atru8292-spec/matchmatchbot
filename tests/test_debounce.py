@@ -490,3 +490,22 @@ class TestStaleTimerGuard:
         except asyncio.CancelledError:
             pass
         await d.shutdown()
+
+
+class TestShutdownWaitsActiveFlush:
+    """shutdown должен дождаться идущего on_flush (иначе close_pool порвёт запрос)."""
+
+    async def test_shutdown_awaits_in_progress_flush(self):
+        import asyncio
+        done = []
+        async def slow_flush(phone):
+            await asyncio.sleep(0.2)   # долгая обработка (имитация AI/БД)
+            done.append(phone)
+        d = Debouncer(slow_flush, delay=0.05, max_wait=0.3)
+        await d.trigger("wa_1")
+        await asyncio.sleep(0.08)      # таймер сработал, slow_flush в процессе
+        assert done == []              # ещё не завершился
+        await d.shutdown()             # должен дождаться
+        assert done == ["wa_1"]        # флаш доработал до конца
+        assert d._states == {}
+        assert d._active_flushes == set()
