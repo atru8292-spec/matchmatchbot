@@ -1,0 +1,1610 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "*"
+        ]
+      },
+      "type": "n8n-nodes-telegram-polling.telegramPollingTrigger",
+      "typeVersion": 1,
+      "position": [
+        4400,
+        2384
+      ],
+      "id": "ebd75d83-b584-4889-be50-c19d1a8e4553",
+      "name": "Telegram Trigger",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\n\n// Определяем тип update: callback_query или text message\nif (j.callback_query) {\n  // Это нажатие на кнопку\n  return [{\n    json: { _type: 'callback', raw: j },\n    pairedItem: 0\n  }];\n} \nelse if (j.message && j.message.text) {\n  const text = (j.message.text || '').trim();\n  // Это команда\n  if (text.startsWith('/')) {\n    return [{\n      json: { _type: 'command', raw: j, text },\n      pairedItem: 0\n    }];\n  }\n}\n\n// Что-то другое (фото, видео, не-команда) — игнорим\nreturn [{\n  json: { _type: 'skip' },\n  pairedItem: 0\n}];"
+      },
+      "id": "router-update",
+      "name": "Router (callback or command)",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        4576,
+        2384
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "callback",
+                    "leftValue": "={{ $json._type }}",
+                    "rightValue": "callback",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "command",
+                    "leftValue": "={{ $json._type }}",
+                    "rightValue": "command",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "main-switch",
+      "name": "Type switch",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        4784,
+        2384
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "jsCode": "const cb = $json.raw.callback_query;\nif (!cb) return null;\n\nconst data = cb.data || '';\nconst chatId = cb.from.id.toString();\nconst messageId = cb.message.message_id;\nconst callbackQueryId = cb.id;\nconst managerName = ((cb.from.first_name || '') + ' ' + (cb.from.last_name || '')).trim();\n\nconst allowedChats = ['1009982311'];\nif (!allowedChats.includes(chatId)) {\n  return [{\n    json: {\n      action: 'unauthorized', phone: '', chatId, callbackQueryId, messageId,\n      managerName, popupText: '⛔ Нет доступа', replyText: '⛔ Нет доступа'\n    }\n  }];\n}\n\nlet action = 'unknown';\nlet phone = '';\n\nif (data.startsWith('approve_photo_')) { action = 'approve_photo'; phone = data.substring(14); }\nelse if (data.startsWith('offer_course_')) { action = 'offer_course'; phone = data.substring(13); }\nelse if (data.startsWith('takeover_')) { action = 'takeover'; phone = data.substring(9); }\nelse if (data.startsWith('release_')) { action = 'release'; phone = data.substring(8); }\nelse if (data.startsWith('history_')) { action = 'history'; phone = data.substring(8); }\nelse if (data.startsWith('block_')) { action = 'block'; phone = data.substring(6); }\nelse if (data.startsWith('lead_')) { action = 'lead_card'; phone = data.substring(5); }\n\nreturn [{ json: { action, phone, chatId, callbackQueryId, messageId, managerName, rawData: data } }];"
+      },
+      "id": "parse-callback",
+      "name": "Parse callback",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5000,
+        2192
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "lead_card",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "lead_card",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "release",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "release",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "history",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "history",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "takeover",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "takeover",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "approve_photo",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "approve_photo",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "offer_course",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "offer_course",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "block",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "block",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "switch-action",
+      "name": "Switch action",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        5200,
+        2192
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT l.*, (SELECT COUNT(*) FROM messages WHERE lead_phone = l.phone) AS msg_count, (SELECT text FROM messages WHERE lead_phone = l.phone AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) AS last_inbound, (SELECT text FROM messages WHERE lead_phone = l.phone AND direction = 'outbound' ORDER BY created_at DESC LIMIT 1) AS last_outbound FROM leads l WHERE phone = '{{ $('Parse callback').first().json.phone }}' LIMIT 1;",
+        "options": {}
+      },
+      "id": "get-lead",
+      "name": "Get lead card",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        1808
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json;\nconst cb = $('Parse callback').first().json;\nconst phone = cb.phone;\n\nif (!r || !r.phone) {\n  return [{ json: {\n    replyText: `❌ Лид не найден: ${phone}`, popupText: 'Лид не найден',\n    chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId,\n    phone, action: 'lead_card', managerName: cb.managerName, skipEdit: true\n  } }];\n}\n\nconst funnelLabels = {\n  'new': '🆕 Новый', 'pitched': '💬 Запитчен', 'qualified': '✅ Квалифицирован',\n  'event_interested': '🎉 Интерес к event', 'agency_interested': '💎 Интерес к agency',\n  'ready_to_pay': '💳 Готов платить', 'paid_event': '✨ Оплатил event',\n  'paid_agency': '💎 Оплатил agency', 'rejected_filter': '🚫 Не прошёл фильтр',\n  'lost': '❌ Потерян'\n};\nconst budgetLabels = {'low': 'низкий 💵', 'medium': 'средний 💵💵', 'high': 'высокий 💵💵💵'};\n\nconst name = r.whatsapp_name || r.name || '(без имени)';\nconst modeEmoji = r.mode === 'manual' ? '🛡️ MANUAL' : '🤖 AUTO';\nconst dnc = r.do_not_contact ? '🚫 DNC' : '';\n\nlet text = `👤 КАРТОЧКА ЛИДА\\n━━━━━━━━━━━━━━\\n`;\ntext += `📛 ${name}\\n📞 ${r.phone}\\n📱 ${r.source || '?'}\\n${modeEmoji} ${dnc}\\n`;\ntext += `\\n📊 ${funnelLabels[r.funnel_stage] || r.funnel_stage}\\n`;\nif (r.interest) text += `🎯 Интерес: ${r.interest}\\n`;\n\ntext += `\\n🧠 ПРОФИЛЬ:\\n`;\nif (r.age) text += `   Возраст: ${r.age}\\n`;\nif (r.profession) text += `   Профессия: ${r.profession}\\n`;\nif (r.is_single !== null) text += `   Холост: ${r.is_single ? 'да ✓' : 'нет ✗'}\\n`;\nif (r.budget_signal) text += `   Бюджет: ${budgetLabels[r.budget_signal]}\\n`;\nif (r.photo_received) text += `   Фото: ✓\\n`;\nif (r.objection_count > 0) text += `   Возражений: ${r.objection_count}\\n`;\nif (r.escort_mention_count > 0) text += `   ⚠️ Эскорт-упоминаний: ${r.escort_mention_count}\\n`;\n\ntext += `\\n💬 Сообщений: ${r.msg_count || 0}\\n`;\n\nif (r.last_inbound) text += `\\n👤 Последнее от лида:\\n«${(r.last_inbound || '').substring(0, 120)}»\\n`;\nif (r.last_outbound) text += `\\n🤖 Последнее от бота:\\n«${(r.last_outbound || '').substring(0, 120)}»\\n`;\n\nif (r.escalate_reason) text += `\\n⚡ ${r.escalate_reason}\\n`;\n\nreturn [{ json: {\n  replyText: text,\n  popupText: `👤 ${name} • ${funnelLabels[r.funnel_stage] || r.funnel_stage}`,\n  chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId,\n  phone, action: 'lead_card', managerName: cb.managerName, skipEdit: true\n} }];"
+      },
+      "id": "format-lead-card",
+      "name": "Format lead card",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5632,
+        1808
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET mode = 'auto', manual_until = NULL, updated_at = now() WHERE phone = '{{ $('Parse callback').first().json.phone }}' RETURNING phone, whatsapp_name, funnel_stage;",
+        "options": {}
+      },
+      "id": "release-lead",
+      "name": "Release lead",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        1984
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json;\nconst cb = $('Parse callback').first().json;\nconst phone = cb.phone;\nlet text, popup;\nif (r && r.phone) {\n  const name = r.whatsapp_name || phone;\n  text = `🤖 БОТ ВЕРНУЛСЯ\\n━━━━━━━━━━\\n👤 ${name}\\n📞 ${phone}\\n\\nДиалог снова в auto mode.`;\n  popup = `🤖 ${name} → auto`;\n} else { text = `❌ Лид не найден: ${phone}`; popup = 'Лид не найден'; }\nreturn [{ json: { replyText: text, popupText: popup, chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId, phone, action: 'release', managerName: cb.managerName } }];"
+      },
+      "id": "format-release",
+      "name": "Format release",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5632,
+        1984
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT direction, sender, text, created_at FROM messages WHERE lead_phone = '{{ $('Parse callback').first().json.phone }}' ORDER BY created_at DESC LIMIT 15;",
+        "options": {}
+      },
+      "id": "get-history",
+      "name": "Get message history",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        2160
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json).reverse();\nconst cb = $('Parse callback').first().json;\nconst phone = cb.phone;\nif (!rows.length || !rows[0].text) {\n  return [{ json: { replyText: `📝 История пуста: ${phone}`, popupText: 'История пуста', chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId, phone, action: 'history', managerName: cb.managerName, skipEdit: true } }];\n}\nlet text = `📝 ИСТОРИЯ ДИАЛОГА\\n━━━━━━━━━━━━━━━━\\n📞 ${phone}\\n\\n`;\nfor (const r of rows) {\n  if (!r.text) continue;\n  const time = new Date(r.created_at).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });\n  const emoji = r.direction === 'inbound' ? '👤' : '🤖';\n  const who = r.direction === 'inbound' ? 'Лид' : 'Бот';\n  text += `${emoji} ${who} (${time}):\\n${(r.text || '').substring(0, 200)}\\n\\n`;\n}\nif (text.length > 3900) text = text.substring(0, 3900) + '\\n...';\nreturn [{ json: { replyText: text, popupText: `📝 История (${rows.length})`, chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId, phone, action: 'history', managerName: cb.managerName, skipEdit: true } }];"
+      },
+      "id": "format-history",
+      "name": "Format history",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5632,
+        2160
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET mode = 'manual', manual_until = now() + interval '4 hours', updated_at = now() WHERE phone = '{{ $('Parse callback').first().json.phone }}' RETURNING phone, whatsapp_name;",
+        "options": {}
+      },
+      "id": "takeover-lead",
+      "name": "Takeover lead",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        2336
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json;\nconst cb = $('Parse callback').first().json;\nconst phone = cb.phone;\nlet text, popup;\nif (r && r.phone) {\n  const name = r.whatsapp_name || phone;\n  text = `🛡️ ПЕРЕХВАЧЕНО\\n━━━━━━━━━━\\n👤 ${name}\\n📞 ${phone}\\n⏱ Manual mode 4 часа\\n\\nБот молчит — отвечай лично`;\n  popup = `🛡️ ${name} → manual 4ч`;\n} else { text = `❌ Лид не найден: ${phone}`; popup = 'Лид не найден'; }\nreturn [{ json: { replyText: text, popupText: popup, chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId, phone, action: 'takeover', managerName: cb.managerName } }];"
+      },
+      "id": "format-takeover",
+      "name": "Format takeover",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5632,
+        2336
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET photo_received = true, funnel_stage = 'qualified', mode = 'auto', manual_until = NULL, escalate_reason = NULL, notes = COALESCE(notes, '') || E'\\n[Manager approved photo manually at ' || now()::text || ']', updated_at = now() WHERE phone = '{{ $('Parse callback').first().json.phone }}' RETURNING phone, whatsapp_name;",
+        "options": {}
+      },
+      "id": "approve-photo",
+      "name": "Approve photo",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        2512
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json;\nconst cb = $('Parse callback').first().json;\nconst phone = cb.phone;\nlet text, popup;\nif (r && r.phone) {\n  const name = r.whatsapp_name || phone;\n  text = `✅ ФОТО ОДОБРЕНО ВРУЧНУЮ\\n━━━━━━━━━━\\n👤 ${name}\\n📞 ${phone}\\n\\nphoto_received = true\\nfunnel = qualified\\nmode = auto`;\n  popup = `✅ Фото одобрено: ${name}`;\n} else { text = `❌ Лид не найден: ${phone}`; popup = 'Лид не найден'; }\nreturn [{ json: { replyText: text, popupText: popup, chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId, phone, action: 'approve_photo', managerName: cb.managerName } }];"
+      },
+      "id": "format-approve",
+      "name": "Format approve_photo",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5632,
+        2512
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET funnel_stage = 'lost', mode = 'auto', manual_until = NULL, notes = COALESCE(notes, '') || E'\\n[Manager triggered offer_course at ' || now()::text || ']', updated_at = now() WHERE phone = '{{ $('Parse callback').first().json.phone }}' RETURNING phone, whatsapp_name, source;",
+        "options": {}
+      },
+      "id": "set-lost-course",
+      "name": "Set lost + auto",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        2688
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wazzup24.com/v3/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer 9af8afe4fc864a5790cd8cdce085eb9c"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channelId\": \"00a456e4-973f-457b-8dad-2864ca224c5d\",\n  \"chatType\": \"whatsapp\",\n  \"chatId\": \"{{ ($('Parse callback').first().json.phone || '').replace('wa_', '').replace('tg_', '') }}\",\n  \"text\": \"Oye guapo, te dejo aquí algo que te va a interesar 🥰\\nTenemos video cursos \\\"Cómo encontrar a tu novia rusa\\\" con todos los consejos para conocer y atraer mujeres eslavas.\\nAquí: https://www.rusaencdmx.com/\"\n}",
+        "options": {}
+      },
+      "id": "send-course",
+      "name": "Send course message to lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5632,
+        2688
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const cb = $('Parse callback').first().json;\nconst r = $('Set lost + auto').first().json;\nconst phone = cb.phone;\nconst courseText = `Oye guapo, te dejo aquí algo que te va a interesar 🥰\\nTenemos video cursos \"Cómo encontrar a tu novia rusa\" con todos los consejos para conocer y atraer mujeres eslavas.\\nAquí: https://www.rusaencdmx.com/`;\nlet text, popup;\nif (r && r.phone) {\n  const name = r.whatsapp_name || phone;\n  text = `🎓 КУРС ОТПРАВЛЕН\\n━━━━━━━━━━\\n👤 ${name}\\n📞 ${phone}\\n\\nfunnel = lost`;\n  popup = `🎓 Курс: ${name}`;\n} else { text = `❌ Лид не найден: ${phone}`; popup = 'Лид не найден'; }\nreturn [{ json: { replyText: text, popupText: popup, chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId, phone, action: 'offer_course', managerName: cb.managerName, outbound_text: courseText } }];"
+      },
+      "id": "format-course",
+      "name": "Format offer_course",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5840,
+        2688
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (lead_phone, direction, sender, text, processed, processed_at) VALUES ('{{ $json.phone }}', 'outbound', 'anna', $${{ $json.outbound_text }}$$, true, now());",
+        "options": {}
+      },
+      "id": "save-course",
+      "name": "Save course outbound",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        6048,
+        2688
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET do_not_contact = true, funnel_stage = 'lost', mode = 'manual', manual_until = now() + interval '100 years', escalate_reason = 'Заблокирован менеджером', notes = COALESCE(notes, '') || E'\\n[Manager blocked at ' || now()::text || ']', updated_at = now() WHERE phone = '{{ $('Parse callback').first().json.phone }}' RETURNING phone, whatsapp_name;",
+        "options": {}
+      },
+      "id": "block-lead",
+      "name": "Block lead",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        2864
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json;\nconst cb = $('Parse callback').first().json;\nconst phone = cb.phone;\nlet text, popup;\nif (r && r.phone) {\n  const name = r.whatsapp_name || phone;\n  text = `🚫 ЛИД ЗАБЛОКИРОВАН\\n━━━━━━━━━━\\n👤 ${name}\\n📞 ${phone}\\n\\ndo_not_contact = true\\nfunnel = lost`;\n  popup = `🚫 ${name}`;\n} else { text = `❌ Лид не найден: ${phone}`; popup = 'Лид не найден'; }\nreturn [{ json: { replyText: text, popupText: popup, chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId, phone, action: 'block', managerName: cb.managerName } }];"
+      },
+      "id": "format-block",
+      "name": "Format block",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5632,
+        2864
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "const cb = $('Parse callback').first().json;\nreturn [{ json: { replyText: `❓ Неизвестное: ${cb.action}`, popupText: `❓ ${cb.action}`, chatId: cb.chatId, callbackQueryId: cb.callbackQueryId, messageId: cb.messageId, phone: cb.phone, action: cb.action, managerName: cb.managerName, skipEdit: true } }];"
+      },
+      "id": "unknown-action",
+      "name": "Unknown action",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5408,
+        3040
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "numberInputs": 8
+      },
+      "id": "merge-cb",
+      "name": "Merge callback branches",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        6240,
+        2336
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "queryId": "={{ $json.callbackQueryId }}",
+        "additionalFields": {
+          "show_alert": false
+        }
+      },
+      "id": "answer-cb",
+      "name": "Answer callback query",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        6448,
+        2336
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "answer-cb-q",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO manager_actions (lead_phone, action, performed_by, manager_chat_id, meta) VALUES ('{{ $json.phone || '' }}', '{{ $json.action }}', 'manager', '{{ $json.chatId }}', jsonb_build_object('manager_name', $${{ $json.managerName || '' }}$$, 'popup', $${{ $json.popupText || '' }}$$));",
+        "options": {}
+      },
+      "id": "log-action",
+      "name": "Log manager action",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        6640,
+        2336
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "skip",
+              "leftValue": "={{ $json.skipEdit }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-skip",
+      "name": "IF skip edit",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        6848,
+        2336
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "=1009982311",
+        "messageId": "={{ $json.messageId }}",
+        "text": "={{ $json.replyText + '\\n\\n_✓ Обработано — кнопки удалены_' }}",
+        "additionalFields": {
+          "parse_mode": "=none"
+        }
+      },
+      "id": "edit-msg",
+      "name": "Edit original message",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        7056,
+        2432
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "edit-original-msg",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.replyText }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "send-info",
+      "name": "Send reply (info actions)",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        7056,
+        2240
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "callback-info-reply",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $json.raw.message;\nconst text = $json.text || '';\nconst chatId = msg.from.id.toString();\nconst managerName = ((msg.from.first_name || '') + ' ' + (msg.from.last_name || '')).trim();\n\n// Авторизация\nconst allowedChats = ['1009982311'];\nif (!allowedChats.includes(chatId)) return null;\n\nlet command = null;\nif (text === '/help' || text === '/start') command = 'help';\nelse if (text === '/stats') command = 'stats';\nelse if (text === '/leads') command = 'leads';\nelse if (text === '/photos') command = 'photos';\nelse if (text.startsWith('/lead ')) command = 'lead_search';\nelse return null;\n\nreturn [{ json: { command, chatId, managerName, query: text } }];"
+      },
+      "id": "parse-cmd",
+      "name": "Parse command",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5000,
+        2592
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "help",
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "help",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "stats",
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "stats",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "leads",
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "leads",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "photos",
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "photos",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "lead_search",
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "lead_search",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "switch-cmd",
+      "name": "Switch command",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        5200,
+        2592
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "jsCode": "const cmd = $json;\nconst text = `🤖 ANNA BOT — КОМАНДЫ\n━━━━━━━━━━━━━━━━━━━━\n\n📊 /stats — общая статистика\n   • Всего лидов / по каналам\n   • Воронка по этапам\n   • Сколько с фото\n   • Manual mode / DNC\n\n👥 /leads — последние 10 лидов\n   • Имя, телефон, этап\n   • Возраст, профессия\n\n📷 /photos — последние 10 фото\n   • Vision verdict (ok/reject)\n   • appearance / environment\n\n🔍 /lead <phone> — карточка лида\n   Пример: /lead wa_79050829494\n\n━━━━━━━━━━━━━━━━━━━━\n\n🎯 КНОПКИ В АЛЕРТАХ:\n👤 Карточка — состояние лида\n📝 История — последние 15 сообщений\n🛡️ Перехватить — manual 4ч\n🤖 Вернуть боту — auto mode\n✅ Одобрить фото — пропустить vision\n🎓 Курс — отправить video course + lost\n🚫 Заблокировать — DNC навсегда`;\n\nreturn [{ json: { chatId: cmd.chatId, text } }];"
+      },
+      "id": "format-help",
+      "name": "Format help",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5408,
+        2368
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  (SELECT COUNT(*) FROM leads) AS total_leads,\n  (SELECT COUNT(*) FROM leads WHERE phone LIKE 'wa_%') AS wa_leads,\n  (SELECT COUNT(*) FROM leads WHERE phone LIKE 'tg_%') AS tg_leads,\n  (SELECT COUNT(*) FROM leads WHERE photo_received = true) AS with_photo,\n  (SELECT COUNT(*) FROM leads WHERE mode = 'manual' AND manual_until > now()) AS in_manual,\n  (SELECT COUNT(*) FROM leads WHERE do_not_contact = true) AS dnc_leads,\n  (SELECT COUNT(*) FROM leads WHERE funnel_stage = 'new') AS new_leads,\n  (SELECT COUNT(*) FROM leads WHERE funnel_stage = 'pitched') AS pitched,\n  (SELECT COUNT(*) FROM leads WHERE funnel_stage = 'qualified') AS qualified,\n  (SELECT COUNT(*) FROM leads WHERE funnel_stage = 'ready_to_pay') AS ready_pay,\n  (SELECT COUNT(*) FROM leads WHERE funnel_stage = 'paid_event') AS paid_event,\n  (SELECT COUNT(*) FROM leads WHERE funnel_stage = 'paid_agency') AS paid_agency,\n  (SELECT COUNT(*) FROM leads WHERE funnel_stage = 'lost') AS lost,\n  (SELECT COUNT(*) FROM messages WHERE direction = 'inbound' AND created_at > now() - interval '24 hours') AS inbound_24h,\n  (SELECT COUNT(*) FROM messages WHERE direction = 'outbound' AND created_at > now() - interval '24 hours') AS outbound_24h,\n  (SELECT COUNT(*) FROM lead_photos) AS total_photos,\n  (SELECT COUNT(*) FROM lead_photos WHERE vision_verdict = 'ok') AS photos_ok,\n  (SELECT COUNT(*) FROM lead_photos WHERE vision_verdict = 'reject') AS photos_rejected;",
+        "options": {}
+      },
+      "id": "get-stats",
+      "name": "Get stats",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        2544
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json;\nconst chatId = $('Parse command').first().json.chatId;\nconst total = r.total_leads || 0;\nconst wa = r.wa_leads || 0;\nconst tg = r.tg_leads || 0;\nconst manual = r.in_manual || 0;\nconst dnc = r.dnc_leads || 0;\nconst photosTotal = r.total_photos || 0;\n\nlet text = `📊 СТАТИСТИКА ANNA BOT\\n━━━━━━━━━━━━━━━━━━━━\\n\\n`;\ntext += `👥 ЛИДЫ: ${total}\\n`;\ntext += `   💬 WhatsApp: ${wa}\\n`;\ntext += `   📨 Telegram: ${tg}\\n\\n`;\ntext += `🔄 СТАТУСЫ:\\n`;\ntext += `   🤖 Auto: ${total - manual - dnc}\\n`;\ntext += `   🛡️ Manual: ${manual}\\n`;\ntext += `   🚫 DNC: ${dnc}\\n\\n`;\ntext += `📊 ВОРОНКА:\\n`;\ntext += `   🆕 Новые: ${r.new_leads || 0}\\n`;\ntext += `   💬 Запитчены: ${r.pitched || 0}\\n`;\ntext += `   ✅ Квалифицированы: ${r.qualified || 0}\\n`;\ntext += `   💳 Готовы платить: ${r.ready_pay || 0}\\n`;\ntext += `   ✨ Оплатили event: ${r.paid_event || 0}\\n`;\ntext += `   💎 Оплатили agency: ${r.paid_agency || 0}\\n`;\ntext += `   ❌ Потеряны: ${r.lost || 0}\\n\\n`;\ntext += `📷 ФОТО:\\n`;\ntext += `   Всего: ${photosTotal}\\n`;\ntext += `   ✅ Одобрено: ${r.photos_ok || 0}\\n`;\ntext += `   ❌ Отклонено: ${r.photos_rejected || 0}\\n\\n`;\ntext += `📈 АКТИВНОСТЬ 24ч:\\n`;\ntext += `   👤 От лидов: ${r.inbound_24h || 0}\\n`;\ntext += `   🤖 От Anna: ${r.outbound_24h || 0}`;\n\nreturn [{ json: { chatId, text } }];"
+      },
+      "id": "format-stats",
+      "name": "Format stats",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5632,
+        2544
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT phone, whatsapp_name, name, funnel_stage, mode, do_not_contact, photo_received, age, profession, last_inbound_at, created_at, (SELECT COUNT(*) FROM messages WHERE lead_phone = leads.phone) AS msg_count FROM leads ORDER BY last_inbound_at DESC NULLS LAST, created_at DESC LIMIT 10;",
+        "options": {}
+      },
+      "id": "get-leads",
+      "name": "Get last leads",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        2720
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst chatId = $('Parse command').first().json.chatId;\nif (!rows.length || !rows[0].phone) {\n  return [{ json: { chatId, text: '👥 Лидов пока нет' } }];\n}\nconst stageEmoji = { 'new': '🆕', 'pitched': '💬', 'qualified': '✅', 'event_interested': '🎉', 'agency_interested': '💎', 'ready_to_pay': '💳', 'paid_event': '✨', 'paid_agency': '💰', 'rejected_filter': '🚫', 'lost': '❌' };\n\nlet text = `👥 ПОСЛЕДНИЕ ${rows.length} ЛИДОВ\\n━━━━━━━━━━━━━━━━\\n\\n`;\nfor (const r of rows) {\n  const name = r.whatsapp_name || r.name || '(без имени)';\n  const emoji = stageEmoji[r.funnel_stage] || '❓';\n  const modeIcon = r.mode === 'manual' ? '🛡️' : (r.do_not_contact ? '🚫' : '🤖');\n  const photoIcon = r.photo_received ? '📷' : '';\n  const time = r.last_inbound_at ? new Date(r.last_inbound_at).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';\n  \n  text += `${emoji} ${modeIcon} ${photoIcon} ${name}\\n`;\n  text += `   📞 ${r.phone}\\n`;\n  text += `   📊 ${r.funnel_stage}`;\n  if (r.age) text += ` • ${r.age}л`;\n  if (r.profession) text += ` • ${r.profession.substring(0, 20)}`;\n  text += `\\n   💬 ${r.msg_count} msg • ${time}\\n\\n`;\n}\nif (text.length > 3900) text = text.substring(0, 3900) + '\\n...';\nreturn [{ json: { chatId, text } }];"
+      },
+      "id": "format-leads",
+      "name": "Format leads",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5632,
+        2720
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT lp.id, lp.lead_phone, lp.received_at AS created_at, lp.vision_verdict, lp.vision_analysis, lp.storage_url, l.whatsapp_name, l.name FROM lead_photos lp LEFT JOIN leads l ON l.phone = lp.lead_phone ORDER BY lp.received_at DESC LIMIT 10;",
+        "options": {}
+      },
+      "id": "get-photos",
+      "name": "Get last photos",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5408,
+        2896
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst chatId = $('Parse command').first().json.chatId;\nif (!rows.length || !rows[0].lead_phone) {\n  return [{ json: { chatId, text: '📷 Фото пока нет' } }];\n}\nconst verdictEmoji = { 'ok': '✅', 'reject': '❌', 'manual_review': '⚠️', 'payment_ok': '💳', 'payment_no': '🚫' };\n\nlet text = `📷 ПОСЛЕДНИЕ ${rows.length} ФОТО\\n━━━━━━━━━━━━━━━━\\n\\n`;\nfor (const r of rows) {\n  const name = r.whatsapp_name || r.name || '(без имени)';\n  const emoji = verdictEmoji[r.vision_verdict] || '❓';\n  const time = new Date(r.created_at).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });\n  const v = r.vision_analysis || {};\n  \n  text += `${emoji} ${name}\\n`;\n  text += `   📞 ${r.lead_phone}\\n`;\n  text += `   🎯 ${r.vision_verdict || '?'} • ${v.image_type || '?'}\\n`;\n  \n  if (v.image_type === 'payment_receipt' && v.payment_detected) {\n    text += `   💳 ${v.payment_bank || '?'} • $${v.payment_amount || '?'}\\n`;\n  } else if (v.image_type === 'profile_photo') {\n    text += `   👤 Реальный: ${v.is_real_person ? '✓' : '✗'} • Лицо: ${v.face_visible ? '✓' : '✗'}\\n`;\n    if (v.appearance_level) text += `   ✨ Look: ${v.appearance_level} • Env: ${v.environment_level || '?'}\\n`;\n    if (v.score) text += `   ⭐ Score: ${v.score}/10\\n`;\n  }\n  \n  if (v.reasons && v.reasons.length) text += `   📝 ${v.reasons.join(', ').substring(0, 100)}\\n`;\n  text += `   🕐 ${time}\\n\\n`;\n}\nif (text.length > 3900) text = text.substring(0, 3900) + '\\n...';\nreturn [{ json: { chatId, text } }];"
+      },
+      "id": "format-photos",
+      "name": "Format photos",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5632,
+        2896
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "const cmd = $json;\nconst parts = (cmd.query || '').split(' ');\nconst searchPhone = parts.length > 1 ? parts.slice(1).join(' ').trim() : '';\nreturn [{ json: { searchPhone, chatId: cmd.chatId } }];"
+      },
+      "id": "extract-phone",
+      "name": "Extract phone",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5408,
+        3072
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT l.*, (SELECT COUNT(*) FROM messages WHERE lead_phone = l.phone) AS msg_count, (SELECT text FROM messages WHERE lead_phone = l.phone AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) AS last_inbound, (SELECT text FROM messages WHERE lead_phone = l.phone AND direction = 'outbound' ORDER BY created_at DESC LIMIT 1) AS last_outbound FROM leads l WHERE phone = '{{ $json.searchPhone }}' OR phone LIKE '%{{ $json.searchPhone }}%' LIMIT 1;",
+        "options": {}
+      },
+      "id": "search-lead",
+      "name": "Search lead by phone",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5632,
+        3072
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json;\nconst chatId = $('Extract phone').first().json.chatId;\nconst searchPhone = $('Extract phone').first().json.searchPhone;\nif (!r || !r.phone) return [{ json: { chatId, text: `❌ Лид не найден: ${searchPhone}` } }];\n\nconst funnelLabels = {\n  'new': '🆕 Новый', 'pitched': '💬 Запитчен', 'qualified': '✅ Квалифицирован',\n  'event_interested': '🎉 Интерес к event', 'agency_interested': '💎 Интерес к agency',\n  'ready_to_pay': '💳 Готов платить', 'paid_event': '✨ Оплатил event',\n  'paid_agency': '💎 Оплатил agency', 'rejected_filter': '🚫 Не прошёл фильтр',\n  'lost': '❌ Потерян'\n};\nconst budgetLabels = {'low': 'низкий 💵', 'medium': 'средний 💵💵', 'high': 'высокий 💵💵💵'};\n\nconst name = r.whatsapp_name || r.name || '(без имени)';\nconst modeEmoji = r.mode === 'manual' ? '🛡️ MANUAL' : '🤖 AUTO';\nconst dnc = r.do_not_contact ? '🚫 DNC' : '';\n\nlet text = `👤 КАРТОЧКА ЛИДА\\n━━━━━━━━━━━━━━\\n`;\ntext += `📛 ${name}\\n📞 ${r.phone}\\n📱 ${r.source || '?'}\\n${modeEmoji} ${dnc}\\n`;\ntext += `\\n📊 ${funnelLabels[r.funnel_stage] || r.funnel_stage}\\n`;\nif (r.interest) text += `🎯 ${r.interest}\\n`;\n\ntext += `\\n🧠 ПРОФИЛЬ:\\n`;\nif (r.age) text += `   Возраст: ${r.age}\\n`;\nif (r.profession) text += `   Профессия: ${r.profession}\\n`;\nif (r.is_single !== null) text += `   Холост: ${r.is_single ? 'да' : 'нет'}\\n`;\nif (r.budget_signal) text += `   Бюджет: ${budgetLabels[r.budget_signal]}\\n`;\nif (r.photo_received) text += `   Фото: ✓\\n`;\nif (r.objection_count > 0) text += `   Возражений: ${r.objection_count}\\n`;\nif (r.escort_mention_count > 0) text += `   ⚠️ Эскорт: ${r.escort_mention_count}\\n`;\n\ntext += `\\n💬 Сообщений: ${r.msg_count || 0}\\n`;\nif (r.last_inbound) text += `\\n👤 От лида:\\n«${(r.last_inbound || '').substring(0, 200)}»\\n`;\nif (r.last_outbound) text += `\\n🤖 От бота:\\n«${(r.last_outbound || '').substring(0, 200)}»\\n`;\nif (r.escalate_reason) text += `\\n⚡ ${r.escalate_reason}\\n`;\n\nreturn [{ json: { chatId, text } }];"
+      },
+      "id": "format-search",
+      "name": "Format lead search",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5840,
+        3072
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "numberInputs": 5
+      },
+      "id": "merge-cmds",
+      "name": "Merge commands",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        6240,
+        2720
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "send-cmd-reply",
+      "name": "Send command reply",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        6448,
+        2720
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "send-cmd-reply",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Router (callback or command)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router (callback or command)": {
+      "main": [
+        [
+          {
+            "node": "Type switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Type switch": {
+      "main": [
+        [
+          {
+            "node": "Parse callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse callback": {
+      "main": [
+        [
+          {
+            "node": "Switch action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch action": {
+      "main": [
+        [
+          {
+            "node": "Get lead card",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Release lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get message history",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Takeover lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Approve photo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set lost + auto",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Block lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unknown action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get lead card": {
+      "main": [
+        [
+          {
+            "node": "Format lead card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format lead card": {
+      "main": [
+        [
+          {
+            "node": "Merge callback branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release lead": {
+      "main": [
+        [
+          {
+            "node": "Format release",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format release": {
+      "main": [
+        [
+          {
+            "node": "Merge callback branches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Get message history": {
+      "main": [
+        [
+          {
+            "node": "Format history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format history": {
+      "main": [
+        [
+          {
+            "node": "Merge callback branches",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Takeover lead": {
+      "main": [
+        [
+          {
+            "node": "Format takeover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format takeover": {
+      "main": [
+        [
+          {
+            "node": "Merge callback branches",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Approve photo": {
+      "main": [
+        [
+          {
+            "node": "Format approve_photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format approve_photo": {
+      "main": [
+        [
+          {
+            "node": "Merge callback branches",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Set lost + auto": {
+      "main": [
+        [
+          {
+            "node": "Send course message to lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send course message to lead": {
+      "main": [
+        [
+          {
+            "node": "Format offer_course",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format offer_course": {
+      "main": [
+        [
+          {
+            "node": "Save course outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save course outbound": {
+      "main": [
+        [
+          {
+            "node": "Merge callback branches",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "Block lead": {
+      "main": [
+        [
+          {
+            "node": "Format block",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format block": {
+      "main": [
+        [
+          {
+            "node": "Merge callback branches",
+            "type": "main",
+            "index": 6
+          }
+        ]
+      ]
+    },
+    "Unknown action": {
+      "main": [
+        [
+          {
+            "node": "Merge callback branches",
+            "type": "main",
+            "index": 7
+          }
+        ]
+      ]
+    },
+    "Merge callback branches": {
+      "main": [
+        [
+          {
+            "node": "Answer callback query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer callback query": {
+      "main": [
+        [
+          {
+            "node": "Log manager action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log manager action": {
+      "main": [
+        [
+          {
+            "node": "IF skip edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF skip edit": {
+      "main": [
+        [
+          {
+            "node": "Send reply (info actions)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Edit original message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse command": {
+      "main": [
+        [
+          {
+            "node": "Switch command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch command": {
+      "main": [
+        [
+          {
+            "node": "Format help",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get stats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get last leads",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get last photos",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format help": {
+      "main": [
+        [
+          {
+            "node": "Merge commands",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get stats": {
+      "main": [
+        [
+          {
+            "node": "Format stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format stats": {
+      "main": [
+        [
+          {
+            "node": "Merge commands",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Get last leads": {
+      "main": [
+        [
+          {
+            "node": "Format leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format leads": {
+      "main": [
+        [
+          {
+            "node": "Merge commands",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Get last photos": {
+      "main": [
+        [
+          {
+            "node": "Format photos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format photos": {
+      "main": [
+        [
+          {
+            "node": "Merge commands",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Extract phone": {
+      "main": [
+        [
+          {
+            "node": "Search lead by phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search lead by phone": {
+      "main": [
+        [
+          {
+            "node": "Format lead search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format lead search": {
+      "main": [
+        [
+          {
+            "node": "Merge commands",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Merge commands": {
+      "main": [
+        [
+          {
+            "node": "Send command reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6c6dd3a0e2aab074641aaa985331c4301355fdfb15da866fec8e9989b74eba4e"
+  }
+}

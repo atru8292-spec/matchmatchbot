@@ -1,0 +1,90 @@
+{
+  "name": "Setup Sheet Headers (one-time)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [400, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Возвращаем одну строку с заголовками\nreturn [{\n  json: {\n    \"Имя\": \"Имя\",\n    \"Фамилия\": \"Фамилия\",\n    \"Телефон\": \"Телефон\",\n    \"Email\": \"Email\",\n    \"Возраст\": \"Возраст\",\n    \"Дата рождения\": \"Дата рождения\",\n    \"Профессия\": \"Профессия\",\n    \"LinkedIn\": \"LinkedIn\",\n    \"Estado civil\": \"Estado civil\",\n    \"Ciudad\": \"Ciudad\",\n    \"De dónde\": \"De dónde\",\n    \"Возраст пары\": \"Возраст пары\",\n    \"Интерес\": \"Интерес\",\n    \"Этап\": \"Этап\",\n    \"Фото\": \"Фото\",\n    \"Создан\": \"Создан\",\n    \"Последняя активность\": \"Последняя активность\",\n    \"ID\": \"ID\"\n  }\n}];"
+      },
+      "id": "build-headers",
+      "name": "Build header row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [620, 400]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wUCIJn6XeRg-HXa6GR3xQxCUaZhr2XOaopH_7JPTY10",
+          "mode": "list",
+          "cachedResultName": "Match Match",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wUCIJn6XeRg-HXa6GR3xQxCUaZhr2XOaopH_7JPTY10/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Лиды",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wUCIJn6XeRg-HXa6GR3xQxCUaZhr2XOaopH_7JPTY10/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "useAppend": true
+        }
+      },
+      "id": "write-headers",
+      "name": "Write headers to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [840, 400],
+      "credentials": {
+        "googleApi": {
+          "id": "Knei4jZ1OAq91Z7F",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 🎯 ОДНОРАЗОВЫЙ SETUP\n\nЗапусти Manual Trigger → Execute Workflow\nЗаголовки появятся в Sheet \"Лиды\" автоматом.\n\n### 18 колонок:\nИмя, Фамилия, Телефон, Email, Возраст, Дата рождения, Профессия, LinkedIn, Estado civil, Ciudad, De dónde, Возраст пары, Интерес, Этап, Фото, Создан, Последняя активность, ID\n\n### После запуска:\n1. Проверь Sheet → строка 1 заполнена ✅\n2. Этот WF больше не нужен — можешь удалить\n3. Импортируй основной WF_export_leads_FINAL.json — он будет писать лиды НИЖЕ заголовков",
+        "height": 380,
+        "width": 420,
+        "color": 4
+      },
+      "id": "sticky",
+      "name": "Инструкция",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [400, 80]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{"node": "Build header row", "type": "main", "index": 0}]]
+    },
+    "Build header row": {
+      "main": [[{"node": "Write headers to Sheet", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6c6dd3a0e2aab074641aaa985331c4301355fdfb15da866fec8e9989b74eba4e"
+  }
+}

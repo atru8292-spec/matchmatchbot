@@ -1,0 +1,249 @@
+{
+  "name": "Export Leads to Google Sheets (Match Match)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule (every 30 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        3200,
+        4000
+      ]
+    },
+    {
+      "parameters": {
+        "updates": [
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "id": "tg-trigger",
+      "name": "TG: /export command",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        3200,
+        4200
+      ],
+      "webhookId": "export-leads-cmd",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "is-export",
+              "leftValue": "={{ $json.callback_query?.data || $json.message?.text || '' }}",
+              "rightValue": "export",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "if-export-cmd",
+      "name": "IF /export",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3440,
+        4200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leads_export;",
+        "options": {}
+      },
+      "id": "fetch-leads",
+      "name": "Fetch leads from Supabase",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3680,
+        4100
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1wUCIJn6XeRg-HXa6GR3xQxCUaZhr2XOaopH_7JPTY10",
+          "mode": "list",
+          "cachedResultName": "Match Match",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wUCIJn6XeRg-HXa6GR3xQxCUaZhr2XOaopH_7JPTY10/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Лиды",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wUCIJn6XeRg-HXa6GR3xQxCUaZhr2XOaopH_7JPTY10/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "ID"
+          ],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "sheets-upsert",
+      "name": "Upsert to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        4160,
+        4100
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Knei4jZ1OAq91Z7F",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "1009982311",
+        "text": "=📊 Экспорт лидов завершён\n━━━━━━━━━━━\n\n✅ Записано/обновлено в Google Sheet: {{ $('Format rows').all().length }} лидов\n\n🔗 Открыть таблицу:\nhttps://docs.google.com/spreadsheets/d/1wUCIJn6XeRg-HXa6GR3xQxCUaZhr2XOaopH_7JPTY10/edit\n\n⏱ Авто-экспорт каждые 30 минут",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "notify-anya",
+      "name": "Notify Anya",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4400,
+        4100
+      ],
+      "webhookId": "notify-export-done",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 📊 ЭКСПОРТ ЛИДОВ В GOOGLE SHEETS\n\n### Триггеры:\n- **Каждые 30 минут** автоматически\n- **Команда /export** или callback от кнопки в TG\n\n### Что попадает в Sheet (17 колонок):\nИмя, Фамилия, Телефон, Email, Возраст, Дата рождения,\nПрофессия, LinkedIn, Статус (Soltero/Divorciado/Viudo),\nГород, Откуда, Возраст пары, Интерес, Этап воронки,\nФото (ссылка), Создан, Последняя активность, ID\n\n### ⚠️ Перед первым запуском:\n\nДобавь заголовки в первую строку Sheet \"Лиды\":\n\nИмя | Фамилия | Телефон | Email | Возраст | Дата рождения | Профессия | LinkedIn | Статус | Город | Откуда | Возраст пары | Интерес | Этап | Фото | Создан | Последняя активность | ID\n\n### Логика:\nUpsert по ID (phone) — новые добавляются, существующие обновляются.\n",
+        "height": 600,
+        "width": 460,
+        "color": 3
+      },
+      "id": "sticky-info",
+      "name": "Инструкция",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3200,
+        3520
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule (every 30 min)": {
+      "main": [
+        [
+          {
+            "node": "Fetch leads from Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TG: /export command": {
+      "main": [
+        [
+          {
+            "node": "IF /export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF /export": {
+      "main": [
+        [
+          {
+            "node": "Fetch leads from Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch leads from Supabase": {
+      "main": [
+        [
+          {
+            "node": "Upsert to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Notify Anya",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6c6dd3a0e2aab074641aaa985331c4301355fdfb15da866fec8e9989b74eba4e"
+  }
+}

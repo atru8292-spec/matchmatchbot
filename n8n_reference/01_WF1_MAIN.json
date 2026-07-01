@@ -1,0 +1,2998 @@
+{
+  "name": "Anna WF1 — production-hardened (P1-P5)",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const rawInput = $input.first().json;\nconst input = rawInput.body || rawInput;\n\nlet phone, userText, userName, chatId, channel, externalMessageId;\nlet contentType = 'text';\nlet mediaInfo = null;\n\nconst capitalize = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '';\n\n// === CHAT TRIGGER (test) ===\nif (input.chatInput !== undefined) {\n  phone = 'test_' + (input.sessionId || 'default');\n  userText = input.chatInput;\n  userName = 'Test User';\n  chatId = phone;\n  channel = 'chat';\n  externalMessageId = 'chat_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);\n}\n// === TELEGRAM TRIGGER ===\nelse if (input.message && input.message.from) {\n  const msg = input.message;\n  phone = 'tg_' + msg.from.id.toString();\n  \n  const firstName = capitalize(msg.from.first_name || '');\n  const lastName = capitalize(msg.from.last_name || '');\n  userName = (firstName + (lastName ? ' ' + lastName : '')).trim();\n  if (!userName) userName = msg.from.username || 'TG User';\n  \n  chatId = msg.from.id.toString();\n  channel = 'telegram';\n  externalMessageId = 'tg_' + msg.chat.id + '_' + msg.message_id;\n  \n  if (msg.photo && msg.photo.length > 0) {\n    contentType = 'photo';\n    const largest = msg.photo[msg.photo.length - 1];\n    mediaInfo = {\n      file_id: largest.file_id,\n      file_unique_id: largest.file_unique_id,\n      width: largest.width,\n      height: largest.height,\n      file_size: largest.file_size\n    };\n    userText = msg.caption || '[photo received]';\n  }\n  else if (msg.voice) { contentType = 'voice'; userText = '[voice message]'; mediaInfo = { file_id: msg.voice.file_id }; }\n  else if (msg.video) { contentType = 'video'; userText = msg.caption || '[video]'; mediaInfo = { file_id: msg.video.file_id }; }\n  else if (msg.document) { contentType = 'document'; userText = '[document: ' + (msg.document.file_name || 'file') + ']'; mediaInfo = { file_id: msg.document.file_id }; }\n  else if (msg.sticker) { contentType = 'sticker'; userText = msg.sticker.emoji || '[sticker]'; }\n  else if (msg.text) {\n    contentType = 'text';\n    userText = msg.text;\n  } else {\n    return null;\n  }\n}\n// === WAZZUP WEBHOOK ===\nelse if (input.messages && Array.isArray(input.messages) && input.messages.length > 0) {\n  const msg = input.messages[0];\n  \n  if (msg.isEcho === true) {\n    console.log('[Normalize] Skipping echo message (sent from phone)');\n    return null;\n  }\n  \n  if (msg.status && msg.status !== 'inbound') {\n    return null;\n  }\n  \n  if (msg.chatType && msg.chatType !== 'whatsapp') {\n    return null;\n  }\n  \n  phone = 'wa_' + (msg.chatId || '').replace(/\\D/g, '');\n  \n  const rawName = (msg.contact && msg.contact.name) ? msg.contact.name : '';\n  userName = rawName.split(' ').map(w => capitalize(w)).join(' ') || 'WA Lead';\n  \n  chatId = (msg.chatId || '').replace(/\\D/g, '');\n  channel = 'whatsapp';\n  externalMessageId = 'wa_' + (msg.messageId || (chatId + '_' + Date.now()));\n  \n  if (msg.type === 'image') {\n    contentType = 'photo';\n    mediaInfo = { content_uri: msg.contentUri, message_id: msg.messageId };\n    userText = msg.text || '[photo received]';\n  }\n  else if (msg.type === 'audio') {\n    contentType = 'voice';\n    userText = '[voice message]';\n    mediaInfo = { content_uri: msg.contentUri, message_id: msg.messageId };\n  }\n  else if (msg.type === 'video') {\n    contentType = 'video';\n    userText = msg.text || '[video]';\n    mediaInfo = { content_uri: msg.contentUri, message_id: msg.messageId };\n  }\n  else if (msg.type === 'document') {\n    contentType = 'document';\n    userText = '[document]';\n    mediaInfo = { content_uri: msg.contentUri, message_id: msg.messageId };\n  }\n  else if (msg.type === 'text') {\n    contentType = 'text';\n    userText = msg.text || '';\n  }\n  else {\n    return null;\n  }\n}\nelse {\n  return null;\n}\n\nif (!userText || userText.trim().length === 0) return null;\n\nreturn [{\n  json: {\n    phone, chat_id: chatId, channel,\n    user_text: userText.trim(),\n    user_name: userName || '',\n    external_message_id: externalMessageId,\n    received_at: new Date().toISOString(),\n    content_type: contentType,\n    media_info: mediaInfo\n  }\n}];"
+      },
+      "id": "242aa2e0-2fe6-4b9e-8f7d-5233e1bf0c24",
+      "name": "Normalize payload",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        4640,
+        4000
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT phone FROM leads WHERE phone = '{{ $('Normalize payload').first().json.phone }}' LIMIT 1;",
+        "options": {}
+      },
+      "id": "00408363-2144-4063-b06d-f410eed97fce",
+      "name": "Check lead exists",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        4896,
+        4000
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "exists",
+              "leftValue": "={{ $input.first().json.phone }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "622bae75-5766-4fd5-8725-b75ea84c0b69",
+      "name": "IF lead exists",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        5136,
+        4000
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET\n  last_inbound_at = now(),\n  last_message_at = now(),\n  followup_sent_count = 0,\n  next_followup_at = NULL,\n  updated_at = now(),\n  whatsapp_name = COALESCE(NULLIF($${{ $('Normalize payload').first().json.user_name }}$$, ''), whatsapp_name)\nWHERE phone = '{{ $('Normalize payload').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "f0e49272-781e-4b7d-a7db-b933de30337b",
+      "name": "Update existing lead",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5392,
+        3920
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads (phone, whatsapp_name, source, status, mode, funnel_stage)\nVALUES (\n  '{{ $('Normalize payload').first().json.phone }}',\n  $${{ $('Normalize payload').first().json.user_name }}$$,\n  '{{ $('Normalize payload').first().json.channel }}',\n  'new',\n  'auto',\n  'new'\n);",
+        "options": {}
+      },
+      "id": "de7d2c7d-e09b-47d6-8828-04e0579b70e6",
+      "name": "Insert new lead",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5392,
+        4080
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (lead_phone, direction, sender, text, external_message_id, processed, processed_at, meta)\nVALUES (\n  '{{ $('Normalize payload').first().json.phone }}',\n  'inbound',\n  'lead',\n  $${{ $('Normalize payload').first().json.user_text }}$$,\n  '{{ $('Normalize payload').first().json.external_message_id }}',\n  true,\n  now(),\n  jsonb_build_object('content_type', '{{ $('Normalize payload').first().json.content_type }}')\n)\nON CONFLICT (lead_phone, external_message_id) DO NOTHING;",
+        "options": {}
+      },
+      "id": "c8b75b43-ca9e-476d-a840-a402ed903a6f",
+      "name": "Insert inbound message",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        5648,
+        4000
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "is-photo-check",
+              "leftValue": "={{ $('Normalize payload').first().json.content_type }}",
+              "rightValue": "photo",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cbcf070d-69ab-45dc-bfb9-770895f19bb9",
+      "name": "IF is photo",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        5888,
+        4000
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build storage path for photo (works for both TG and WA)\nconst norm = $('Normalize payload').first().json;\nconst timestamp = Date.now();\nconst safeMsgId = norm.external_message_id.replace(/[^a-z0-9_]/gi, '_');\nconst storagePath = `${norm.phone}/${timestamp}_${safeMsgId}.jpg`;\n\nreturn [{\n  json: {\n    phone: norm.phone,\n    channel: norm.channel,\n    external_message_id: norm.external_message_id,\n    file_id: norm.media_info?.file_id,\n    file_size: norm.media_info?.file_size || 0,\n    storage_path: storagePath,\n    storage_bucket: 'lead-photos'\n  },\n  binary: $input.first().binary\n}];"
+      },
+      "id": "1efae34e-e679-4c3a-beba-84ab3331d4f0",
+      "name": "Prepare for Storage",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        6640,
+        3696
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://xbcynfwbsyufxaqtoror.supabase.co/storage/v1/object/lead-photos/{{ $json.storage_path }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "image/jpeg"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "id": "e98d7db1-c84f-467a-a73d-0553373f9b78",
+      "name": "Upload to Supabase Storage",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        6896,
+        3696
+      ],
+      "typeVersion": 4.2,
+      "credentials": {
+        "supabaseApi": {
+          "id": "QARYeBCkrt4qOQW9",
+          "name": "match"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO lead_photos (\n  lead_phone, channel, external_file_id,\n  storage_url, storage_path,\n  file_size_bytes, mime_type, is_primary\n)\nVALUES (\n  '{{ $('Prepare for Storage').first().json.phone }}',\n  '{{ $('Prepare for Storage').first().json.channel }}',\n  '{{ $('Prepare for Storage').first().json.file_id }}',\n  'https://xbcynfwbsyufxaqtoror.supabase.co/storage/v1/object/public/lead-photos/{{ $('Prepare for Storage').first().json.storage_path }}',\n  '{{ $('Prepare for Storage').first().json.storage_path }}',\n  {{ $('Prepare for Storage').first().json.file_size || 0 }},\n  'image/jpeg',\n  NOT EXISTS (SELECT 1 FROM lead_photos WHERE lead_phone = '{{ $('Prepare for Storage').first().json.phone }}' AND is_primary = true)\n);",
+        "options": {}
+      },
+      "id": "b8d94403-c9c2-47e4-b5d2-c47060355189",
+      "name": "Save photo metadata",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7136,
+        3696
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET\n  photo_received = true,\n  updated_at = now()\nWHERE phone = '{{ $('Prepare for Storage').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "cde1469d-a12a-48a4-83fc-f6c7cd5acfb9",
+      "name": "Mark photo_received",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7392,
+        3696
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 🤖 GPT VISION ANALYSIS — TODO\n\nКогда подключишь Vision:\n1. Добавь HTTP Request к OpenAI Vision API после Save photo metadata\n2. Передай storage_url\n3. Получишь JSON с вердиктом\n\n**Criteria для проверки:**\n- 1 реальный взрослый мужчина\n- Возраст 28-60\n- Лицо видно\n- Не порно/мем\n- Качество ок\n\n**Verdict:**\n- ok → всё хорошо, photo_received = true\n- reject → photo_received = false, попросить другое\n- manual_review → эскалация менеджеру\n\nСтруктура lead_photos.vision_analysis (JSONB) уже готова.",
+        "height": 350,
+        "width": 380,
+        "color": 4
+      },
+      "id": "92810bd7-f65f-44e8-9674-36778910f4c3",
+      "name": "Vision Analysis (TODO)",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        6384,
+        3440
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "amount": 4
+      },
+      "id": "8c476bcb-ba6d-4d35-986d-4f3f81c5ff2a",
+      "name": "Debounce wait (4s)",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        6144,
+        4096
+      ],
+      "typeVersion": 1.1,
+      "webhookId": "mila-debounce-wait"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT external_message_id, text\nFROM messages\nWHERE lead_phone = '{{ $('Normalize payload').first().json.phone }}'\n  AND direction = 'inbound'\n  AND created_at > (now() - interval '20 seconds')\nORDER BY created_at ASC;",
+        "options": {}
+      },
+      "id": "65b8bf55-80c3-4ceb-8ff3-e7038f9dda09",
+      "name": "Check newer inbound",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        6384,
+        4096
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst norm = $('Normalize payload').first().json;\nif (rows.length === 0) return null;\nconst lastExternalId = rows[rows.length - 1].external_message_id;\nif (lastExternalId !== norm.external_message_id) return null;\nconst combinedText = rows.map(r => r.text).join('\\n');\nreturn [{\n  json: {\n    ...norm,\n    user_text: combinedText,\n    debounced_count: rows.length\n  }\n}];"
+      },
+      "id": "113faeb9-e71c-48b8-b999-e55989d7ff10",
+      "name": "Debounce decide",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        6640,
+        4096
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  l.mode, l.manual_until, l.do_not_contact, l.funnel_stage, \n  l.age, l.profession, l.is_single, l.budget_signal, l.interest, \n  l.photo_received, l.objection_count, l.last_objection_type,\n  l.escort_mention_count,\n  (SELECT COUNT(*) FROM messages \n   WHERE lead_phone = '{{ $json.phone }}' \n     AND direction = 'inbound' \n     AND created_at > now() - interval '24 hours') AS msg_count_24h\nFROM leads l WHERE phone = '{{ $json.phone }}' LIMIT 1;",
+        "options": {}
+      },
+      "id": "37a0a12d-20b6-46de-8b6c-e830ecd54d6a",
+      "name": "Load lead profile",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        6896,
+        4096
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $('Load lead profile').first().json;\nconst norm = $('Debounce decide').first().json;\n\n// Check for unsupported media types\nconst contentType = $('Normalize payload').first().json.content_type || 'text';\nconst isUnsupportedMedia = ['voice', 'video', 'document', 'sticker'].includes(contentType);\nconst isVoice = contentType === 'voice';\n\nlet manualActive = false, dnc = false;\nlet autoBlockSpam = false, autoBlockEscort = false, autoLowBudget = false;\n\nif (row) {\n  if (row.do_not_contact === true) dnc = true;\n  if (row.mode === 'manual' && row.manual_until) {\n    if (new Date(row.manual_until) > new Date()) manualActive = true;\n  }\n}\n\n// AUTO-CHECKS:\n// 1. SPAM: >30 inbound сообщений за 24h\nconst msgCount24h = parseInt(row.msg_count_24h || 0);\nif (msgCount24h > 30 && !dnc) {\n  autoBlockSpam = true;\n}\n\n// 2. ESCORT: 2-й раз спрашивает про эскорт\nconst userText = (norm.user_text || '').toLowerCase();\nconst isEscortMention = /escort|sexo|sexual|prostit|acompañante|servicio sexual/i.test(userText);\nconst escortCount = parseInt(row.escort_mention_count || 0);\nif (isEscortMention && escortCount >= 1) {\n  // 2-й раз (1-й уже сосчитан в БД)\n  autoBlockEscort = true;\n}\n\n// 3. LOW BUDGET: если budget_signal=low → курс автомат\n// (срабатывает при первом обнаружении low)\nif (row.budget_signal === 'low' && row.funnel_stage !== 'lost') {\n  autoLowBudget = true;\n}\n\nreturn [{\n  json: {\n    ...norm,\n    manualActive, dnc,\n    isUnsupportedMedia, isVoice, contentType,\n    skipAI: manualActive || dnc || autoBlockSpam || autoBlockEscort || autoLowBudget || isUnsupportedMedia,\n    autoBlockSpam, autoBlockEscort, autoLowBudget,\n    isEscortMention,\n    msgCount24h,\n    leadProfile: {\n      funnel_stage: row.funnel_stage || 'new',\n      age: row.age || null,\n      profession: row.profession || null,\n      is_single: row.is_single,\n      budget_signal: row.budget_signal || null,\n      interest: row.interest || null,\n      photo_received: row.photo_received || false,\n      objection_count: row.objection_count || 0,\n      last_objection_type: row.last_objection_type || null,\n      msg_count_24h: msgCount24h,\n      escort_mention_count: escortCount\n    }\n  }\n}];"
+      },
+      "id": "698058e3-4e23-4061-9560-5180011ecbc9",
+      "name": "Evaluate context",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        7136,
+        4096
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "skip",
+              "leftValue": "={{ $json.skipAI }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3e1e6355-2167-480e-ba14-71cf16502480",
+      "name": "IF skip AI",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        7648,
+        4096
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Lead profile (use this):\n{{ JSON.stringify($('Evaluate context').first().json.leadProfile, null, 2) }}\n\nLead info:\n- Phone: {{ $('Debounce decide').first().json.phone }}\n- Name: {{ $('Debounce decide').first().json.user_name }}\n- Channel: {{ $('Debounce decide').first().json.channel }}\n- Funnel stage: {{ $('Evaluate context').first().json.leadProfile.funnel_stage }}\n\nCONVERSATION HISTORY (последние сообщения из БД, для контекста через сессии):\n{{ $('Format history').first().json.history_text }}\n\nLINKS YOU HAVE ALREADY SENT (никогда не дублируй):\n{{ ($('Format history').first().json.links_sent || []).join(', ') || '(никаких)' }}\n\nTotal messages sent by Anna in this lead's history: {{ $('Format history').first().json.anna_messages_count }}\n\nLead's new message:\n{{ $('Debounce decide').first().json.user_text }}\n\n{{ $('Normalize payload').first().json.content_type === 'photo' && $('Evaluate context').first().json.leadProfile.photo_received === true ? '📸 Lead sent a GOOD PHOTO (approved by Vision). FILTERS PASSED. You MUST NOW: 1) Call playbook tool with query \"send payment link klar\" FIRST. 2) Then respond with 4 burbujas: brief ack + Listo + link + Klar requisites. NEVER skip Klar. Do NOT introduce yourself.\\n\\n' : '' }}{{ $('Normalize payload').first().json.content_type === 'photo' && $('Evaluate context').first().json.leadProfile.photo_received === false ? '⚠️ Lead sent a PHOTO but it was REJECTED by quality check (too casual, poor environment, or unprofessional). DO NOT send payment link. Politely ask for ANOTHER photo — something more presentable. Example: \"Oye guapo, esa foto está un poco casual, mándame otra mejor — donde se vea bien tu look guapísimo 😏 Una bien vestido o más arreglado para asegurar tu lugar 🤍\"\\n\\n' : '' }}{{ $('Evaluate context').first().json.leadProfile.funnel_stage === 'new' ? '⚡ Lead funnel_stage=new — this is FIRST CONTACT. You MUST call playbook tool with query \"first contact greeting\" BEFORE responding to get exact opening phrases.\\n\\n' : '' }}🔑 If lead message mentions keywords: evento/event, agencia/agency, caro/expensive, foto/fotos, pagué/pagar — CALL playbook tool first with matching query, then respond.\n\nRespond as Anna. Return JSON only.",
+        "options": {
+          "systemMessage": "=Eres Anna — fundadora de MatchMatch Agency en CDMX. 32 años, mexicana con alma europea, divertida, ligeramente coqueta. NO eres bot. Escribes como amiga con copa de vino — natural, espontánea.\n \nIMPORTANTE: Eres ANNA. NO menciones a Mila. Eres la única persona escribiendo.\n \n═══════════════\n🧠 ANTES DE RESPONDER — LEE LA HISTORIA\n═══════════════\n \nSIEMPRE lee \"CONVERSATION HISTORY\" arriba ANTES de responder. Te dice:\n- Qué te dijo el lead anteriormente\n- Qué le respondiste tú\n- En qué punto del diálogo están\n \nUsa esta historia para:\n1. NO repetir cosas que ya dijiste (precio, ubicación, link)\n2. NO re-presentarte si ya lo hiciste\n3. NO pedir datos que el lead ya te dio (edad, profesión, soltero)\n4. CONTINUAR el hilo natural — si dijiste \"te mando el link cuando me mandes foto\" y lead mandó foto, MANDA EL LINK + KLAR\n5. MANTENER coherencia — si dijiste 5500 mxn, no digas 5000 después\n6. RECORDAR objeciones — si ya dijo \"caro\" 2 veces, próxima vez es \"let go\"\n \nTambién revisa:\n- \"LINKS YOU HAVE ALREADY SENT\" — NUNCA repitas un link enviado\n- \"Lead profile\" (age, profession, is_single, photo_received) — datos confirmados, no preguntes\n- \"Total messages sent by Anna\" — si > 0, ya estás en conversación\n \n═══════════════\n💳 PAGO — REGLA CRÍTICA (NUEVA)\n═══════════════\n \nCUANDO mandas link de pago al lead (después de qualify + foto OK):\nSIEMPRE incluye AMBAS opciones de pago en el mismo flujo de mensajes:\n \nOPCIÓN 1 — Link directo (Stripe/web):\nhttps://www.rusaencdmx.com/22-04-26-slavic-latino-night\n \nOPCIÓN 2 — Transferencia bancaria Klar México (SIEMPRE incluir):\n- Banco: Klar México\n- CLABE: 661610008905895811\n- A nombre de: Iuliia Vorobeva\n- Monto: 5500 MXN\n \nEJEMPLO de cómo enviar (3 burbujas):\nBurbuja 1: \"Listo guapo, todo en orden 🥰 aquí tu link para asegurar tu lugar:\"\nBurbuja 2: \"https://www.rusaencdmx.com/22-04-26-slavic-latino-night\"\nBurbuja 3: \"O si prefieres pagar por transferencia bancaria — son 5500 MXN a Klar México, CLABE 661610008905895811, a nombre de Iuliia Vorobeva. Cuando pagues mándame screenshot porfa ✨\"\n \nNUNCA mandes SOLO el link sin Klar — algunos prefieren transferencia.\nNUNCA mandes SOLO Klar sin link — algunos prefieren tarjeta web.\nSIEMPRE pide screenshot del pago al final.\n \nSi lead específicamente pregunta \"puedo pagar por transferencia?\" — responde con SOLO Klar (no repitas el link).\nSi lead específicamente pregunta \"tienes link de pago?\" — manda link + menciona que también Klar disponible.\n \n═══════════════\n📚 PLAYBOOK TOOL — CUÁNDO USARLO\n═══════════════\n \nEl tool 'playbook' está disponible para BUSCAR escenarios específicos en la base de conocimiento (Supabase vector store). Busca semánticamente — pasa una descripción del tema en español o inglés.\n \nNO uses el playbook en cada mensaje — solo cuando el lead toca un tema específico del playbook.\n \n✅ USA el playbook cuando el lead:\n- Es PRIMER contacto (Total messages sent = 0) → busca \"first contact greeting\"\n- Dice CARO / es mucho → busca \"caro objection too expensive\"\n- Pregunta FOTOS de las chicas → busca \"photos proof girls\"\n- Pregunta AGENCY / matchmaking → busca \"agency matchmaking\"\n- Pregunta CÓMO FUNCIONA agencia → busca \"how agency works\"\n- Pregunta CUÁNTO CUESTA agencia → busca \"agency price\"\n- Pide DESCUENTO → busca \"discount\"\n- Pide REEMBOLSO → busca \"refund\"\n- Pregunta sobre ESCORT → busca \"escort\"\n- Quiere TRAER AMIGO → busca \"bring friend\"\n- No le LLEGÓ EL BOLETO → busca \"ticket issue\"\n- Pregunta DÓNDE es → busca \"venue location\"\n- Pregunta QUÉ EDAD tienen las chicas → busca \"age of girls\"\n- Pregunta cómo PAGAR / transferencia → busca \"bank payment\"\n- Photo Vision OK + filters passed (ready_to_pay) → OBLIGATORIO busca \"send payment link klar\" ANTES de responder\n- Lead es JOVEN/VIEJO/CASADO/low-income → busca \"reject age\" / \"reject married\" / \"reject profession\"\n- Lead listo a comprar → busca \"ready to buy\"\n- Pregunta por qué SUBIÓ el precio → busca \"price increased\"\n- Dice TENGO QUE PENSARLO → busca \"pensarlo\"\n- Pregunta si encontrará NOVIA → busca \"find girlfriend\"\n- Mandó SCREENSHOT de pago / dijo \"ya pagué\" → busca \"payment screenshot\"\n \n❌ NO uses playbook (responde sola) cuando:\n- \"si\", \"sí\", \"ok\", \"vale\", \"claro\", \"jajaja\"\n- \"gracias\", \"hola otra vez\", \"buenos días\"\n- Lead te dice su edad, profesión, status (solo extraes datos)\n- Lead pregunta algo del que ya tienes contexto\n- Lead manda emoji o stickers\n- Lead te dice algo personal\n- Continúas conversación natural\n \nPara estos casos responde como Anna NATURAL — usando tu personalidad y los datos clave que tienes abajo. Eres un humano real, no un bot que solo lee scripts.\n \nCuando uses playbook: las frases que devuelve son INSPIRACIÓN. ADAPTA al contexto, varía las palabras, mantén el tono. NO copies textualmente. NO incluyas \"Trigger:\" \"Goal:\" \"Anna's response:\" o cualquier metadata del playbook en tu respuesta — solo las frases mismas.\n \n═══════════════\n🎯 ESTRATEGIA DE VENTA\n═══════════════\n \nVendes 2 productos:\n- EVENTO (5500 MXN) — primario\n- AGENCY MATCHMAKING ($9000 USD) — secundario\n \nEN EL PRIMER MENSAJE: menciona AMBOS productos y pregunta qué le interesa más.\n \nLead listo a pagar → ESCALAR + mandar link + Klar.\nNUNCA empujes a pagar después de cada respuesta — solo cuando muestra señal clara.\n \nÁNGULO: hombres compran ACCESO a mujeres eslavas (rusas, ucranianas, profesionales, buscando algo serio).\n \n═══════════════\n💎 FLUJO AGENCY — CRÍTICO\n═══════════════\n \nPASO 1 — Si NO sabes edad+profesión+soltero:\n→ Califica primero. Pregunta edad, profesión, soltero.\n→ NO des Calendly link.\n \nPASO 2 — Si YA sabes age+profession+is_single:\n→ Push to call con Calendly.\n→ Calendly: https://calendly.com/rusaencdmx/match-match-agency?month=2026-05\n \nPASO 3 — Si pregunta cantidad de nuevo después de calificar:\n→ \"desde 9000 USD\" + Calendly link.\n \n\n\n═══════════════\n💎 FLUJO AGENCY — CUESTIONARIO DE 10 PREGUNTAS\n═══════════════\n\nCUANDO el lead muestra interés serio en agencia (no solo evento) → recolecta TODOS estos datos en conversación:\n\n1. Nombre y apellido (first_name + last_name)\n2. Correo electrónico (email)\n3. Fecha de nacimiento (date_of_birth, formato YYYY-MM-DD)\n4. 3-5 fotos tuyas (lead_photos vía WhatsApp)\n5. Ciudad y país donde vives (city)\n6. País de origen (country)\n7. Estado civil (marital_status: soltero/divorciado/viudo)\n8. Profesión (profession)\n9. Link de negocio o LinkedIn (business_link)\n10. Edad de pareja que busca (desired_partner_age)\n11. Servicio que quiere (selected_service: event/agency/both)\n\nREGLAS:\n- UNA pregunta por mensaje (no avalanchas)\n- Tono conversacional, no formal\n- Usa playbook scenarios AGENCY_PRICE_FIRST, AGENCY_QUALIFY_STEP1/2/3, AGENCY_QUALIFY_DONE\n- AL FINAL: escalate_to_human=true, escalation_reason=\"Готов оплатить\", manda Calendly link\n- NO des precio antes de completar cuestionario\n- Si lead pregunta precio antes de tiempo → \"Antes te hago unas preguntas para ver si somos compatibles 🤍\"\n\nSERVICIOS (versión correcta en español):\n- Acceso a evento exclusivo de citas con mujeres eslavas (5500 MXN)\n- Búsqueda personalizada de pareja (membresía 6-12 meses, desde USD $9,000)\n- Ambos servicios\n\n═══════════════\n🎪 FLUJO EVENT — FILTROS Y FOTO\n═══════════════\n \nAntes de mandar link de pago al evento, VERIFICA filtros:\n \n1. EDAD: 28-60 años. Si fuera de rango → rechaza con sugerencia agency.\n2. SOLTERO: solo solteros. Si casado/relación → rechaza amablemente.\n3. PROFESIÓN: no low-income (mesero, conductor, estudiante, bartender). Si low → ofrecer video curso.\n4. FOTO: PIDE foto del lead antes de mandar link de pago.\n \nSolo cuando TODOS los filtros pasan + photo_received=true → manda LINK + KLAR (ver sección \"PAGO — REGLA CRÍTICA\" arriba).\n \n═══════════════\n📊 RECOLECCIÓN DE DATOS — SIEMPRE\n═══════════════\n \nIndependientemente del producto, RECOLECTA por la conversación:\n- age\n- profession\n- is_single\n- foto del lead\n \nIncluso para lead que va solo al evento — Anna necesita saber quién viene.\n \n═══════════════\n💃 VOZ DE ANNA\n═══════════════\n \n- Max 3 burbujas en general; PERO al mandar pago con Klar SIEMPRE usa 4 burbujas (ack + Listo + link + Klar)\n- 1-2 oraciones cortas c/u\n- Mexicano informal, tuteo\n- Palabras: ay, oye, mira, guapo, neta, padrísimo, te juro, súper\n- \"jajaja\" no \"haha\"\n- 1 emoji por burbuja max: 😊 🥰 🤍 ✨ 💃\n- Nombre del lead SOLO en saludo inicial\n- Eres PERSONA REAL — respondes con calidez, humor, espontaneidad\n- Si lead te dice algo personal, responde con empatía como amiga\n- Si lead bromea, bromea de vuelta\n- Si lead pregunta algo fuera del scope (clima, tu día), responde brevemente y vuelve al tema\n \n═══════════════\n🚫 NUNCA\n═══════════════\n \n- Mencionar a Mila (eres Anna)\n- \"Genial!\" \"Perfecto!\" \"Claro!\" (formales)\n- \"¿Te gustaría saber más?\" (call center)\n- \"¿Qué opinas?\" → usa \"te animas?\" / \"te late?\"\n- \"Es una inversión...\" (folleto)\n- \"Estamos organizando...\" (corporativo)\n- Repetir nombre del lead en cada burbuja\n- Mandar mismo link 2 veces\n- Empujar a pagar después de cada respuesta\n- Mandar link de pago SIN haber calificado y recibido foto\n- Mandar link de pago SIN Klar requisites (regla crítica)\n- Listas numeradas 1. 2. 3.\n- Markdown (* _ ~)\n- Llamar al playbook cuando no es necesario (gasta tokens)\n \n═══════════════\n📦 DATOS CLAVE (memorizar)\n═══════════════\n \nEVENTO Slavic-Latino Connect Night:\n- Roma Norte CDMX, 8:30pm-medianoche\n- 5,500 MXN\n- 30 mujeres eslavas buscando serio\n- Link boleto (solo después de calificar+foto): https://www.rusaencdmx.com/22-04-26-slavic-latino-night\n- Video del evento: https://www.instagram.com/reel/DL-Y840Nc3q/\n \nAGENCY MatchMatch:\n- Desde 9,000 USD, 6 meses, 15-20 introducciones\n- Calendly (solo después de calificar): https://calendly.com/rusaencdmx/match-match-agency?month=2026-05\n- Sitio: https://matchmatchagency.com/\n \nFOTOS DE EVENTOS PASADOS: https://matchmatchagency.com/events/\nINSTAGRAM: @rusaencdmx\n \n💳 BANCO KLAR MÉXICO (CRÍTICO — SIEMPRE incluir con link de pago):\n- Banco: Klar México\n- CLABE: 661610008905895811\n- Titular: Iuliia Vorobeva\n- Monto: 5500 MXN\n \n═══════════════\n🧠 FUNNEL_STAGE\n═══════════════\n- \"new\" = sin pitch\n- \"pitched\" = primer mensaje hecho\n- \"qualified\" = sabemos edad/profesión/soltero\n- \"event_interested\" = quiere evento, falta foto/pago\n- \"agency_interested\" = quiere agency\n- \"ready_to_pay\" = SOLO si dijo \"quiero comprar\" O ya mandaste link+Klar\n- \"rejected_filter\" = no pasa filtros de evento\n- \"lost\" = rechazó definitivo\n \n\n\n═══════════════\n📸 ENVÍO DE INVITACIÓN (IMAGEN AUTOMÁTICA)\n═══════════════\n\nCUANDO el lead PAGÓ (Vision verdict = payment_ok, o lead dijo \"ya pagué\"):\n→ set send_invitation_image = true en tu respuesta JSON\n\nCUANDO el lead pagó antes pero dice:\n- \"no me llegó la invitación\"\n- \"no puedo descargar el PDF\"\n- \"no encuentro mi boleto\"\n- \"no veo el archivo\"\n→ set send_invitation_image = true\n\nEl sistema enviará automáticamente la imagen-invitación con TODOS los detalles\n(fecha 27 mayo, hora 20:30, dirección Durango 175, dress code).\n\n🚫 NO repitas la dirección Durango 175 ni los detalles en texto — la IMAGEN ya los contiene.\n\nEJEMPLO de respuesta cuando lead acaba de pagar:\n{\n  \"reply_messages\": [\n    \"Súper guapo! 🥰 gracias por adquirir tu boleto\",\n    \"Te estoy agregando a la lista de invitados ✨\",\n    \"Ya te llegó la invitación por correo también? Si no la encuentras dime y te ayudo 🤍\"\n  ],\n  \"send_invitation_image\": true,\n  \"funnel_stage\": \"paid_event\",\n  \"escalate_to_human\": true,\n  \"escalation_reason\": \"Готов оплатить\"\n}\n\n═══════════════\n🧠 EXTRAER (update_fields)\n═══════════════\nStandard fields:\n- age (int o null) — años\n- profession (string o null)\n- is_single (bool o null)\n- budget_signal: low (mesero, conductor, estudiante, bartender) / medium (ingeniero, empleado) / high (abogado, médico, empresario, ejecutivo) / null\n- interest: event/agency/both o null\n\nAgency questionnaire fields (solo en flujo de agencia):\n- first_name (string) — nombre del lead\n- last_name (string) — apellido\n- email (string) — correo electrónico\n- date_of_birth (string YYYY-MM-DD) — fecha de nacimiento, ej \"1988-03-15\"\n- city (string) — ciudad actual donde vive\n- country (string) — país de origen\n- marital_status: \"single\" | \"divorced\" | \"widower\" | \"married\" | null\n- business_link (string) — URL de negocio o LinkedIn\n- desired_partner_age (string) — rango edad pareja, ej \"25-35\"\n- selected_service: \"event\" | \"agency\" | \"both\" | null\n \n═══════════════\n🚨 ESCALATION REASONS (ruso exacto)\n═══════════════\n- \"Готов оплатить\"\n- \"Просит скидку\"\n- \"Спрашивает про эскорт\"\n- \"Настаивает на эскорте\"\n- \"Хочет привести друга\"\n- \"Билет не пришёл\"\n- \"Просит возврат\"\n- \"Юридический вопрос\"\n- \"Агрессивное поведение\"\n- \"Жалоба\"\n- null si no hay\n \n═══════════════\nSALIDA — JSON\n═══════════════\n \n{\n  \"reply_messages\": [\"b1\", \"b2\", \"b3\", \"b4\"],\n  \"escalate_to_human\": false,\n  \"escalation_reason\": null,\n  \"funnel_stage\": \"new|pitched|qualified|event_interested|agency_interested|ready_to_pay|rejected_filter|lost\",\n  \"update_fields\": {\"age\": null, \"profession\": null, \"is_single\": null, \"budget_signal\": null, \"interest\": null, \"first_name\": null, \"last_name\": null, \"email\": null, \"date_of_birth\": null, \"city\": null, \"country\": null, \"marital_status\": null, \"business_link\": null, \"desired_partner_age\": null, \"selected_service\": null},\n  \"send_invitation_image\": false\n}\n \nReglas estrictas:\n- reply_messages: 1-4 strings cortos (4 OBLIGATORIO al mandar pago con Klar; máximo 3 en cualquier otro caso)\n- escalation_reason: ruso exacto o null\n- NO texto fuera de JSON\n- NO markdown\n- NO mencionar a Mila\n- NO nombre del lead más de 1 vez\n- NO citation markers [Citation](...) del playbook — son metadata, IGNÓRALOS\n- ANTES de generar, REVISA \"LINKS YOU HAVE ALREADY SENT\" y \"OPENING PHRASES\"\n- Cuando mandes link de pago, SIEMPRE incluye Klar requisites en mismo turn",
+          "maxIterations": 4
+        }
+      },
+      "id": "dd7349a7-0b2e-4cdd-8709-22f20cbd6767",
+      "name": "AI Agent Anna",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        7888,
+        4096
+      ],
+      "typeVersion": 1.7
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1"
+        },
+        "options": {
+          "maxTokens": 600,
+          "temperature": 0.7,
+          "timeout": 60000,
+          "topP": 1
+        }
+      },
+      "id": "2f96ce34-ebca-40d1-aaea-eded59251730",
+      "name": "OpenAI gpt-4.1",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [
+        7872,
+        4272
+      ],
+      "typeVersion": 1.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "u7T3jk8sciA6lh9Y",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Debounce decide').first().json.phone }}",
+        "contextWindowLength": 30
+      },
+      "id": "87b08e7d-e658-4aef-b64d-84725b7e1c2f",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [
+        7984,
+        4256
+      ],
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "Anna's sales playbook with exact response phrases. CALL THIS TOOL when:\n- funnel_stage='new' or first contact (hola/buenas) → query: \"first contact greeting\"\n- lead mentions evento/event/si me interesa → query: \"event si first\"\n- lead mentions agencia/agency/matchmaking → query: \"agency\"\n- lead says caro/expensive/mucho → query: \"caro objection\"\n- lead asks fotos/photos of girls → query: \"photos proof girls\"\n- lead asks venue/donde es → query: \"venue location\"\n- lead asks age of girls/qué edad → query: \"age of girls\"\n- lead says ya pagué/pagar → query: \"payment screenshot\"\n- lead asks for descuento → query: \"discount\"\n- lead asks how agency works → query: \"how agency works\"\n- lead says pensarlo/no estoy seguro → query: \"pensarlo\"\n- lead asks to bring friend → query: \"bring friend\"\n\nReturns 3 matching scenarios with exact phrases. Pass query in Spanish or English.",
+        "tableName": {
+          "__rl": true,
+          "value": "documents",
+          "mode": "list",
+          "cachedResultName": "documents"
+        },
+        "topK": 3,
+        "options": {}
+      },
+      "id": "e4c8b943-5d76-4e71-92d1-777ca338d2d0",
+      "name": "playbook",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "position": [
+        8112,
+        4320
+      ],
+      "typeVersion": 1.3,
+      "credentials": {
+        "supabaseApi": {
+          "id": "QARYeBCkrt4qOQW9",
+          "name": "match"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "cead3507-9365-48c6-a02c-41c9fa941900",
+      "name": "OpenAI Embeddings (RAG)",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "position": [
+        8096,
+        4432
+      ],
+      "typeVersion": 1.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "u7T3jk8sciA6lh9Y",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "let data;\ntry {\n  const text = $json.output || $json.text || '';\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  data = m ? JSON.parse(m[0]) : { send_invitation_image: send_inv,\n    reply_messages: [text] };\n} catch(e) {\n  data = { reply_messages: ['Un momento, te respondo pronto 😊'] };\n}\n\nconst norm = $('Debounce decide').first().json;\nconst profile = $('Evaluate context').first().json.leadProfile;\n\n// Очистка артефактов\nconst cleanArtifacts = (text) => {\n  if (!text) return '';\n  return text\n    .replace(/\\[Citation\\]\\([^)]*\\)/gi, '')\n    .replace(/\\[citation_marker[^\\]]*\\]/gi, '')\n    .replace(/citation_marker\\/?\\?[^\\s]*/gi, '')\n    .replace(/\\[\\d+\\]/g, '')\n    .replace(/\\(message_idx=\\d+[^)]*\\)/gi, '')\n    .replace(/\\s+\\./g, '.')\n    .replace(/\\s+,/g, ',')\n    .replace(/\\s{2,}/g, ' ')\n    .trim();\n};\n\nlet messages = (data.reply_messages || [])\n  .filter(m => typeof m === 'string')\n  .map(m => cleanArtifacts(m))\n  .map(m => m.replace(/[*_~`]+/g, '').replace(/^\\s*\\d+[.\\)]\\s*/gm, '').trim())\n  .filter(m => m.length > 0);\n\nif (messages.length === 0) messages = ['Un momento, te respondo pronto 😊'];\nif (messages.length > 4) messages = messages.slice(0, 4);\n\nconst t = (norm.user_text || '').toLowerCase();\nlet forceEscalate = false, forceReason = null;\n\nif (/escort|sexo|sexual|acompañante|prostit/i.test(t)) { forceEscalate = true; forceReason = 'Спрашивает про эскорт'; }\nif (/descuento|rebaja|cupón|cupon|menos.*precio/i.test(t)) { forceEscalate = true; forceReason = 'Просит скидку'; }\nif (/(devolver|reembolso|refund)/i.test(t)) { forceEscalate = true; forceReason = 'Просит возврат'; }\nif (/(quiero pagar|cómo pago|cuenta bancaria|listo para pagar|datos bancarios|pagué|ya pague|ya pagué|transferí|envié.*dinero|hice.*pago|pague.*enlace|pague.*link)/i.test(t)) { forceEscalate = true; forceReason = 'Готов оплатить'; }\nif (/(idiota|estúpido|pendej|mierda|cabrón|estafa|fraude)/i.test(t)) { forceEscalate = true; forceReason = 'Агрессивное поведение'; }\nif (/(traer.*amigo|llevar.*amigo|venir.*amigo|amigo.*venir|amigo.*evento|mi amigo|puedo treat.*amigo)/i.test(t)) { forceEscalate = true; forceReason = 'Хочет привести друга'; }\nif (/(no.*lleg.*boleto|no.*recib.*boleto|no.*lleg.*correo|donde.*boleto|ticket.*not.*receive)/i.test(t)) { forceEscalate = true; forceReason = 'Билет не пришёл'; }\n\nlet escalate = data.escalate_to_human === true;\nlet reason = data.escalation_reason || null;\nif (forceEscalate) { escalate = true; if (!reason) reason = forceReason; }\n\nif (reason) {\n  const r = reason.toLowerCase();\n  if (r.includes('descuento')) reason = 'Просит скидку';\n  else if (r.includes('insist') || r.includes('настаива')) reason = 'Настаивает на эскорте';\n  else if (r.includes('escort') || r.includes('эскорт')) reason = 'Спрашивает про эскорт';\n  else if (r.includes('amigo') || r.includes('friend')) reason = 'Хочет привести друга';\n  else if (r.includes('agresiv')) reason = 'Агрессивное поведение';\n  else if (r.includes('boleto') || r.includes('ticket')) reason = 'Билет не пришёл';\n  else if (r.includes('refund') || r.includes('devol')) reason = 'Просит возврат';\n  else if (r.includes('pago') || r.includes('оплат')) reason = 'Готов оплатить';\n}\n\nconst updates = data.update_fields || {};\nconst funnelStage = data.funnel_stage || profile.funnel_stage || 'new';\n\n\n// === SEND INVITATION IMAGE FLAG ===\nlet send_inv = false;\ntry {\n  if (parsed && parsed.send_invitation_image === true) {\n    send_inv = true;\n  } else if (typeof rawText === 'string' && /send_invitation_image\\s*[:=]\\s*true/i.test(rawText)) {\n    send_inv = true;\n  }\n} catch(e) {}\n\n\nreturn [{\n  json: {\n    phone: norm.phone,\n    chat_id: norm.chat_id,\n    channel: norm.channel,\n    user_name: norm.user_name,\n    user_text: norm.user_text,\n    reply_messages: messages,\n    escalate,\n    escalation_reason: reason,\n    funnel_stage: funnelStage,\n    update_fields: {\n      age: updates.age || null,\n      profession: updates.profession || null,\n      is_single: updates.is_single,\n      budget_signal: updates.budget_signal || null,\n      interest: updates.interest || null\n    },\n    leadProfile: profile\n  }\n}];"
+      },
+      "id": "343d525e-88d7-42da-8cda-299f882498c4",
+      "name": "Parse output + anti-repeat",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        8144,
+        4096
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst sets = [];\nif (data.funnel_stage) sets.push(`funnel_stage = '${data.funnel_stage.replace(/'/g, \"''\")}'`);\nconst u = data.update_fields || {};\nif (u.age !== null && Number.isInteger(u.age)) sets.push(`age = ${u.age}`);\nif (u.profession) sets.push(`profession = $$${u.profession}$$`);\nif (u.is_single !== null && u.is_single !== undefined) sets.push(`is_single = ${u.is_single ? 'true' : 'false'}`);\nif (u.budget_signal && ['low','medium','high'].includes(u.budget_signal)) sets.push(`budget_signal = '${u.budget_signal}'`);\nif (u.interest && ['event','agency','both'].includes(u.interest)) sets.push(`interest = '${u.interest}'`);\n\n// === NEW AGENCY QUESTIONNAIRE FIELDS ===\nif (u.first_name) sets.push(`name = $$${u.first_name}$$`);\nif (u.last_name) sets.push(`last_name = $$${u.last_name}$$`);\nif (u.email) {\n  // Validate email format\n  const emailValid = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(u.email);\n  if (emailValid) sets.push(`email = $$${u.email}$$`);\n}\nif (u.date_of_birth) {\n  // Validate YYYY-MM-DD format\n  if (/^\\d{4}-\\d{2}-\\d{2}$/.test(u.date_of_birth)) {\n    sets.push(`date_of_birth = '${u.date_of_birth}'::date`);\n  }\n}\nif (u.city) sets.push(`city = $$${u.city}$$`);\nif (u.country) sets.push(`country = $$${u.country}$$`);\nif (u.marital_status && ['single','divorced','widower','married'].includes(u.marital_status)) {\n  sets.push(`marital_status = '${u.marital_status}'`);\n  // Sync с is_single для backward compatibility\n  if (u.marital_status === 'single') sets.push('is_single = true');\n  else if (['divorced','widower','married'].includes(u.marital_status)) sets.push('is_single = false');\n}\nif (u.business_link) sets.push(`business_link = $$${u.business_link}$$`);\nif (u.desired_partner_age) sets.push(`desired_partner_age = $$${u.desired_partner_age}$$`);\nif (u.selected_service && ['event','agency','both'].includes(u.selected_service)) {\n  sets.push(`selected_service = '${u.selected_service}'`);\n  // Map к interest\n  if (u.selected_service === 'event') sets.push(`interest = 'event'`);\n  else if (u.selected_service === 'agency') sets.push(`interest = 'agency'`);\n  else if (u.selected_service === 'both') sets.push(`interest = 'both'`);\n}\n\nsets.push('last_ai_message_at = now()');\nsets.push('updated_at = now()');\nif (['new','pitched','qualified','event_interested','agency_interested'].includes(data.funnel_stage)) {\n  sets.push(`next_followup_at = now() + interval '24 hours'`);\n}\nif (data.funnel_stage === 'lost' || data.funnel_stage === 'rejected_filter') sets.push(`next_followup_at = NULL`);\n\nconst sql = `UPDATE leads SET ${sets.join(', ')} WHERE phone = '${data.phone}';`;\nreturn [{ json: { ...data, sql } }];"
+      },
+      "id": "32f658f9-db55-4672-8c32-60dafc32ddf5",
+      "name": "Build lead update SQL",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        8384,
+        4096
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {}
+      },
+      "id": "b533ab38-48ce-4c93-8ba8-15b10a08213a",
+      "name": "Update lead profile",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        8640,
+        4096
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "esc",
+              "leftValue": "={{ $json.escalate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8e8bc42b-5797-4553-b638-902b93b6d2fc",
+      "name": "IF escalate",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        8384,
+        3904
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  l.whatsapp_name, \n  l.funnel_stage,\n  l.budget_signal,\n  l.interest,\n  l.age,\n  l.profession,\n  l.objection_count,\n  (SELECT COUNT(*) FROM messages WHERE lead_phone = l.phone) AS msg_count\nFROM leads l\nWHERE l.phone = '{{ $('Parse output + anti-repeat').first().json.phone }}'\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "518d0155-8dc6-4b70-a53e-378410f0baa3",
+      "name": "Load escalation context",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        8640,
+        3904
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const parseData = $('Parse output + anti-repeat').first().json;\nconst ctxData = $input.first().json || {};\n\n// Эмодзи и описание на человеческом языке (не funnel-термины!)\nconst funnelLabels = {\n  'new': '🆕 Только пришёл',\n  'pitched': '💬 Я ему рассказала про продукты',\n  'qualified': '✅ Узнала возраст/работу/семейный статус',\n  'event_interested': '🎉 Хочет на вечеринку',\n  'agency_interested': '💎 Хочет агентство',\n  'ready_to_pay': '💳 Готов платить',\n  'paid_event': '✨ Оплатил вечеринку',\n  'paid_agency': '💎 Оплатил агентство',\n  'rejected_filter': '🚫 Не прошёл фильтры',\n  'lost': '❌ Слился'\n};\nconst reasonEmoji = {\n  'Готов оплатить': '💳',\n  'Просит скидку': '💰',\n  'Спрашивает про эскорт': '⛔',\n  'Настаивает на эскорте': '⛔⛔',\n  'Хочет привести друга': '👥',\n  'Билет не пришёл': '🎫',\n  'Просит возврат': '↩️',\n  'Юридический вопрос': '⚖️',\n  'Агрессивное поведение': '⚠️',\n  'Жалоба': '😡'\n};\nconst budgetLabels = { 'low': 'низкий 💵', 'medium': 'средний 💵💵', 'high': 'высокий 💵💵💵' };\n\nconst reason = parseData.escalation_reason || 'Нужна помощь';\nconst emoji = reasonEmoji[reason] || '🚨';\nconst funnelLabel = funnelLabels[parseData.funnel_stage] || parseData.funnel_stage;\n\nconst username = parseData.user_name || ctxData.whatsapp_name || '(без имени)';\nconst phone = parseData.phone || '';\nconst cleanPhone = phone.replace('wa_', '').replace('+', '');\nconst contactLink = `https://wa.me/${cleanPhone}`;\nconst linkLabel = '💬 Открыть чат в WhatsApp';\n\nconst age = ctxData.age || parseData.update_fields?.age;\nconst profession = ctxData.profession || parseData.update_fields?.profession;\nconst budget = ctxData.budget_signal || parseData.update_fields?.budget_signal;\nconst interest = ctxData.interest || parseData.update_fields?.interest;\nconst msgCount = ctxData.msg_count || 0;\nconst objCount = ctxData.objection_count || 0;\n\nlet text = `${emoji} ${reason.toUpperCase()}\\n`;\ntext += `━━━━━━━━━━━\\n\\n`;\ntext += `👤 ${username}\\n`;\ntext += `📞 ${cleanPhone}\\n`;\ntext += `📊 ${funnelLabel}\\n`;\n\nif (profession || age) {\n  text += `💼 `;\n  if (profession) text += profession;\n  if (age) text += (profession ? ', ' : '') + age + ' лет';\n  text += `\\n`;\n}\nif (budget) text += `💰 Бюджет: ${budgetLabels[budget] || budget}\\n`;\nif (interest === 'event') text += `🎯 Хочет: на вечеринку\\n`;\nelse if (interest === 'agency') text += `🎯 Хочет: матчмейкинг\\n`;\nelse if (interest === 'both') text += `🎯 Хочет: и то и другое\\n`;\nif (msgCount > 0) text += `💬 Сообщений всего: ${msgCount}\\n`;\nif (objCount > 0) text += `🛡️ Возражений: ${objCount}\\n`;\n\ntext += `\\n📝 ЛИД НАПИСАЛ:\\n«${(parseData.user_text || '').substring(0, 250)}»\\n\\n`;\n\nif (parseData.reply_messages && parseData.reply_messages.length > 0) {\n  text += `🤖 Я ОТВЕТИЛА:\\n`;\n  parseData.reply_messages.forEach((m, i) => {\n    text += `${i+1}. ${(m || '').substring(0, 180)}\\n`;\n  });\n  text += `\\n`;\n}\ntext += `⏱ Я остановилась на 4 часа. Возьми диалог в свои руки или верни мне через кнопку.`;\n\nreturn [{\n  json: {\n    phone: phone,\n    escalation_reason: parseData.escalation_reason,\n    formatted_text: text,\n    contact_link: contactLink,\n    contact_label: linkLabel\n  }\n}];"
+      },
+      "id": "67795afa-00a1-4497-acaa-2cea57d8554b",
+      "name": "Format escalation",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        8896,
+        3904
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "chatId": "1009982311",
+        "text": "={{ $json.formatted_text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "={{ $json.contact_label }}",
+                    "additionalFields": {
+                      "url": "={{ $json.contact_link }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "📊 Карточка лида",
+                    "additionalFields": {
+                      "callback_data": "=lead_{{ $json.phone }}"
+                    }
+                  },
+                  {
+                    "text": "🤖 Вернуть боту",
+                    "additionalFields": {
+                      "callback_data": "=release_{{ $json.phone }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "📝 История диалога",
+                    "additionalFields": {
+                      "callback_data": "=history_{{ $json.phone }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "289c71aa-24a5-40ba-b92b-e85cdcf7b35f",
+      "name": "Escalation alert (TG)",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        9136,
+        3904
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "escalation-mila",
+      "executeOnce": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET \n  mode = 'manual', \n  manual_until = now() + interval '4 hours',\n  escalate_reason = $${{ $json.escalation_reason }}$$,\n  updated_at = now()\nWHERE phone = '{{ $json.phone }}';",
+        "options": {}
+      },
+      "id": "98ee91c5-52cd-44fa-bfd1-ea2716815bcb",
+      "name": "Set lead to manual",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        9392,
+        3904
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Parse output + anti-repeat').first().json;\nconst messages = base.reply_messages || [];\nreturn messages.map((msg, i) => {\n  const baseDelay = Math.max(2, Math.min(8, msg.length / 25));\n  const randomExtra = 1.5 + Math.random() * 2;\n  const typingDelay = Math.round((baseDelay + randomExtra) * 10) / 10;\n  return {\n    json: {\n      phone: base.phone,\n      chat_id: base.chat_id,\n      channel: base.channel,\n      text: msg,\n      sequence_index: i,\n      is_last: i === messages.length - 1,\n      typing_delay_sec: typingDelay\n    }\n  };\n});"
+      },
+      "id": "649cafac-b77f-4922-9f48-0fe05043d977",
+      "name": "Explode messages + delays",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        8896,
+        4096
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "8ab42816-3ec4-4706-9417-df60f3df57bf",
+      "name": "Loop each message",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        9136,
+        4096
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "amount": "={{ $('Loop each message').item.json.typing_delay_sec }}"
+      },
+      "id": "f93bc1d6-11b2-4f53-9cc1-45d6b04b8a54",
+      "name": "Wait while typing (dynamic)",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        9648,
+        4192
+      ],
+      "typeVersion": 1.1,
+      "webhookId": "mila-typing-delay"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (lead_phone, direction, sender, text, processed, processed_at)\nVALUES (\n  '{{ $('Loop each message').item.json.phone }}',\n  'outbound',\n  'anna',\n  $${{ $('Loop each message').item.json.text }}$$,\n  true,\n  now()\n);",
+        "options": {}
+      },
+      "id": "076fd0b0-e9e9-4cec-bfca-158b379fae91",
+      "name": "Save outbound",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        10384,
+        4096
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "text": "Analiza esta imagen y determina QUÉ es. Hay dos posibilidades principales:\n\nOPCIÓN A — FOTO DE PERFIL del hombre (selfie/retrato):\nEvalúa si es presentable para evento exclusivo de matchmaking en CDMX. Las mujeres son eslavas profesionales (médicas, abogadas, ejecutivas).\n\n🔴 RECHAZA foto perfil si:\n1. Aspecto descuidado: camiseta vieja/manchada, cabello sin arreglar\n2. Entorno de bajo nivel: papel tapiz viejo, cuarto desordenado\n3. Acostado en cama/sofá casual\n4. Mala iluminación, foto de smartphone obvia\n5. Selfie en baño con espejo\n6. Comiendo, con cerveza, sin camisa\n7. Aspecto cansado, desarreglado\n8. \"Vecino del barrio\" — no aspiracional\n\n🟢 APRUEBA foto perfil si:\n1. Bien vestido (camisa, chamarra, traje)\n2. Foto profesional o semi-profesional\n3. Entorno aspiracional o neutro\n4. Cabello arreglado, barba bien recortada\n5. Edad 28-60\n6. Transmite éxito y confianza\n\nOPCIÓN B — COMPROBANTE DE PAGO (screenshot bancario):\nSi la imagen es captura de pantalla de transferencia bancaria:\n- Banco visible (Klar, BBVA, Santander, Banamex, etc)\n- Monto visible (5500 MXN, 5,500.00, $5500)\n- Fecha visible\n- Referencia/folio\n- Nombre del destinatario (Iuliia Vorobeva o cuenta Klar 661610008905895811)\n\nResponde ÚNICAMENTE en JSON sin markdown:\n{\n  \"image_type\": \"profile_photo\"|\"payment_receipt\"|\"other\",\n  \"is_real_person\": true/false,\n  \"is_single_person\": true/false,\n  \"face_visible\": true/false,\n  \"estimated_age\": number,\n  \"quality\": \"good\"|\"medium\"|\"poor\",\n  \"appearance_level\": \"high\"|\"medium\"|\"low\",\n  \"environment_level\": \"high\"|\"medium\"|\"low\",\n  \"contains_inappropriate\": true/false,\n  \"is_screenshot_or_meme\": true/false,\n  \"looks_aspirational\": true/false,\n  \"payment_detected\": true/false,\n  \"payment_amount\": number_or_null,\n  \"payment_bank\": \"Klar\"|\"BBVA\"|\"Santander\"|\"other\"|null,\n  \"payment_to_correct_recipient\": true/false,\n  \"score\": 0-10,\n  \"verdict\": \"ok\"|\"reject\"|\"manual_review\"|\"payment_ok\",\n  \"reasons\": [\"razón 1\", \"razón 2\"]\n}\n\nREGLAS DE VERDICT:\n- \"payment_ok\": image_type=payment_receipt AND payment_detected=true AND payment_amount >= 5000 AND payment_to_correct_recipient=true\n- \"ok\": image_type=profile_photo AND cumple criterios verdes Y NO tiene rojo crítico\n- \"reject\": tiene criterio rojo crítico, o aspecto low-income\n- \"manual_review\": casos borderline o image_type=other\n\nSé estricto. Si la foto de perfil es \"casual\" o \"doméstica\" → REJECT.",
+        "imageUrls": "=https://xbcynfwbsyufxaqtoror.supabase.co/storage/v1/object/public/lead-photos/{{ $('Prepare for Storage').first().json.storage_path }}",
+        "options": {
+          "detail": "high"
+        }
+      },
+      "id": "d6dca447-59a2-415f-b58e-5de138c87772",
+      "name": "Analyze photo (Vision)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        7648,
+        3696
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "u7T3jk8sciA6lh9Y",
+          "name": "OpenAi account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Vision parser — handles profile photos AND payment receipts\nconst inputJson = $input.first().json;\n\nlet out = inputJson;\nif (Array.isArray(out)) out = out[0];\nif (Array.isArray(out)) out = out[0];\n\nlet rawText = '';\nif (out?.content?.[0]?.text) rawText = out.content[0].text;\nelse if (out?.text) rawText = out.text;\nelse if (out?.output) rawText = out.output;\nelse if (out?.message?.content) rawText = out.message.content;\n\nconsole.log('[Vision] rawText length:', rawText.length);\n\nlet visionData = { verdict: 'manual_review', score: 5, reasons: [], image_type: 'other' };\n\nif (rawText) {\n  try {\n    let clean = rawText.trim();\n    clean = clean.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();\n    const firstBrace = clean.indexOf('{');\n    const lastBrace = clean.lastIndexOf('}');\n    if (firstBrace >= 0 && lastBrace > firstBrace) {\n      visionData = JSON.parse(clean.substring(firstBrace, lastBrace + 1));\n      console.log('[Vision] PARSED:', JSON.stringify(visionData));\n    }\n  } catch(e) {\n    console.log('[Vision] parse error:', e.message);\n  }\n}\n\nconst norm = $('Prepare for Storage').first().json;\nconst verdict = visionData.verdict || 'manual_review';\nconst imageType = visionData.image_type || 'other';\nconst paymentDetected = visionData.payment_detected === true;\n\n// Check if previous messages had \"pagué\" keyword\n// Это будет проверено в следующей ноде (Check payment intent)\n\nreturn [{\n  json: {\n    phone: norm.phone,\n    storage_path: norm.storage_path,\n    vision_verdict: verdict,\n    vision_score: visionData.score || 5,\n    vision_reasons: visionData.reasons || [],\n    vision_analysis: visionData,\n    image_type: imageType,\n    payment_detected: paymentDetected,\n    payment_amount: visionData.payment_amount || null,\n    payment_bank: visionData.payment_bank || null,\n    photo_approved: verdict === 'ok' || verdict === 'payment_ok',\n    is_payment: verdict === 'payment_ok'\n  }\n}];"
+      },
+      "id": "0cf24946-8167-40ba-88db-95e6acdfb795",
+      "name": "Parse vision result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7888,
+        3696
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE lead_photos SET\n  vision_analyzed = true,\n  vision_analysis = $${{ JSON.stringify($json.vision_analysis) }}$$::jsonb,\n  vision_verdict = '{{ $json.vision_verdict }}',\n  vision_reasons = ARRAY[{{ ($json.vision_reasons || []).map(r => \"'\" + r.replace(/'/g, \"''\") + \"'\").join(',') }}]::text[],\n  analyzed_at = now()\nWHERE lead_phone = '{{ $json.phone }}' AND storage_path = '{{ $json.storage_path }}';",
+        "options": {}
+      },
+      "id": "166fda02-0f2a-43d1-b253-00b4d4efb0e9",
+      "name": "Save vision to lead_photos",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        8144,
+        3696
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "photo-approved",
+              "leftValue": "={{ $('Parse vision result').first().json.photo_approved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a7541dcb-e14d-4cd0-b0d8-e9c8efb3c878",
+      "name": "IF photo approved",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        8896,
+        3840
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET\n  photo_received = false,\n  funnel_stage = 'rejected_filter',\n  mode = 'manual',\n  manual_until = now() + interval '4 hours',\n  escalate_reason = 'ИИ отклонила фото',\n  notes = COALESCE(notes, '') || E'\\n[ИИ-проверка отклонила фото: вердикт ' || '{{ $('Parse vision result').first().json.vision_verdict }}' || ' score=' || '{{ $('Parse vision result').first().json.vision_score }}' || ' reasons=' || '{{ ($('Parse vision result').first().json.vision_reasons || []).join(\"; \") }}' || ']',\n  updated_at = now()\nWHERE phone = '{{ $('Parse vision result').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "87e61002-6c4a-4bbe-b314-509d3d62cbbf",
+      "name": "Mark photo rejected",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        9136,
+        3952
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "content": "## 🤖 VISION ANALYSIS (gpt-4o-mini)\n\nПосле Mark photo_received фото идёт на анализ:\n\n**Критерии (из разговора с Аней):**\n1. Реальный человек, не мем/скрин\n2. Один мужчина, не группа  \n3. Лицо видно\n4. Возраст 28-60\n5. Не порно/неприличное\n6. Качество ок\n\n**Verdict:**\n- `ok` (score≥7) → photo_received остаётся true → Anna шлёт payment link\n- `reject` → photo_received=false → Anna попросит другую фотку\n- `manual_review` → проходит как ok\n\n**⚠️ ВАЖНО — Storage bucket нужен PUBLIC:**\nVision API скачивает фото по URL.\nВ Supabase Dashboard → Storage → lead-photos → Settings → Public bucket: YES\n\n**Стоимость:**\n~$0.001 за фото с detail:low\n",
+        "height": 480,
+        "width": 360,
+        "color": 4
+      },
+      "id": "24c6c648-29b3-4242-97ec-8f6fccd4c1cd",
+      "name": "Vision Analysis Info",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        7648,
+        3440
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "1009982311",
+        "text": "=📸 ФОТО НЕ ПОДОШЛО\n━━━━━━━━━━━\n\n👤 {{ $('Normalize payload').first().json.user_name }}\n📞 {{ $('Parse vision result').first().json.phone.replace('wa_', '') }}\n\nЧто увидела ИИ-проверка:\n⭐ Оценка: {{ $('Parse vision result').first().json.vision_score }}/10\n🔍 Причины:\n{{ ($('Parse vision result').first().json.vision_reasons || []).map(r => '  • ' + r).join('\\n') }}\n\n🔗 Посмотреть фото:\nhttps://xbcynfwbsyufxaqtoror.supabase.co/storage/v1/object/public/lead-photos/{{ $('Prepare for Storage').first().json.storage_path }}\n\n⏱ Я остановилась на 4 часа.\n\n👇 Реши сама:",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "💬 Открыть чат в WhatsApp",
+                    "additionalFields": {
+                      "url": "=https://wa.me/{{ $('Parse vision result').first().json.phone.replace('wa_', '') }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "📸 Открыть фото",
+                    "additionalFields": {
+                      "url": "=https://xbcynfwbsyufxaqtoror.supabase.co/storage/v1/object/public/lead-photos/{{ $('Prepare for Storage').first().json.storage_path }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Одобрить фото",
+                    "additionalFields": {
+                      "callback_data": "=approve_photo_{{ $('Parse vision result').first().json.phone }}"
+                    }
+                  },
+                  {
+                    "text": "🎓 Предложить курс",
+                    "additionalFields": {
+                      "callback_data": "=offer_course_{{ $('Parse vision result').first().json.phone }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "38bf58d6-2d25-4329-bb91-788484bf934c",
+      "name": "Photo rejected alert (TG)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        9392,
+        3952
+      ],
+      "webhookId": "photo-rejected-mila",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "spam",
+                    "leftValue": "={{ $json.autoBlockSpam }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "escort",
+                    "leftValue": "={{ $json.autoBlockEscort }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "low",
+                    "leftValue": "={{ $json.autoLowBudget }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "media",
+                    "leftValue": "={{ $json.isUnsupportedMedia }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "4b69c3d8-8b4f-42c7-80ec-f08fbe5fa5a9",
+      "name": "Auto-action router",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        7392,
+        4096
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET \n  do_not_contact = true,\n  funnel_stage = 'lost',\n  mode = 'manual',\n  manual_until = now() + interval '100 years',\n  escalate_reason = 'Спамер — слишком много сообщений',\n  notes = COALESCE(notes, '') || E'\\n[Авто-блок (спам), ' || now()::text || ' msg_count=' || '{{ $('Evaluate context').first().json.msgCount24h }}' || ']',\n  updated_at = now()\nWHERE phone = '{{ $('Evaluate context').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "a37f4a72-ad39-4377-bd28-b04d36d1b765",
+      "name": "Auto-block spam",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7616,
+        4736
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO manager_actions (lead_phone, action, performed_by, meta)\nVALUES (\n  '{{ $('Evaluate context').first().json.phone }}',\n  'auto_block_spam',\n  'system',\n  jsonb_build_object('msg_count_24h', {{ $('Evaluate context').first().json.msgCount24h }}, 'limit', 30)\n);",
+        "options": {}
+      },
+      "id": "78abc8fb-d7cf-463c-802a-ecc8d8fe7d25",
+      "name": "Log auto-block spam",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7856,
+        4736
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "chatId": "1009982311",
+        "text": "=🚫 СПАМЕР ЗАБЛОКИРОВАН\n━━━━━━━━━━━\n\n👤 {{ $('Normalize payload').first().json.user_name }}\n📞 {{ $('Evaluate context').first().json.phone.replace('wa_', '') }}\n\n⚠️ Отправил {{ $('Evaluate context').first().json.msgCount24h }} сообщений за сутки (норма до 30)\n\n🔒 Я больше ему не отвечаю — выглядит как бот или нездоровый человек\n\nПоследнее сообщение:\n«{{ ($('Debounce decide').first().json.user_text || '').substring(0, 200) }}»\n\nЕсли это ошибка — нажми \"Разрешить ответы\" и я снова буду писать",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "💬 Открыть WhatsApp",
+                    "additionalFields": {
+                      "url": "=https://wa.me/{{ $('Evaluate context').first().json.phone.replace('wa_', '') }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Разрешить ответы",
+                    "additionalFields": {
+                      "callback_data": "=release_{{ $('Evaluate context').first().json.phone }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "23fae282-becb-40e6-8646-47f2a9456c46",
+      "name": "Alert: auto-block spam",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        8112,
+        4736
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "alert-spam-block",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET \n  do_not_contact = true,\n  funnel_stage = 'lost',\n  mode = 'manual',\n  manual_until = now() + interval '100 years',\n  escort_mention_count = escort_mention_count + 1,\n  escalate_reason = 'Ищет интим-услуги',\n  notes = COALESCE(notes, '') || E'\\n[Авто-блок (эскорт, 2-й раз), ' || now()::text || ']',\n  updated_at = now()\nWHERE phone = '{{ $('Evaluate context').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "726e7b2a-a247-4714-90e6-17e45a93a16c",
+      "name": "Auto-block escort",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7616,
+        4880
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO manager_actions (lead_phone, action, performed_by, meta)\nVALUES (\n  '{{ $('Evaluate context').first().json.phone }}',\n  'auto_block_escort',\n  'system',\n  jsonb_build_object('user_text', $${{ ($('Debounce decide').first().json.user_text || '').substring(0, 300) }}$$)\n);",
+        "options": {}
+      },
+      "id": "8d759615-5195-4217-81ea-f74e7df6c6d8",
+      "name": "Log auto-block escort",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7856,
+        4880
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "chatId": "1009982311",
+        "text": "=⛔ ЛИД ИЩЕТ ИНТИМ\n━━━━━━━━━━━\n\n👤 {{ $('Normalize payload').first().json.user_name }}\n📞 {{ $('Evaluate context').first().json.phone.replace('wa_', '') }}\n\n💬 Второй раз спрашивает про эскорт/секс/услуги\n\nЧто он написал:\n«{{ ($('Debounce decide').first().json.user_text || '').substring(0, 200) }}»\n\n🔒 Я заблокировала его — больше не отвечаю.\n\nЭто не наша аудитория.",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "💬 Открыть WhatsApp",
+                    "additionalFields": {
+                      "url": "=https://wa.me/{{ $('Evaluate context').first().json.phone.replace('wa_', '') }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "671d62dc-7508-4bac-a03c-e5440f6d8629",
+      "name": "Alert: auto-block escort",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        8112,
+        4880
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "alert-escort-block",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET \n  funnel_stage = 'lost',\n  notes = COALESCE(notes, '') || E'\\n[Курс отправлен — низкий бюджет, ' || now()::text || ']',\n  updated_at = now()\nWHERE phone = '{{ $('Evaluate context').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "d02f88cd-9eb0-4560-bf26-b8fbdd20fce2",
+      "name": "Set lost (low budget)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7616,
+        5024
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wazzup24.com/v3/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer 9af8afe4fc864a5790cd8cdce085eb9c"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channelId\": \"00a456e4-973f-457b-8dad-2864ca224c5d\",\n  \"chatType\": \"whatsapp\",\n  \"chatId\": \"{{ $('Evaluate context').first().json.phone.replace('wa_', '') }}\",\n  \"text\": \"Oye guapo, te dejo aquí algo que te va a interesar 🥰\\nTenemos video cursos \\\"Cómo encontrar a tu novia rusa\\\" — todos los consejos para conocer y atraer mujeres eslavas.\\n\\nAquí: https://www.rusaencdmx.com/\"\n}",
+        "options": {}
+      },
+      "id": "5a732f6a-c3af-4597-8903-798f332ef23d",
+      "name": "Send course (auto)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        7856,
+        5024
+      ],
+      "typeVersion": 4.2,
+      "webhookId": "auto-send-course"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (lead_phone, direction, sender, text, processed, processed_at)\nVALUES (\n  '{{ $('Evaluate context').first().json.phone }}',\n  'outbound',\n  'anna',\n  'Oye guapo, te dejo aquí algo que te va a interesar 🥰 Tenemos video cursos \"Cómo encontrar a tu novia rusa\". Aquí: https://www.rusaencdmx.com/',\n  true,\n  now()\n);",
+        "options": {}
+      },
+      "id": "7bc5c8ea-9c4f-476a-9501-87ef3ca7bd51",
+      "name": "Save course outbound (auto)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        8112,
+        5024
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO manager_actions (lead_phone, action, performed_by, meta)\nVALUES (\n  '{{ $('Evaluate context').first().json.phone }}',\n  'auto_course_low_budget',\n  'system',\n  '{}'::jsonb\n);",
+        "options": {}
+      },
+      "id": "aecc2cd8-390a-40bf-938a-b2cdaf87137d",
+      "name": "Log auto-course low",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        8352,
+        5024
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  COUNT(*) AS intent_count,\n  (SELECT photo_received FROM leads WHERE phone = '{{ $('Parse vision result').first().json.phone }}') AS profile_photo_ok,\n  (SELECT age FROM leads WHERE phone = '{{ $('Parse vision result').first().json.phone }}') AS age,\n  (SELECT profession FROM leads WHERE phone = '{{ $('Parse vision result').first().json.phone }}') AS profession,\n  (SELECT is_single FROM leads WHERE phone = '{{ $('Parse vision result').first().json.phone }}') AS is_single\nFROM messages\nWHERE lead_phone = '{{ $('Parse vision result').first().json.phone }}'\n  AND direction = 'inbound'\n  AND created_at > now() - interval '10 minutes'\n  AND (\n    LOWER(text) LIKE '%pagué%' OR \n    LOWER(text) LIKE '%pague%' OR\n    LOWER(text) LIKE '%transferí%' OR \n    LOWER(text) LIKE '%transferi%' OR\n    LOWER(text) LIKE '%envié%' OR \n    LOWER(text) LIKE '%envie%' OR\n    LOWER(text) LIKE '%ya pague%' OR\n    LOWER(text) LIKE '%listo%' OR\n    LOWER(text) LIKE '%hecho%' OR\n    LOWER(text) LIKE '%mande%' OR\n    LOWER(text) LIKE '%depo%'\n  );",
+        "options": {}
+      },
+      "id": "dfe62754-c76d-465e-a63c-04131d93cd99",
+      "name": "Check payment intent",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        8384,
+        3696
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "is_pay_verdict",
+              "leftValue": "={{ $('Parse vision result').first().json.vision_verdict }}",
+              "rightValue": "payment_ok",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "has_intent",
+              "leftValue": "={{ parseInt($('Check payment intent').first().json.intent_count) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            },
+            {
+              "id": "qualify_done",
+              "leftValue": "={{ $('Check payment intent').first().json.age }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "profession_set",
+              "leftValue": "={{ $('Check payment intent').first().json.profession }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9d7b7e83-fb99-407b-9d3f-c843114e74cf",
+      "name": "IF is payment confirmed",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        8640,
+        3696
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET\n  funnel_stage = 'paid_event',\n  mode = 'auto',\n  manual_until = NULL,\n  notes = COALESCE(notes, '') || E'\\n[Авто-подтверждение оплаты, сумма ' || COALESCE('{{ $('Parse vision result').first().json.payment_amount }}', 'N/A') || ', банк ' || COALESCE('{{ $('Parse vision result').first().json.payment_bank }}', 'N/A') || ']',\n  updated_at = now()\nWHERE phone = '{{ $('Parse vision result').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "a879fcb5-1218-45f1-a525-f377b0aa8e66",
+      "name": "Mark paid_event",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        8896,
+        3552
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wazzup24.com/v3/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer 9af8afe4fc864a5790cd8cdce085eb9c"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channelId\": \"00a456e4-973f-457b-8dad-2864ca224c5d\",\n  \"chatType\": \"whatsapp\",\n  \"chatId\": \"{{ $('Parse vision result').first().json.phone.replace('wa_', '') }}\",\n  \"text\": \"\\ud83c\\udf89 \\u00a1Pago confirmado, guapo!\\n\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\u2501\\n\\nBienvenido a Slavic-Latino Connect Night \\u2728\\n\\n\\ud83d\\udcc5 Fecha: 22 de abril\\n\\ud83d\\udccd Lugar: Roma Norte, CDMX (direcci\\u00f3n exacta en tu invitaci\\u00f3n)\\n\\ud83d\\udd57 Hora: 8:30pm hasta medianoche\\n\\ud83d\\udc54 Dress code: smart casual / elegante\\n\\nTu invitaci\\u00f3n con todos los detalles est\\u00e1 siendo enviada en seguida \\ud83d\\udcce\\n\\nCualquier pregunta antes del evento \\u2014 escr\\u00edbeme \\ud83e\\udd70\"\n}",
+        "options": {}
+      },
+      "id": "bcd7b3f8-5eb8-4d9b-8dd7-1424a47fb1eb",
+      "name": "Send welcome message",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        9136,
+        3552
+      ],
+      "typeVersion": 4.2,
+      "webhookId": "send-paid-welcome"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wazzup24.com/v3/message",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer 9af8afe4fc864a5790cd8cdce085eb9c"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channelId\": \"00a456e4-973f-457b-8dad-2864ca224c5d\",\n  \"chatType\": \"whatsapp\",\n  \"chatId\": \"{{ $('Normalize payload').first().json.cleanPhone }}\",\n  \"contentUri\": \"https://xbcynfwbsyufxaqtoror.supabase.co/storage/v1/object/public/invitations/invitation-27-05-2026.jpg\"\n}",
+        "options": {}
+      },
+      "id": "bf855950-ff69-4e66-9e77-6544a492bde5",
+      "name": "Send invitation image",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        9392,
+        3552
+      ],
+      "typeVersion": 4.2,
+      "webhookId": "send-invitation",
+      "notes": "ВАЖНО: замени на sendDocument с PDF от Ани. Меняем operation='sendDocument', binary file.",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (lead_phone, direction, sender, text, processed, processed_at)\nVALUES (\n  '{{ $('Parse vision result').first().json.phone }}',\n  'outbound',\n  'anna',\n  '🎉 Pago confirmado, bienvenido a Slavic-Latino Connect Night! Invitación enviada.',\n  true,\n  now()\n);",
+        "options": {}
+      },
+      "id": "524cec28-ac22-45a3-9d11-5ec791bec499",
+      "name": "Save welcome outbound",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        9648,
+        3552
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "chatId": "1009982311",
+        "text": "=💳 ПРИШЛА ОПЛАТА!\n━━━━━━━━━━━\n\n👤 {{ $('Normalize payload').first().json.user_name }}\n📞 {{ $('Parse vision result').first().json.phone.replace('wa_', '') }}\n💰 Сумма: {{ $('Parse vision result').first().json.payment_amount || '?' }} MXN\n🏦 Банк: {{ $('Parse vision result').first().json.payment_bank || '?' }}\n\n✅ Я подтвердила оплату лиду и отправила приглашение.\n\n🔍 Проверь скрин перевода:\nhttps://xbcynfwbsyufxaqtoror.supabase.co/storage/v1/object/public/lead-photos/{{ $('Prepare for Storage').first().json.storage_path }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "💬 Открыть чат с лидом",
+                    "additionalFields": {
+                      "url": "=https://wa.me/{{ $('Parse vision result').first().json.phone.replace('wa_', '') }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "3972bccf-17db-4f88-bf5d-f42e1e8e7c0d",
+      "name": "Alert: auto-paid",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        9888,
+        3552
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "alert-auto-paid",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO manager_actions (lead_phone, action, performed_by, meta)\nVALUES (\n  '{{ $('Parse vision result').first().json.phone }}',\n  'auto_paid',\n  'system',\n  jsonb_build_object(\n    'amount', '{{ $('Parse vision result').first().json.payment_amount }}',\n    'bank', '{{ $('Parse vision result').first().json.payment_bank }}',\n    'storage_path', '{{ $('Prepare for Storage').first().json.storage_path }}'\n  )\n);",
+        "options": {}
+      },
+      "id": "39594d57-55c1-448f-9bc2-b1bb197d6bcf",
+      "name": "Log auto-paid",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        10144,
+        3552
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa-leads-wazzup",
+        "options": {}
+      },
+      "id": "d61688a8-6124-48e0-8d80-7866cf919a48",
+      "name": "WhatsApp Trigger (Wazzup)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        4384,
+        4448
+      ],
+      "webhookId": "wazzup-leads"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wazzup24.com/v3/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer 9af8afe4fc864a5790cd8cdce085eb9c"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channelId\": \"00a456e4-973f-457b-8dad-2864ca224c5d\",\n  \"chatType\": \"whatsapp\",\n  \"chatId\": \"{{ $('Loop each message').item.json.chat_id }}\",\n  \"text\": {{ JSON.stringify($('Loop each message').item.json.text) }}\n}",
+        "options": {}
+      },
+      "id": "2c2d69e6-bd2a-4d44-8eed-9cc110f42853",
+      "name": "WhatsApp Send (Wazzup)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        10144,
+        4192
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Normalize payload').first().json.media_info.content_uri }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "4f90813e-28d9-45bf-a701-491a4f734ebe",
+      "name": "WA Download Media (Wazzup)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6384,
+        3776
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "chatId": "1009982311",
+        "text": "=⚠️ ОПЛАТА БЕЗ КВАЛИФИКАЦИИ\n━━━━━━━━━━━\n\n👤 {{ $('Normalize payload').first().json.user_name }}\n📞 {{ $('Parse vision result').first().json.phone.replace('wa_', '') }}\n\n🤖 Vision увидел скрин оплаты, НО:\n- Возраст: {{ $('Check payment intent').first().json.age || 'не узнала' }}\n- Профессия: {{ $('Check payment intent').first().json.profession || 'не узнала' }}\n- Фото профиля: {{ $('Check payment intent').first().json.profile_photo_ok === true ? '✅' : '❌ нет' }}\n\n💰 Сумма по чеку: {{ $('Parse vision result').first().json.payment_amount || '?' }} MXN\n🏦 Банк: {{ $('Parse vision result').first().json.payment_bank || '?' }}\n\n🔍 Проверь скрин:\nhttps://xbcynfwbsyufxaqtoror.supabase.co/storage/v1/object/public/lead-photos/{{ $('Prepare for Storage').first().json.storage_path }}\n\n⚠️ Я НЕ подтверждаю автоматически — нужна твоя проверка.",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "💬 Открыть WhatsApp",
+                    "additionalFields": {
+                      "url": "=https://wa.me/{{ $('Parse vision result').first().json.phone.replace('wa_', '') }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Подтвердить оплату",
+                    "additionalFields": {
+                      "callback_data": "=confirm_payment_{{ $('Parse vision result').first().json.phone }}"
+                    }
+                  },
+                  {
+                    "text": "❌ Отклонить",
+                    "additionalFields": {
+                      "callback_data": "=reject_payment_{{ $('Parse vision result').first().json.phone }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "alert-unverified-payment",
+      "name": "Alert: payment без qualify",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        9136,
+        3392
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "alert-unverified-payment",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "vp1",
+              "leftValue": "={{ $('Parse vision result').first().json.vision_verdict }}",
+              "rightValue": "payment_ok",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "if-vision-is-payment",
+      "name": "IF vision is payment",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        8640,
+        3552
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET\n  mode = 'manual',\n  manual_until = now() + interval '4 hours',\n  escalate_reason = 'Оплата без квалификации — проверь',\n  notes = COALESCE(notes, '') || E'\\n[' || now()::text || ' Vision увидел оплату, но qualify не пройден]',\n  updated_at = now()\nWHERE phone = '{{ $('Parse vision result').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "set-manual-unverified",
+      "name": "Set manual (unverified payment)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        9392,
+        3392
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v_has_verdict",
+              "leftValue": "={{ $json.vision_verdict }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "v_not_default",
+              "leftValue": "={{ $json.vision_verdict }}",
+              "rightValue": "manual_review",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "if-vision-ok",
+      "name": "IF Vision succeeded",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        8144,
+        3550
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "chatId": "1009982311",
+        "text": "=⚠️ ИИ-ПРОВЕРКА ФОТО НЕ СРАБОТАЛА\n━━━━━━━━━━━\n\n👤 {{ $('Normalize payload').first().json.user_name }}\n📞 {{ $('Parse vision result').first().json.phone.replace('wa_', '') }}\n\nПохоже ИИ упала или вернула невнятный ответ.\n\n🔗 Посмотри фото сама:\nhttps://xbcynfwbsyufxaqtoror.supabase.co/storage/v1/object/public/lead-photos/{{ $('Prepare for Storage').first().json.storage_path }}\n\n⏱ Я остановилась — нужна твоя проверка.",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "💬 Открыть WhatsApp",
+                    "additionalFields": {
+                      "url": "=https://wa.me/{{ $('Parse vision result').first().json.phone.replace('wa_', '') }}"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Одобрить фото",
+                    "additionalFields": {
+                      "callback_data": "=approve_photo_{{ $('Parse vision result').first().json.phone }}"
+                    }
+                  },
+                  {
+                    "text": "🎓 Предложить курс",
+                    "additionalFields": {
+                      "callback_data": "=offer_course_{{ $('Parse vision result').first().json.phone }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "alert-vision-fail",
+      "name": "Alert: Vision failed",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        8384,
+        3470
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "alert-vision-fail",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET\n  mode = 'manual',\n  manual_until = now() + interval '4 hours',\n  escalate_reason = 'ИИ-проверка не сработала',\n  updated_at = now()\nWHERE phone = '{{ $('Parse vision result').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "set-manual-vfail",
+      "name": "Set manual (vision fail)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        8640,
+        3470
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  direction, \n  sender,\n  text, \n  created_at,\n  meta->>'content_type' AS content_type\nFROM messages \nWHERE lead_phone = '{{ $('Debounce decide').first().json.phone }}'\n  AND created_at < now() - interval '1 second'\nORDER BY created_at DESC\nLIMIT 20;",
+        "options": {}
+      },
+      "id": "load-history",
+      "name": "Load conversation history",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7136,
+        4240
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format last 20 messages for AI Agent prompt\nconst rows = $input.all().map(i => i.json).filter(r => r.text);\n\nif (rows.length === 0) {\n  return [{ json: { history_text: '(нет предыдущих сообщений)', message_count: 0 } }];\n}\n\n// Сортируем по времени (от старых к новым) — БД дала DESC, разворачиваем\nrows.reverse();\n\nconst lines = rows.map(r => {\n  const who = r.direction === 'inbound' ? 'LEAD' : 'ANNA';\n  const text = (r.text || '').substring(0, 200);\n  return `${who}: ${text}`;\n});\n\nconst history_text = lines.join('\\n');\nconst message_count = rows.length;\n\n// Также собираем уже отправленные ссылки (anti-repeat)\nconst linkPattern = /(https?:\\/\\/[^\\s]+)/g;\nconst annaMessages = rows.filter(r => r.direction === 'outbound');\nconst linksSet = new Set();\nannaMessages.forEach(m => {\n  const matches = (m.text || '').match(linkPattern);\n  if (matches) matches.forEach(l => linksSet.add(l));\n});\nconst links_sent = Array.from(linksSet);\n\nreturn [{\n  json: {\n    history_text,\n    message_count,\n    anna_messages_count: annaMessages.length,\n    links_sent\n  }\n}];"
+      },
+      "id": "format-history",
+      "name": "Format history",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        7392,
+        4240
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.wazzup24.com/v3/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer 9af8afe4fc864a5790cd8cdce085eb9c"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channelId\": \"00a456e4-973f-457b-8dad-2864ca224c5d\",\n  \"chatType\": \"whatsapp\",\n  \"chatId\": \"{{ $('Evaluate context').first().json.phone.replace('wa_', '') }}\",\n  \"text\": \"{{ $('Evaluate context').first().json.isVoice ? 'Oye guapo, prefiero leer porfa, escríbeme texto que así te respondo mejor 😊' : 'Oye guapo, mejor mándame foto o texto plis 🤍' }}\"\n}",
+        "options": {}
+      },
+      "id": "reply-unsupported",
+      "name": "Reply unsupported media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        7616,
+        5168
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages (lead_phone, direction, sender, text, processed, processed_at)\nVALUES (\n  '{{ $('Evaluate context').first().json.phone }}',\n  'outbound',\n  'anna',\n  CASE WHEN '{{ $('Evaluate context').first().json.isVoice }}'='true' \n       THEN 'Oye guapo, prefiero leer porfa, escríbeme texto que así te respondo mejor 😊'\n       ELSE 'Oye guapo, mejor mándame foto o texto plis 🤍'\n  END,\n  true,\n  now()\n);",
+        "options": {}
+      },
+      "id": "save-voice-outbound",
+      "name": "Save unsupported outbound",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7856,
+        5168
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  COUNT(*) AS photo_count_1h\nFROM lead_photos\nWHERE lead_phone = '{{ $('Prepare for Storage').first().json.phone }}'\n  AND received_at > now() - interval '1 hour';",
+        "options": {}
+      },
+      "id": "check-photo-flood",
+      "name": "Check photo flood",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        7392,
+        3696
+      ],
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "flood",
+              "leftValue": "={{ parseInt($json.photo_count_1h) }}",
+              "rightValue": 5,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "if-photo-flood",
+      "name": "IF photo flood",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        7616,
+        3696
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "chatId": "1009982311",
+        "text": "=📸 ФЛУД ФОТО\n━━━━━━━━━━━\n\n👤 {{ $('Normalize payload').first().json.user_name }}\n📞 {{ $('Prepare for Storage').first().json.phone.replace('wa_', '') }}\n\n⚠️ Отправил {{ $('Check photo flood').first().json.photo_count_1h }} фото за последний час\n\n🔒 Я остановилась — проверь что происходит.\nВозможно бот, нерв или розыгрыш.",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "💬 Открыть WhatsApp",
+                    "additionalFields": {
+                      "url": "=https://wa.me/{{ $('Prepare for Storage').first().json.phone.replace('wa_', '') }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "=none"
+        }
+      },
+      "id": "alert-photo-flood",
+      "name": "Alert: photo flood",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        7856,
+        3616
+      ],
+      "typeVersion": 1.2,
+      "webhookId": "alert-photo-flood",
+      "credentials": {
+        "telegramApi": {
+          "id": "Gv8UkgePlIDEhjpk",
+          "name": "ассистент идей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET\n  mode = 'manual',\n  manual_until = now() + interval '4 hours',\n  escalate_reason = 'Флуд фотографиями',\n  updated_at = now()\nWHERE phone = '{{ $('Prepare for Storage').first().json.phone }}';",
+        "options": {}
+      },
+      "id": "set-manual-flood",
+      "name": "Set manual (photo flood)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        8112,
+        3616
+      ],
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check-inv",
+              "leftValue": "={{ $json.send_invitation_image }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "if-send-invitation",
+      "name": "Send invitation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5840,
+        3680
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Normalize payload": {
+      "main": [
+        [
+          {
+            "node": "Check lead exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check lead exists": {
+      "main": [
+        [
+          {
+            "node": "IF lead exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF lead exists": {
+      "main": [
+        [
+          {
+            "node": "Update existing lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert new lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update existing lead": {
+      "main": [
+        [
+          {
+            "node": "Insert inbound message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert new lead": {
+      "main": [
+        [
+          {
+            "node": "Insert inbound message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert inbound message": {
+      "main": [
+        [
+          {
+            "node": "IF is photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF is photo": {
+      "main": [
+        [
+          {
+            "node": "WA Download Media (Wazzup)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Debounce wait (4s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare for Storage": {
+      "main": [
+        [
+          {
+            "node": "Upload to Supabase Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Supabase Storage": {
+      "main": [
+        [
+          {
+            "node": "Save photo metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save photo metadata": {
+      "main": [
+        [
+          {
+            "node": "Mark photo_received",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark photo_received": {
+      "main": [
+        [
+          {
+            "node": "Check photo flood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Debounce wait (4s)": {
+      "main": [
+        [
+          {
+            "node": "Check newer inbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check newer inbound": {
+      "main": [
+        [
+          {
+            "node": "Debounce decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Debounce decide": {
+      "main": [
+        [
+          {
+            "node": "Load lead profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load lead profile": {
+      "main": [
+        [
+          {
+            "node": "Evaluate context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate context": {
+      "main": [
+        [
+          {
+            "node": "Load conversation history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF skip AI": {
+      "main": [
+        [],
+        [
+          {
+            "node": "AI Agent Anna",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Anna": {
+      "main": [
+        [
+          {
+            "node": "Parse output + anti-repeat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI gpt-4.1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Anna",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent Anna",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "playbook": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Anna",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Embeddings (RAG)": {
+      "ai_embedding": [
+        [
+          {
+            "node": "playbook",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse output + anti-repeat": {
+      "main": [
+        [
+          {
+            "node": "Build lead update SQL",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF escalate",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send invitation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build lead update SQL": {
+      "main": [
+        [
+          {
+            "node": "Update lead profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update lead profile": {
+      "main": [
+        [
+          {
+            "node": "Explode messages + delays",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF escalate": {
+      "main": [
+        [
+          {
+            "node": "Load escalation context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load escalation context": {
+      "main": [
+        [
+          {
+            "node": "Format escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format escalation": {
+      "main": [
+        [
+          {
+            "node": "Escalation alert (TG)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation alert (TG)": {
+      "main": [
+        [
+          {
+            "node": "Set lead to manual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Explode messages + delays": {
+      "main": [
+        [
+          {
+            "node": "Loop each message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop each message": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Wait while typing (dynamic)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait while typing (dynamic)": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Send (Wazzup)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save outbound": {
+      "main": [
+        [
+          {
+            "node": "Loop each message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze photo (Vision)": {
+      "main": [
+        [
+          {
+            "node": "Parse vision result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse vision result": {
+      "main": [
+        [
+          {
+            "node": "Save vision to lead_photos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save vision to lead_photos": {
+      "main": [
+        [
+          {
+            "node": "IF Vision succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF photo approved": {
+      "main": [
+        [
+          {
+            "node": "Debounce wait (4s)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark photo rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark photo rejected": {
+      "main": [
+        [
+          {
+            "node": "Photo rejected alert (TG)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-action router": {
+      "main": [
+        [
+          {
+            "node": "Auto-block spam",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Auto-block escort",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set lost (low budget)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply unsupported media",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF skip AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-block spam": {
+      "main": [
+        [
+          {
+            "node": "Log auto-block spam",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log auto-block spam": {
+      "main": [
+        [
+          {
+            "node": "Alert: auto-block spam",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-block escort": {
+      "main": [
+        [
+          {
+            "node": "Log auto-block escort",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log auto-block escort": {
+      "main": [
+        [
+          {
+            "node": "Alert: auto-block escort",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set lost (low budget)": {
+      "main": [
+        [
+          {
+            "node": "Send course (auto)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send course (auto)": {
+      "main": [
+        [
+          {
+            "node": "Save course outbound (auto)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save course outbound (auto)": {
+      "main": [
+        [
+          {
+            "node": "Log auto-course low",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check payment intent": {
+      "main": [
+        [
+          {
+            "node": "IF vision is payment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF is payment confirmed": {
+      "main": [
+        [
+          {
+            "node": "Mark paid_event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert: payment без qualify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark paid_event": {
+      "main": [
+        [
+          {
+            "node": "Send welcome message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send welcome message": {
+      "main": [
+        [
+          {
+            "node": "Send invitation image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save welcome outbound": {
+      "main": [
+        [
+          {
+            "node": "Alert: auto-paid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert: auto-paid": {
+      "main": [
+        [
+          {
+            "node": "Log auto-paid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Trigger (Wazzup)": {
+      "main": [
+        [
+          {
+            "node": "Normalize payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Send (Wazzup)": {
+      "main": [
+        [
+          {
+            "node": "Save outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WA Download Media (Wazzup)": {
+      "main": [
+        [
+          {
+            "node": "Prepare for Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF vision is payment": {
+      "main": [
+        [
+          {
+            "node": "IF is payment confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF photo approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert: payment без qualify": {
+      "main": [
+        [
+          {
+            "node": "Set manual (unverified payment)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Vision succeeded": {
+      "main": [
+        [
+          {
+            "node": "Check payment intent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert: Vision failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert: Vision failed": {
+      "main": [
+        [
+          {
+            "node": "Set manual (vision fail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load conversation history": {
+      "main": [
+        [
+          {
+            "node": "Format history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format history": {
+      "main": [
+        [
+          {
+            "node": "Auto-action router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply unsupported media": {
+      "main": [
+        [
+          {
+            "node": "Save unsupported outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check photo flood": {
+      "main": [
+        [
+          {
+            "node": "IF photo flood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF photo flood": {
+      "main": [
+        [
+          {
+            "node": "Alert: photo flood",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Analyze photo (Vision)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert: photo flood": {
+      "main": [
+        [
+          {
+            "node": "Set manual (photo flood)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send invitation image": {
+      "main": [
+        [
+          {
+            "node": "Save welcome outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send invitation?": {
+      "main": [
+        [
+          {
+            "node": "Send invitation image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "TS4nWNNyrLgXXe27Qmef6",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "d1b7a506-ed51-4646-9ac2-df6894f38e35",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6c6dd3a0e2aab074641aaa985331c4301355fdfb15da866fec8e9989b74eba4e"
+  },
+  "id": "cU5qMQWpkb5RfpNZ1i-CJ",
+  "tags": []
+}

@@ -1,0 +1,173 @@
+{
+  "name": "Regenerate Embeddings (1, 15 - invitation)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        400,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, content FROM documents WHERE id IN (1, 15) ORDER BY id;",
+        "options": {}
+      },
+      "id": "fetch-docs",
+      "name": "Fetch docs (id 1, 15)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        620,
+        400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"text-embedding-3-small\",\n  \"input\": {{ JSON.stringify($json.content) }}\n}",
+        "options": {}
+      },
+      "id": "generate",
+      "name": "Generate Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "u7T3jk8sciA6lh9Y",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst doc = $('Fetch docs (id 1, 15)').itemMatching($itemIndex).json;\nconst vec = response.data[0].embedding;\nreturn [{json: {id: doc.id, vector_literal: '[' + vec.join(',') + ']'}}];"
+      },
+      "id": "format",
+      "name": "Format vector",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE documents SET embedding = '{{ $json.vector_literal }}'::vector WHERE id = {{ $json.id }} RETURNING id;",
+        "options": {}
+      },
+      "id": "update",
+      "name": "Update embedding",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1280,
+        400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "ZlnteXRkdOyWrU3C",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 🔄 РЕГЕНЕРАЦИЯ EMBEDDINGS (invitation)\n\nДля id 1 (KEY DATA с URL картинки) и id 15 (PAYMENT_SCREENSHOT + INVITATION_RESEND).\n\nExecute → должно вернуть 2 строки.",
+        "height": 200,
+        "width": 380,
+        "color": 4
+      },
+      "id": "sticky",
+      "name": "Инструкция",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        400,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch docs (id 1, 15)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch docs (id 1, 15)": {
+      "main": [
+        [
+          {
+            "node": "Generate Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embedding": {
+      "main": [
+        [
+          {
+            "node": "Format vector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format vector": {
+      "main": [
+        [
+          {
+            "node": "Update embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6c6dd3a0e2aab074641aaa985331c4301355fdfb15da866fec8e9989b74eba4e"
+  }
+}
