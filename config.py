@@ -27,5 +27,10 @@ class Settings(BaseSettings):
     wazzup_token: str = ""
     wazzup_channel_id: str = ""
 
+    # ===== Supabase Postgres (блок 2) =====
+    # Полный DSN из Supabase → Connect → Session pooler (порт 5432, sslmode=require).
+    # Пусто → БД не подключается (пул не создаётся), сервис работает без БД.
+    supabase_db_dsn: str = ""
+
 
 settings = Settings()

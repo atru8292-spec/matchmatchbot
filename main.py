@@ -1,12 +1,14 @@
 """FastAPI-сервер бота Anna.
 
 Блок 1 (скелет): приём вебхука Wazzup24 + health-check.
-Пока без БД, нормализации и AI — только приём, логирование и ответ 200.
+Блок 2: пул БД поднимается/закрывается через lifespan.
 """
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response
 
+import db
 from config import settings
 
 # Логи в stdout → journald (systemd). Помечаем время/уровень/модуль.
@@ -16,7 +18,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger("matchmatch")
 
-app = FastAPI(title="MatchMatch Anna Bot")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Жизненный цикл: поднять пул БД при старте, закрыть при остановке.
+
+    Если DSN не задан — работаем без БД (пул не создаётся), чтобы приём вебхука
+    поднимался и без настроенной базы. Как только БД станет обязательной на
+    горячем пути — сделаем DSN строго обязательным.
+    """
+    if settings.supabase_db_dsn:
+        await db.init_pool()
+    else:
+        logger.warning("SUPABASE_DB_DSN не задан — БД не подключена")
+    yield
+    await db.close_pool()
+
+
+app = FastAPI(title="MatchMatch Anna Bot", lifespan=lifespan)
 
 
 @app.get("/health")

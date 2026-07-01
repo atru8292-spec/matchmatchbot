@@ -1,0 +1,388 @@
+"""Тесты слоя db.py — только моки, без реального Postgres.
+
+Подменяем db._pool на FakePool (fetchrow/fetch = AsyncMock).
+Проверяем: корректность SQL-подстрок, порядок параметров,
+идемпотентность insert_message, whitelist-защиту upsert/update.
+"""
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+import db
+
+
+# ---------------------------------------------------------------------------
+# Вспомогательный класс и фикстура
+# ---------------------------------------------------------------------------
+
+
+class FakePool:
+    """Заглушка asyncpg.Pool: fetchrow и fetch — AsyncMock."""
+
+    def __init__(self):
+        self.fetchrow = AsyncMock()
+        self.fetch = AsyncMock()
+
+
+@pytest.fixture()
+def pool():
+    """Подменить db._pool на FakePool на время одного теста."""
+    fake = FakePool()
+    original = db._pool
+    db._pool = fake
+    yield fake
+    db._pool = original
+
+
+# ---------------------------------------------------------------------------
+# _get_pool
+# ---------------------------------------------------------------------------
+
+
+class TestGetPool:
+    def test_raises_runtime_error_when_pool_is_none(self):
+        """db._pool is None → _get_pool() поднимает RuntimeError."""
+        original = db._pool
+        db._pool = None
+        try:
+            with pytest.raises(RuntimeError, match="init_pool"):
+                db._get_pool()
+        finally:
+            db._pool = original
+
+
+# ---------------------------------------------------------------------------
+# get_lead_by_phone
+# ---------------------------------------------------------------------------
+
+
+class TestGetLeadByPhone:
+    async def test_returns_dict_when_row_found(self, pool):
+        """fetchrow вернул строку-заглушку → результат dict с теми же полями."""
+        fake_row = {"phone": "521234567890", "name": "Carlos", "age": 35}
+        pool.fetchrow.return_value = fake_row
+
+        result = await db.get_lead_by_phone("521234567890")
+
+        assert isinstance(result, dict)
+        assert result["phone"] == "521234567890"
+        assert result["name"] == "Carlos"
+
+    async def test_returns_none_when_not_found(self, pool):
+        """fetchrow вернул None (лида нет) → результат None."""
+        pool.fetchrow.return_value = None
+
+        result = await db.get_lead_by_phone("521234567890")
+
+        assert result is None
+
+    async def test_phone_passed_as_separate_arg_not_in_sql(self, pool):
+        """phone не вставляется в строку SQL, а передаётся отдельным параметром $1."""
+        pool.fetchrow.return_value = None
+        phone = "521234567890"
+
+        await db.get_lead_by_phone(phone)
+
+        sql, *params = pool.fetchrow.call_args.args
+        # Сам номер не должен фигурировать в тексте запроса
+        assert phone not in sql
+        # Плейсхолдер присутствует
+        assert "$1" in sql
+        # Номер — первый позиционный параметр
+        assert params[0] == phone
+
+
+# ---------------------------------------------------------------------------
+# upsert_lead
+# ---------------------------------------------------------------------------
+
+
+class TestUpsertLead:
+    async def test_returns_dict_with_valid_fields(self, pool):
+        """Валидные поля → upsert_lead возвращает dict."""
+        pool.fetchrow.return_value = {"phone": "wa_1", "name": "Juan", "age": 35}
+
+        result = await db.upsert_lead("wa_1", name="Juan", age=35)
+
+        assert isinstance(result, dict)
+        assert result["name"] == "Juan"
+
+    async def test_sql_contains_on_conflict_and_excluded_cols(self, pool):
+        """SQL содержит ON CONFLICT (phone) DO UPDATE, EXCLUDED.name, EXCLUDED.age, updated_at = now()."""
+        pool.fetchrow.return_value = {"phone": "wa_1", "name": "Juan", "age": 35}
+
+        await db.upsert_lead("wa_1", name="Juan", age=35)
+
+        sql = pool.fetchrow.call_args.args[0]
+        assert "ON CONFLICT (phone) DO UPDATE" in sql
+        assert "EXCLUDED.name" in sql
+        assert "EXCLUDED.age" in sql
+        assert "updated_at = now()" in sql
+        assert "RETURNING" in sql
+
+    async def test_params_order_phone_first_then_field_values(self, pool):
+        """phone=$1 первый, потом значения полей в порядке передачи."""
+        pool.fetchrow.return_value = {"phone": "wa_1", "name": "Juan", "age": 35}
+
+        await db.upsert_lead("wa_1", name="Juan", age=35)
+
+        _, *params = pool.fetchrow.call_args.args
+        assert params[0] == "wa_1"    # phone → $1
+        assert params[1] == "Juan"    # name  → $2
+        assert params[2] == 35        # age   → $3
+
+    async def test_empty_fields_no_excluded_only_updated_at(self, pool):
+        """Пустой upsert (только phone) → DO UPDATE SET updated_at = now() без EXCLUDED."""
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+
+        await db.upsert_lead("wa_1")
+
+        sql = pool.fetchrow.call_args.args[0]
+        assert "ON CONFLICT (phone) DO UPDATE" in sql
+        assert "EXCLUDED." not in sql
+        assert "updated_at = now()" in sql
+
+    async def test_injection_column_raises_value_error(self, pool):
+        """Имя колонки вне whitelist → ValueError, fetchrow не вызван."""
+        with pytest.raises(ValueError, match="Недопустимые колонки"):
+            await db.upsert_lead("wa_1", **{"age; DROP TABLE leads": 1})
+
+        pool.fetchrow.assert_not_called()
+
+    async def test_unknown_column_raises_value_error(self, pool):
+        """Произвольное несуществующее поле → ValueError до вызова fetchrow."""
+        with pytest.raises(ValueError):
+            await db.upsert_lead("wa_1", totally_unknown_column=42)
+
+        pool.fetchrow.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# insert_message
+# ---------------------------------------------------------------------------
+
+
+class TestInsertMessage:
+    async def test_with_external_id_returns_true(self, pool):
+        """external_message_id задан, fetchrow вернул строку → True (вставлено)."""
+        pool.fetchrow.return_value = {"id": 7}
+
+        result = await db.insert_message(
+            "wa_1", "inbound", "lead", "Hola",
+            external_message_id="ext-001",
+        )
+
+        assert result is True
+
+    async def test_with_external_id_sql_has_lead_phone_conflict(self, pool):
+        """SQL содержит ON CONFLICT (lead_phone, external_message_id) DO NOTHING."""
+        pool.fetchrow.return_value = {"id": 7}
+
+        await db.insert_message(
+            "wa_1", "inbound", "lead", "Hola",
+            external_message_id="ext-001",
+        )
+
+        sql = pool.fetchrow.call_args.args[0]
+        assert "ON CONFLICT (lead_phone, external_message_id) DO NOTHING" in sql
+
+    async def test_duplicate_returns_false(self, pool):
+        """DO NOTHING (дубль) — fetchrow вернул None → функция вернула False."""
+        pool.fetchrow.return_value = None
+
+        result = await db.insert_message(
+            "wa_1", "inbound", "lead", "Hola",
+            external_message_id="ext-001",
+        )
+
+        assert result is False
+
+    async def test_message_uid_conflict_when_no_external_id(self, pool):
+        """Нет external_message_id, есть message_uid → ON CONFLICT (message_uid) DO NOTHING."""
+        pool.fetchrow.return_value = {"id": 8}
+
+        await db.insert_message(
+            "wa_1", "inbound", "lead", "Hola",
+            message_uid="uid-abc",
+        )
+
+        sql = pool.fetchrow.call_args.args[0]
+        assert "ON CONFLICT (message_uid) DO NOTHING" in sql
+        assert "ON CONFLICT (lead_phone, external_message_id)" not in sql
+
+    async def test_no_conflict_clause_without_any_id(self, pool):
+        """Без external_message_id и message_uid — ON CONFLICT отсутствует в SQL."""
+        pool.fetchrow.return_value = {"id": 9}
+
+        await db.insert_message("wa_1", "inbound", "lead", "Hola")
+
+        sql = pool.fetchrow.call_args.args[0]
+        assert "ON CONFLICT" not in sql
+
+    async def test_unique_violation_by_other_index_returns_false(self, pool):
+        """Конфликт по ДРУГОМУ UNIQUE (заданы оба ID, дубль по message_uid):
+        ON CONFLICT нацелен на (lead_phone, external_message_id), Postgres поднимает
+        UniqueViolationError — функция должна вернуть False (тоже дубль), не пробросить."""
+        from asyncpg.exceptions import UniqueViolationError
+        pool.fetchrow.side_effect = UniqueViolationError("duplicate message_uid")
+
+        result = await db.insert_message(
+            "wa_1", "outbound", "anna", "Hola",
+            external_message_id="ext-002", message_uid="uid-dup",
+        )
+
+        assert result is False
+
+    async def test_meta_dict_passed_as_dict_not_json_string(self, pool):
+        """meta=dict попадает в args как dict (кодек asyncpg делает jsonb), не строка."""
+        pool.fetchrow.return_value = {"id": 10}
+        meta_data = {"channel": "whatsapp", "score": 5}
+
+        await db.insert_message(
+            "wa_1", "inbound", "lead", "Hola",
+            meta=meta_data,
+        )
+
+        _, *params = pool.fetchrow.call_args.args
+        # dict должен присутствовать среди параметров
+        assert meta_data in params
+        # и это именно dict, а не JSON-строка
+        meta_param = next(p for p in params if isinstance(p, dict))
+        assert meta_param == meta_data
+
+    async def test_base_columns_present_in_insert_sql(self, pool):
+        """lead_phone, direction, sender, text, processed всегда в INSERT."""
+        pool.fetchrow.return_value = {"id": 11}
+
+        await db.insert_message("wa_1", "inbound", "lead", "Hola")
+
+        sql = pool.fetchrow.call_args.args[0]
+        for col in ("lead_phone", "direction", "sender", "text", "processed"):
+            assert col in sql, f"Ожидали колонку {col!r} в SQL INSERT"
+
+
+# ---------------------------------------------------------------------------
+# get_conversation_history
+# ---------------------------------------------------------------------------
+
+
+class TestGetConversationHistory:
+    async def test_returns_list_of_dicts(self, pool):
+        """fetch вернул 2 записи → список из 2 dict."""
+        pool.fetch.return_value = [
+            {"id": 1, "lead_phone": "wa_1", "text": "Hola"},
+            {"id": 2, "lead_phone": "wa_1", "text": "Soy Carlos"},
+        ]
+
+        result = await db.get_conversation_history("wa_1")
+
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert all(isinstance(r, dict) for r in result)
+
+    async def test_sql_has_order_by_created_at_asc(self, pool):
+        """SQL содержит ORDER BY created_at ASC."""
+        pool.fetch.return_value = []
+
+        await db.get_conversation_history("wa_1")
+
+        sql = pool.fetch.call_args.args[0]
+        assert "ORDER BY created_at ASC" in sql
+
+    async def test_sql_has_limit_placeholder(self, pool):
+        """SQL содержит LIMIT $2."""
+        pool.fetch.return_value = []
+
+        await db.get_conversation_history("wa_1")
+
+        sql = pool.fetch.call_args.args[0]
+        assert "LIMIT $2" in sql
+
+    async def test_phone_and_limit_in_args(self, pool):
+        """phone передаётся как $1, limit как $2 в отдельных позиционных аргументах."""
+        pool.fetch.return_value = []
+
+        await db.get_conversation_history("wa_1", limit=10)
+
+        _, *params = pool.fetch.call_args.args
+        assert params[0] == "wa_1"
+        assert params[1] == 10
+
+    async def test_default_limit_is_30(self, pool):
+        """Без явного limit используется дефолт 30."""
+        pool.fetch.return_value = []
+
+        await db.get_conversation_history("wa_1")
+
+        _, *params = pool.fetch.call_args.args
+        assert params[1] == 30
+
+
+# ---------------------------------------------------------------------------
+# update_lead_fields
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateLeadFields:
+    async def test_returns_dict_with_valid_fields(self, pool):
+        """Валидные поля → UPDATE выполнен, возвращает dict."""
+        pool.fetchrow.return_value = {"phone": "wa_1", "name": "Carlos"}
+
+        result = await db.update_lead_fields("wa_1", name="Carlos")
+
+        assert isinstance(result, dict)
+        assert result["name"] == "Carlos"
+
+    async def test_sql_is_update_with_updated_at_and_returning(self, pool):
+        """SQL: UPDATE leads SET ... updated_at = now() WHERE phone = $N RETURNING *."""
+        pool.fetchrow.return_value = {"phone": "wa_1", "name": "Carlos"}
+
+        await db.update_lead_fields("wa_1", name="Carlos")
+
+        sql = pool.fetchrow.call_args.args[0]
+        assert sql.strip().upper().startswith("UPDATE LEADS SET")
+        assert "updated_at = now()" in sql
+        assert "RETURNING *" in sql
+
+    async def test_params_order_field_values_then_phone_last(self, pool):
+        """Порядок параметров: значения полей ($1..$n), phone последним ($n+1)."""
+        pool.fetchrow.return_value = {"phone": "wa_1", "name": "Carlos", "age": 40}
+
+        await db.update_lead_fields("wa_1", name="Carlos", age=40)
+
+        _, *params = pool.fetchrow.call_args.args
+        # phone — последний параметр
+        assert params[-1] == "wa_1"
+        # значения полей идут раньше phone
+        assert "Carlos" in params
+        assert 40 in params
+        name_idx = params.index("Carlos")
+        phone_idx = params.index("wa_1")
+        assert name_idx < phone_idx
+
+    async def test_empty_fields_calls_select_not_update(self, pool):
+        """Пустые поля → делегирует get_lead_by_phone (SELECT), UPDATE не выполняется."""
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+
+        await db.update_lead_fields("wa_1")
+
+        sql = pool.fetchrow.call_args.args[0]
+        assert "SELECT" in sql
+        assert "UPDATE" not in sql
+
+    async def test_bad_column_raises_value_error_before_query(self, pool):
+        """Неизвестная колонка → ValueError, fetchrow не вызывается вообще."""
+        with pytest.raises(ValueError, match="Недопустимые колонки"):
+            await db.update_lead_fields("wa_1", nonexistent_field="oops")
+
+        pool.fetchrow.assert_not_called()
+
+    async def test_returns_none_when_lead_not_found(self, pool):
+        """fetchrow вернул None (лида нет) → результат None."""
+        pool.fetchrow.return_value = None
+
+        result = await db.update_lead_fields("wa_1", name="Ghost")
+
+        assert result is None
