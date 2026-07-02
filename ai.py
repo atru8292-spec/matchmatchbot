@@ -25,7 +25,7 @@ from config import settings
 
 logger = logging.getLogger("matchmatch.ai")
 
-_PROMPT_PATH = os.path.join(os.path.dirname(__file__), "anna_prompt_v4.md")
+_PROMPT_PATH = os.path.join(os.path.dirname(__file__), "anna_prompt_v5.md")
 _system_prompt_cache: str | None = None
 
 # Пороги уверенности RAG (score = 1 - cosine_distance):
