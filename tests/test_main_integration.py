@@ -3,7 +3,7 @@
 
 Изоляция от БД:
   - lifespan НЕ запускается (TestClient создаётся без `with`)
-  - db.is_ready, db.insert_message, db.get_unprocessed_inbound,
+  - db.is_ready, db.upsert_lead, db.insert_message, db.get_unprocessed_inbound,
     db.mark_messages_processed — всегда через monkeypatch/AsyncMock
   - main.debouncer подменяется через monkeypatch или фикстуру
 
@@ -11,7 +11,7 @@
   TestHandleIncoming  — прямой вызов await main._handle_incoming (async)
   TestProcessBurst    — прямой вызов await main._process_burst (async)
   TestWebhookWithMocks — TestClient + подняты моки (sync)
-  TestWebhookRegression — регресс пинг/403/bitый JSON/statuses (sync)
+  TestWebhookRegression — регресс пинг/403/битый JSON/statuses (sync)
 """
 from __future__ import annotations
 
@@ -61,6 +61,21 @@ def _image_msg(msg_id: str = "msg-200",
     }
 
 
+def _whatsgroup_msg(msg_id: str = "msg-grp-1",
+                    chat_id: str = "79132123789-1581764243",
+                    text: str = "Hola grupo") -> dict:
+    """Сообщение из группового WhatsApp-чата — normalize должен дропнуть (chatType != whatsapp)."""
+    return {
+        "messageId": msg_id,
+        "chatId": chat_id,
+        "chatType": "whatsgroup",
+        "type": "text",
+        "text": text,
+        "isEcho": False,
+        "status": "inbound",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Фикстуры
 # ---------------------------------------------------------------------------
@@ -72,6 +87,18 @@ def mock_debouncer(monkeypatch):
     fake.trigger = AsyncMock()
     monkeypatch.setattr(main, "debouncer", fake)
     return fake
+
+
+@pytest.fixture()
+def mock_upsert_lead(monkeypatch):
+    """db.upsert_lead → AsyncMock(return_value=dict с phone).
+
+    Нужен во ВСЕХ тестах где normalize возвращает не-None и is_ready=True:
+    upsert_lead вызывается первым (FK-гарантия), без мока ронит RuntimeError из _get_pool().
+    """
+    m = AsyncMock(return_value={"phone": "wa_mock"})
+    monkeypatch.setattr(db, "upsert_lead", m)
+    return m
 
 
 @pytest.fixture()
@@ -90,7 +117,7 @@ def mock_insert_true(monkeypatch):
 class TestHandleIncoming:
 
     async def test_valid_text_insert_args_and_trigger(
-        self, monkeypatch, mock_debouncer
+        self, monkeypatch, mock_debouncer, mock_upsert_lead
     ):
         """Валидный текст → insert вызван ровно раз с верными аргументами, trigger — раз."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -113,7 +140,7 @@ class TestHandleIncoming:
         mock_debouncer.trigger.assert_awaited_once_with("wa_521234567890")
 
     async def test_duplicate_insert_false_no_trigger(
-        self, monkeypatch, mock_debouncer
+        self, monkeypatch, mock_debouncer, mock_upsert_lead
     ):
         """insert_message → False (дубль) → trigger НЕ вызван."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -124,8 +151,10 @@ class TestHandleIncoming:
         mock_debouncer.trigger.assert_not_awaited()
 
     async def test_echo_true_drops(self, monkeypatch, mock_debouncer):
-        """isEcho=True → normalize возвращает None → нет insert, нет trigger."""
+        """isEcho=True → normalize возвращает None → нет upsert, нет insert, нет trigger."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
+        upsert_mock = AsyncMock()
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
         insert_mock = AsyncMock()
         monkeypatch.setattr(db, "insert_message", insert_mock)
 
@@ -133,12 +162,15 @@ class TestHandleIncoming:
         msg["isEcho"] = True
         await main._handle_incoming(msg)
 
+        upsert_mock.assert_not_awaited()
         insert_mock.assert_not_awaited()
         mock_debouncer.trigger.assert_not_awaited()
 
     async def test_status_delivered_drops(self, monkeypatch, mock_debouncer):
-        """status=delivered → normalize → None → нет insert, нет trigger."""
+        """status=delivered → normalize → None → нет upsert, нет insert, нет trigger."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
+        upsert_mock = AsyncMock()
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
         insert_mock = AsyncMock()
         monkeypatch.setattr(db, "insert_message", insert_mock)
 
@@ -146,12 +178,15 @@ class TestHandleIncoming:
         msg["status"] = "delivered"
         await main._handle_incoming(msg)
 
+        upsert_mock.assert_not_awaited()
         insert_mock.assert_not_awaited()
         mock_debouncer.trigger.assert_not_awaited()
 
     async def test_telegram_chattype_drops(self, monkeypatch, mock_debouncer):
-        """chatType=telegram → normalize → None → нет insert, нет trigger."""
+        """chatType=telegram → normalize → None → нет upsert, нет insert, нет trigger."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
+        upsert_mock = AsyncMock()
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
         insert_mock = AsyncMock()
         monkeypatch.setattr(db, "insert_message", insert_mock)
 
@@ -159,36 +194,43 @@ class TestHandleIncoming:
         msg["chatType"] = "telegram"
         await main._handle_incoming(msg)
 
+        upsert_mock.assert_not_awaited()
         insert_mock.assert_not_awaited()
         mock_debouncer.trigger.assert_not_awaited()
 
     async def test_empty_text_drops(self, monkeypatch, mock_debouncer):
-        """text='' → normalize → None → нет insert, нет trigger."""
+        """text='' → normalize → None → нет upsert, нет insert, нет trigger."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
+        upsert_mock = AsyncMock()
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
         insert_mock = AsyncMock()
         monkeypatch.setattr(db, "insert_message", insert_mock)
 
         await main._handle_incoming(_text_msg(text=""))
 
+        upsert_mock.assert_not_awaited()
         insert_mock.assert_not_awaited()
         mock_debouncer.trigger.assert_not_awaited()
 
     async def test_db_not_ready_no_insert_no_trigger_no_exception(
         self, monkeypatch, mock_debouncer
     ):
-        """db.is_ready() → False → нет insert, нет trigger, исключения нет."""
+        """db.is_ready() → False → нет upsert, нет insert, нет trigger, исключения нет."""
         monkeypatch.setattr(db, "is_ready", lambda: False)
+        upsert_mock = AsyncMock()
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
         insert_mock = AsyncMock()
         monkeypatch.setattr(db, "insert_message", insert_mock)
 
         # не должен бросать
         await main._handle_incoming(_text_msg())
 
+        upsert_mock.assert_not_awaited()
         insert_mock.assert_not_awaited()
         mock_debouncer.trigger.assert_not_awaited()
 
     async def test_insert_exception_does_not_propagate(
-        self, monkeypatch, mock_debouncer
+        self, monkeypatch, mock_debouncer, mock_upsert_lead
     ):
         """Исключение в insert_message → поглощается обработчиком, не бросается наружу."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -202,7 +244,7 @@ class TestHandleIncoming:
         mock_debouncer.trigger.assert_not_awaited()
 
     async def test_image_message_insert_with_photo_meta(
-        self, monkeypatch, mock_debouncer
+        self, monkeypatch, mock_debouncer, mock_upsert_lead
     ):
         """type=image → insert с meta={'content_type': 'photo'}."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -215,6 +257,95 @@ class TestHandleIncoming:
         meta_arg = insert_mock.call_args.kwargs["meta"]
         assert meta_arg == {"content_type": "photo"}
         mock_debouncer.trigger.assert_awaited_once_with("wa_529998887777")
+
+    # --- Новые тесты: FK-регрессия и порядок вызовов ---
+
+    async def test_upsert_called_before_insert(
+        self, monkeypatch, mock_debouncer
+    ):
+        """upsert_lead должен быть вызван РАНЬШЕ insert_message (FK-гарантия).
+
+        Реализовано через общий список call_order, заполняемый side_effect обоих моков.
+        Регрессионный тест: если кто-то переставит строки местами — тест упадёт.
+        """
+        monkeypatch.setattr(db, "is_ready", lambda: True)
+
+        call_order: list[str] = []
+
+        async def _upsert_side(phone, **kwargs):
+            call_order.append("upsert")
+            return {"phone": phone}
+
+        async def _insert_side(*args, **kwargs):
+            call_order.append("insert")
+            return True
+
+        monkeypatch.setattr(db, "upsert_lead", _upsert_side)
+        monkeypatch.setattr(db, "insert_message", _insert_side)
+
+        await main._handle_incoming(_text_msg("msg-order-1", "521234567890@c.us", "Hola"))
+
+        assert call_order == ["upsert", "insert"], (
+            f"Ожидали ['upsert','insert'], получили {call_order}. "
+            "FK на leads.phone нарушен: insert_message вызван до upsert_lead."
+        )
+
+    async def test_upsert_lead_called_with_correct_args(
+        self, monkeypatch, mock_debouncer
+    ):
+        """upsert_lead вызван с правильным phone ('wa_'+цифры) и whatsapp_name (title-case).
+
+        Добавляем contact.name в payload → normalize сделает .title() → "Juan Gomez".
+        """
+        monkeypatch.setattr(db, "is_ready", lambda: True)
+        upsert_mock = AsyncMock(return_value={"phone": "wa_521234567890"})
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
+        monkeypatch.setattr(db, "insert_message", AsyncMock(return_value=True))
+
+        msg = _text_msg("msg-args-1", "521234567890@c.us", "Hola")
+        msg["contact"] = {"name": "juan gomez", "phone": "521234567890"}
+
+        await main._handle_incoming(msg)
+
+        upsert_mock.assert_awaited_once_with(
+            "wa_521234567890", whatsapp_name="Juan Gomez"
+        )
+
+    async def test_upsert_lead_no_contact_name_uses_wa_lead(
+        self, monkeypatch, mock_debouncer
+    ):
+        """Без contact.name → whatsapp_name='WA Lead' (фолбэк из normalize)."""
+        monkeypatch.setattr(db, "is_ready", lambda: True)
+        upsert_mock = AsyncMock(return_value={"phone": "wa_521234567890"})
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
+        monkeypatch.setattr(db, "insert_message", AsyncMock(return_value=True))
+
+        # _text_msg не содержит contact → normalize → user_name = "WA Lead"
+        await main._handle_incoming(_text_msg("msg-args-2", "521234567890@c.us", "Hola"))
+
+        upsert_mock.assert_awaited_once_with(
+            "wa_521234567890", whatsapp_name="WA Lead"
+        )
+
+    async def test_whatsgroup_drops_no_upsert_no_insert(
+        self, monkeypatch, mock_debouncer
+    ):
+        """chatType=whatsgroup → normalize → None → ни upsert_lead, ни insert_message, ни trigger.
+
+        Реальный кейс: Wazzup присылает сообщения из групп с chatId вида '79132123789-1581764243'.
+        Бот не должен их обрабатывать, создавать лида и не должен падать.
+        """
+        monkeypatch.setattr(db, "is_ready", lambda: True)
+        upsert_mock = AsyncMock()
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
+        insert_mock = AsyncMock()
+        monkeypatch.setattr(db, "insert_message", insert_mock)
+
+        await main._handle_incoming(_whatsgroup_msg())
+
+        upsert_mock.assert_not_awaited()
+        insert_mock.assert_not_awaited()
+        mock_debouncer.trigger.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -288,8 +419,10 @@ class TestWebhookWithMocks:
     """Тесты через TestClient — lifespan не стартует, все зависимости замоканы."""
 
     def test_two_valid_messages_insert_called_twice(self, monkeypatch):
-        """POST с двумя сообщениями → insert_message вызван 2 раза → 200."""
+        """POST с двумя сообщениями → upsert+insert вызваны по 2 раза → 200."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
+        upsert_mock = AsyncMock(return_value={"phone": "wa_mock"})
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
         insert_mock = AsyncMock(return_value=True)
         monkeypatch.setattr(db, "insert_message", insert_mock)
         fake_deb = MagicMock()
@@ -306,11 +439,13 @@ class TestWebhookWithMocks:
         response = client.post(f"/webhook/wazzup/{GOOD_SECRET}", json=payload)
 
         assert response.status_code == 200
+        assert upsert_mock.await_count == 2
         assert insert_mock.await_count == 2
 
     def test_image_message_insert_with_photo_meta_via_endpoint(self, monkeypatch):
         """type=image через эндпоинт → meta content_type='photo'."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
+        monkeypatch.setattr(db, "upsert_lead", AsyncMock(return_value={"phone": "wa_mock"}))
         insert_mock = AsyncMock(return_value=True)
         monkeypatch.setattr(db, "insert_message", insert_mock)
         fake_deb = MagicMock()
@@ -328,6 +463,7 @@ class TestWebhookWithMocks:
     def test_insert_exception_in_first_second_still_processed(self, monkeypatch):
         """Исключение в insert первого сообщения → второе всё равно обрабатывается → 200."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
+        monkeypatch.setattr(db, "upsert_lead", AsyncMock(return_value={"phone": "wa_mock"}))
         # Первый вызов — Exception, второй — True
         insert_mock = AsyncMock(side_effect=[Exception("boom"), True])
         monkeypatch.setattr(db, "insert_message", insert_mock)
@@ -347,6 +483,32 @@ class TestWebhookWithMocks:
         assert response.status_code == 200
         # оба вызова состоялись (второй — несмотря на исключение первого)
         assert insert_mock.await_count == 2
+
+    def test_whatsgroup_via_endpoint_200(self, monkeypatch):
+        """chatType=whatsgroup → normalize дропает → ни upsert, ни insert, ни trigger, 200.
+
+        Реальный кейс из живого теста: Wazzup присылает групповые чаты.
+        Бот молчит, endpoint отвечает 200, никаких ошибок.
+        """
+        monkeypatch.setattr(db, "is_ready", lambda: True)
+        upsert_mock = AsyncMock()
+        monkeypatch.setattr(db, "upsert_lead", upsert_mock)
+        insert_mock = AsyncMock()
+        monkeypatch.setattr(db, "insert_message", insert_mock)
+        fake_deb = MagicMock()
+        fake_deb.trigger = AsyncMock()
+        monkeypatch.setattr(main, "debouncer", fake_deb)
+
+        client = TestClient(main.app)
+        payload = {
+            "messages": [_whatsgroup_msg("msg-grp-99", "79132123789-1581764243", "Hola grupo")]
+        }
+        response = client.post(f"/webhook/wazzup/{GOOD_SECRET}", json=payload)
+
+        assert response.status_code == 200
+        upsert_mock.assert_not_awaited()
+        insert_mock.assert_not_awaited()
+        fake_deb.trigger.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

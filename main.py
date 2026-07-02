@@ -133,6 +133,11 @@ async def _handle_incoming(msg) -> None:
             logger.warning("Webhook: БД не готова, сообщение %s не сохранено", nm.external_message_id)
             return
 
+        # Лид должен существовать ДО вставки сообщения: messages.lead_phone имеет
+        # FK на leads.phone. upsert создаёт лида (или обновляет имя); status/mode/
+        # funnel_stage/source проставятся дефолтами схемы при INSERT.
+        await db.upsert_lead(nm.phone, whatsapp_name=nm.user_name)
+
         inserted = await db.insert_message(
             nm.phone,
             "inbound",
