@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 
 import ai
 import db
+import escalation
 import filters
 import sender
 from config import settings
@@ -62,9 +63,9 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
     name = lead.get("whatsapp_name") or lead.get("name") or phone
 
     if decision.action == "silent_whitelist":
-        # Бот молчит; сообщение уже в истории. TODO (блок 8): алерт Ане в Telegram.
-        logger.info("РЕШЕНИЕ silent_whitelist [%s]: %s | TODO-алерт Ане: 'написал %s'",
-                    phone, decision.reason, name)
+        # Бот молчит; сообщение уже в истории. Алерт Ане: написал клиент/VIP.
+        logger.info("РЕШЕНИЕ silent_whitelist [%s]: %s", phone, decision.reason)
+        await escalation.notify_vip(lead)
         return
 
     if decision.action == "silent":
@@ -75,9 +76,10 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
 
     if decision.action == "blocked":
         # Блок навсегда + стадия lost — атомарно внутри block_lead. is_escort из
-        # Decision (не парсим текст reason). TODO (блок 8): алерт Ане.
+        # Decision (не парсим текст reason). Алерт Ане о блокировке.
         await db.block_lead(phone, decision.reason, escort=decision.is_escort)
-        logger.info("РЕШЕНИЕ blocked [%s]: %s | TODO-алерт Ане", phone, decision.reason)
+        logger.info("РЕШЕНИЕ blocked [%s]: %s", phone, decision.reason)
+        await escalation.notify_block(lead, decision.reason)
         return
 
     # rejected и needs_ai → AI-ядро. Оборачиваем в try/except: сообщения залпа уже
@@ -90,11 +92,11 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
                 await db.set_funnel_stage(phone, "rejected", meta={"reason": decision.reason})
                 logger.info("РЕШЕНИЕ rejected [%s]: %s", phone, decision.reason)
             await _run_ai(phone, lead, combined)
-        except Exception:
+        except Exception as e:
             logger.exception(
-                "обработка AI упала [%s] — лид без ответа, сообщения уже processed. "
-                "TODO (блок 8): алерт Ане", phone,
+                "обработка AI упала [%s] — лид без ответа, сообщения уже processed", phone,
             )
+            await escalation.notify_error("main._run_ai", repr(e), phone)
         return
 
     logger.warning("неизвестное решение %s [%s]", decision.action, phone)
@@ -126,8 +128,8 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
         reason = f"AI: {title}" if title else "AI-блок по сценарию"
         await db.block_lead(phone, reason)
         await sender.send(phone, messages)  # прощальное сообщение лиду
-        logger.info("AI block [%s]: %s (scenario=%s) | TODO-алерт Ане",
-                    phone, reason, result["used_scenario_id"])
+        logger.info("AI block [%s]: %s (scenario=%s)", phone, reason, result["used_scenario_id"])
+        await escalation.notify_block(lead, title or "заблокирован по сценарию")
         return
 
     # respond / escalate — стадию ставит AI (если вернул валидную).
@@ -137,9 +139,11 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
 
     await sender.send(phone, messages)  # messages лиду
     if action == "escalate":
-        # НЕ молчаливо: лид получил messages, плюс поднимаем флаг Ане.
-        logger.info("AI escalate [%s] (scenario=%s) | TODO-алерт Ане (сообщения лиду отправлены)",
-                    phone, result["used_scenario_id"])
+        # НЕ молчаливо: лид получил messages, плюс алерт Ане (продолжить лично).
+        # Причина — название сценария; фолбэк если сценарий не определён.
+        title = await db.get_scenario_title(result["used_scenario_id"])
+        logger.info("AI escalate [%s] (scenario=%s)", phone, result["used_scenario_id"])
+        await escalation.notify_escalation(lead, title or "Нужна твоя помощь", combined)
     else:
         logger.info("AI respond [%s] (scenario=%s, funnel=%s)",
                     phone, result["used_scenario_id"], result["funnel_stage"])

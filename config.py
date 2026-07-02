@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_temperature: float = 0.3
 
+    # ===== Telegram-алерты (блок 8) =====
+    # Бот «Лиды» — business-алерты Ане (эскалация/VIP/блок).
+    tg_manager_bot_token: str = ""
+    tg_manager_chat_id: str = ""
+    # Бот «Ошибки» — technical-алерты разработке (рантайм-сбои).
+    tg_alerts_bot_token: str = ""
+    tg_alerts_chat_id: str = ""
+
     # ===== Фильтры =====
     # Номера-исключения для silent-фильтра (тестовые/доверенные): для них НЕ применяем
     # silent по +7/кириллице. Список цифр через запятую, напр. "79635708880,79635378880".

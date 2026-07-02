@@ -13,6 +13,7 @@ import random
 import httpx
 
 import db
+import escalation
 from config import settings
 
 logger = logging.getLogger("matchmatch.sender")
@@ -56,9 +57,10 @@ async def send_one(chat_id: str, text: str) -> bool:
             )
             r.raise_for_status()
         return True
-    except Exception:
-        # TODO (блок 8): алерт Ане о неудачной отправке.
+    except Exception as e:
         logger.exception("Wazzup send_one failed: chat_id=%s", chat_id)
+        # technical-алерт (throttled внутри notify_error); не роняем отправку.
+        await escalation.notify_error("sender.send_one", repr(e), "wa_" + chat_id)
         return False
 
 

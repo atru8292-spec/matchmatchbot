@@ -1032,3 +1032,144 @@ class TestApplyDecisionSilent:
             await main._apply_decision("wa_5215551234567", decision, {}, "привет как дела")
 
         assert "РЕШЕНИЕ silent" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Часть 8: интеграция escalation в main._apply_decision и _run_ai
+# ---------------------------------------------------------------------------
+
+class TestEscalationIntegration:
+    """Проверяем, что main вызывает нужные escalation.notify_* функции."""
+
+    # Общий хелпер: замокать все зависимости _run_ai + escalation.notify_*
+    def _mock_all(self, monkeypatch):
+        """Замокать AI/DB/sender + все escalation.notify_* как AsyncMock."""
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(db, "update_lead_fields", AsyncMock())
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        monkeypatch.setattr(db, "get_scenario_title", AsyncMock(return_value="Хочу контакт девушки"))
+        monkeypatch.setattr(main.sender, "send", AsyncMock(return_value=1))
+        # Эскалация
+        vip_mock = AsyncMock()
+        block_mock = AsyncMock()
+        esc_mock = AsyncMock()
+        err_mock = AsyncMock()
+        monkeypatch.setattr(main.escalation, "notify_vip", vip_mock)
+        monkeypatch.setattr(main.escalation, "notify_block", block_mock)
+        monkeypatch.setattr(main.escalation, "notify_escalation", esc_mock)
+        monkeypatch.setattr(main.escalation, "notify_error", err_mock)
+        return vip_mock, block_mock, esc_mock, err_mock
+
+    # 13. silent_whitelist → notify_vip вызван с lead
+
+    async def test_silent_whitelist_calls_notify_vip(self, monkeypatch):
+        """_apply_decision action=silent_whitelist → escalation.notify_vip(lead, reason)."""
+        vip_mock, block_mock, esc_mock, err_mock = self._mock_all(monkeypatch)
+
+        lead = {"phone": "wa_client1", "whatsapp_name": "Marco"}
+        decision = filters.Decision(action="silent_whitelist", reason="VIP-клиент")
+
+        await main._apply_decision("wa_client1", decision, lead, "Hola")
+
+        vip_mock.assert_awaited_once()
+        call_lead = vip_mock.call_args.args[0]
+        assert call_lead == lead
+        # остальные не вызваны
+        block_mock.assert_not_awaited()
+        esc_mock.assert_not_awaited()
+        err_mock.assert_not_awaited()
+
+    # 14. blocked → notify_block вызван
+
+    async def test_blocked_calls_notify_block(self, monkeypatch):
+        """_apply_decision action=blocked → escalation.notify_block(lead, reason)."""
+        vip_mock, block_mock, esc_mock, err_mock = self._mock_all(monkeypatch)
+
+        lead = {"phone": "wa_escort1", "whatsapp_name": "Bad Guy"}
+        decision = filters.Decision(
+            action="blocked", reason="Ищет интим-услуги", is_escort=True
+        )
+
+        await main._apply_decision("wa_escort1", decision, lead, "texto")
+
+        block_mock.assert_awaited_once()
+        call_lead = block_mock.call_args.args[0]
+        assert call_lead == lead
+        vip_mock.assert_not_awaited()
+        esc_mock.assert_not_awaited()
+
+    # 15. _run_ai action=block → notify_block вызван
+
+    async def test_run_ai_block_calls_notify_block(self, monkeypatch):
+        """_run_ai, AI вернул action=block → escalation.notify_block вызван."""
+        vip_mock, block_mock, esc_mock, err_mock = self._mock_all(monkeypatch)
+        monkeypatch.setattr(
+            ai, "generate_reply",
+            AsyncMock(return_value={
+                "messages": ["Adiós"], "funnel_stage": None, "action": "block",
+                "extracted": {}, "needs_escalation": False, "used_scenario_id": 7,
+            }),
+        )
+
+        await main._run_ai("wa_block", {"whatsapp_name": "Test"}, "quiero escort")
+
+        block_mock.assert_awaited_once()
+        esc_mock.assert_not_awaited()
+
+    # 16. _run_ai action=escalate → notify_escalation вызван
+
+    async def test_run_ai_escalate_calls_notify_escalation(self, monkeypatch):
+        """_run_ai, AI вернул action=escalate → escalation.notify_escalation вызван (awaited)."""
+        vip_mock, block_mock, esc_mock, err_mock = self._mock_all(monkeypatch)
+        monkeypatch.setattr(
+            ai, "generate_reply",
+            AsyncMock(return_value={
+                "messages": ["Te contactaré pronto"], "funnel_stage": None, "action": "escalate",
+                "extracted": {}, "needs_escalation": True, "used_scenario_id": 3,
+            }),
+        )
+
+        lead = {"whatsapp_name": "Pedro"}
+        await main._run_ai("wa_esc", lead, "quiero más info")
+
+        esc_mock.assert_awaited_once()
+        block_mock.assert_not_awaited()
+
+    # 17. _run_ai action=respond → notify_escalation НЕ вызван
+
+    async def test_run_ai_respond_does_not_call_notify_escalation(self, monkeypatch):
+        """_run_ai, AI вернул action=respond → escalation.notify_escalation НЕ вызван."""
+        vip_mock, block_mock, esc_mock, err_mock = self._mock_all(monkeypatch)
+        monkeypatch.setattr(
+            ai, "generate_reply",
+            AsyncMock(return_value={
+                "messages": ["Hola!"], "funnel_stage": "qualifying", "action": "respond",
+                "extracted": {}, "needs_escalation": False, "used_scenario_id": 5,
+            }),
+        )
+
+        await main._run_ai("wa_resp", {}, "Hola")
+
+        esc_mock.assert_not_awaited()
+        block_mock.assert_not_awaited()
+
+    # 18. needs_ai + _run_ai бросает → notify_error вызван
+
+    async def test_needs_ai_run_ai_exception_calls_notify_error(self, monkeypatch):
+        """action=needs_ai + get_conversation_history бросает → escalation.notify_error вызван."""
+        vip_mock, block_mock, esc_mock, err_mock = self._mock_all(monkeypatch)
+        # Перекрыть get_conversation_history на ошибку
+        monkeypatch.setattr(
+            db, "get_conversation_history",
+            AsyncMock(side_effect=RuntimeError("db down")),
+        )
+
+        decision = filters.Decision(action="needs_ai", reason="тест")
+        # не должно бросить наружу
+        await main._apply_decision("wa_crash", decision, {}, "hola")
+
+        err_mock.assert_awaited_once()
+        # проверяем что вызван с правильным where
+        call_where = err_mock.call_args.args[0]
+        assert "main._run_ai" in call_where
