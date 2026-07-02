@@ -19,12 +19,13 @@ import db
 
 
 class FakePool:
-    """Заглушка asyncpg.Pool: fetchrow, fetch и execute — AsyncMock."""
+    """Заглушка asyncpg.Pool: fetchrow, fetch, execute и fetchval — AsyncMock."""
 
     def __init__(self):
         self.fetchrow = AsyncMock()
         self.fetch = AsyncMock()
-        self.execute = AsyncMock()  # нужен для block_lead / touch_last_inbound
+        self.execute = AsyncMock()   # нужен для block_lead / touch_last_inbound
+        self.fetchval = AsyncMock()  # нужен для count_recent_photos / get_scenario_title
 
 
 @pytest.fixture()
@@ -877,3 +878,145 @@ class TestSearchScenariosByVector:
         pool.fetch.return_value = []
         res = await db.search_scenarios_by_vector("[0.1]")
         assert res == []
+
+
+# ---------------------------------------------------------------------------
+# save_photo
+# ---------------------------------------------------------------------------
+
+
+class TestSavePhoto:
+    """save_photo транзакционный: FOR UPDATE лида → EXISTS is_primary → INSERT.
+    INSERT — последний conn.execute; is_primary = not has_primary (fetchval)."""
+
+    def _insert_call(self, conn):
+        """Аргументы INSERT-вызова (последний execute; первый — SELECT ... FOR UPDATE)."""
+        return conn.execute.call_args_list[-1].args
+
+    async def test_sql_contains_required_keywords(self, transactional_pool):
+        conn = transactional_pool
+        conn.fetchval.return_value = False  # ещё нет primary
+        await db.save_photo("wa_1", "https://url", "wa_1/abc.jpg", "ok")
+
+        sql = self._insert_call(conn)[0]
+        for keyword in ("lead_photos", "vision_analyzed", "vision_verdict", "is_primary"):
+            assert keyword in sql, f"Keyword '{keyword}' не найден в SQL"
+        # FOR UPDATE на лида — в первом execute
+        assert "FOR UPDATE" in conn.execute.call_args_list[0].args[0]
+
+    async def test_param_order(self, transactional_pool):
+        conn = transactional_pool
+        conn.fetchval.return_value = False
+        await db.save_photo(
+            "wa_phone", "https://storage_url", "wa_phone/abc.jpg", "ok",
+            analysis={"detail": "fine"}, reasons=["clear face"], channel="whatsapp",
+        )
+        args = self._insert_call(conn)
+        assert args[1] == "wa_phone"
+        assert args[2] == "whatsapp"
+        assert args[3] == "https://storage_url"
+        assert args[4] == "wa_phone/abc.jpg"
+        assert args[5] == {"detail": "fine"}
+        assert args[6] == "ok"
+        assert args[7] == ["clear face"]
+        assert args[8] is True  # is_primary = not has_primary(False)
+
+    async def test_is_primary_false_when_already_has_primary(self, transactional_pool):
+        conn = transactional_pool
+        conn.fetchval.return_value = True  # у лида уже есть primary
+        await db.save_photo("wa_1", None, None, "ok")
+        assert self._insert_call(conn)[8] is False
+
+    async def test_analysis_none_defaults_to_empty_dict(self, transactional_pool):
+        conn = transactional_pool
+        conn.fetchval.return_value = False
+        await db.save_photo("wa_1", None, None, "manual", analysis=None)
+        assert self._insert_call(conn)[5] == {}
+
+    async def test_reasons_none_defaults_to_empty_list(self, transactional_pool):
+        conn = transactional_pool
+        conn.fetchval.return_value = False
+        await db.save_photo("wa_1", None, None, "manual", reasons=None)
+        assert self._insert_call(conn)[7] == []
+
+    async def test_db_error_raises(self, transactional_pool):
+        conn = transactional_pool
+        conn.execute.side_effect = RuntimeError("db down")
+        with pytest.raises(RuntimeError, match="db down"):
+            await db.save_photo("wa_1", None, None, "ok")
+
+
+# ---------------------------------------------------------------------------
+# mark_photo_received
+# ---------------------------------------------------------------------------
+
+
+class TestMarkPhotoReceived:
+
+    async def test_sql_contains_update_leads_photo_received(self, pool):
+        """SQL содержит UPDATE leads SET photo_received."""
+        await db.mark_photo_received("wa_1", True)
+
+        sql = pool.execute.call_args.args[0]
+        assert "UPDATE leads" in sql
+        assert "photo_received" in sql
+
+    async def test_params_phone_and_received_bool(self, pool):
+        """Параметры: args[1]=phone, args[2]=received (bool)."""
+        await db.mark_photo_received("wa_9999", False)
+
+        args = pool.execute.call_args.args
+        assert args[1] == "wa_9999", f"$1 phone: {args[1]}"
+        assert args[2] is False,     f"$2 received: {args[2]}"
+
+    async def test_db_error_raises(self, pool):
+        """Ошибка пула → пробрасывается наружу."""
+        pool.execute.side_effect = RuntimeError("db down")
+
+        with pytest.raises(RuntimeError, match="db down"):
+            await db.mark_photo_received("wa_1", True)
+
+
+# ---------------------------------------------------------------------------
+# count_recent_photos
+# ---------------------------------------------------------------------------
+
+
+class TestCountRecentPhotos:
+
+    async def test_sql_contains_lead_photos_and_make_interval(self, pool):
+        """SQL содержит lead_photos и make_interval."""
+        pool.fetchval.return_value = 0
+
+        await db.count_recent_photos("wa_1")
+
+        sql = pool.fetchval.call_args.args[0]
+        assert "lead_photos" in sql,    "lead_photos не найден в SQL"
+        assert "make_interval" in sql,  "make_interval не найден в SQL"
+
+    async def test_returns_fetchval_result(self, pool):
+        """Возвращает именно то, что вернул fetchval (счётчик)."""
+        pool.fetchval.return_value = 3
+
+        result = await db.count_recent_photos("wa_1", hours=2)
+
+        assert result == 3
+
+    async def test_default_hours_is_one(self, pool):
+        """По умолчанию hours=1 (второй параметр SQL)."""
+        pool.fetchval.return_value = 0
+
+        await db.count_recent_photos("wa_1")
+
+        _, *params = pool.fetchval.call_args.args
+        assert params[0] == "wa_1"
+        assert params[1] == 1, f"Ожидали hours=1 по умолчанию, получили {params[1]}"
+
+    async def test_custom_hours_passed_as_param(self, pool):
+        """Кастомный hours передаётся вторым SQL-параметром."""
+        pool.fetchval.return_value = 0
+
+        await db.count_recent_photos("wa_1", hours=6)
+
+        _, *params = pool.fetchval.call_args.args
+        assert params[1] == 6, f"Ожидали hours=6, получили {params[1]}"

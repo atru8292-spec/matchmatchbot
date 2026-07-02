@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     openai_chat_model: str = "gpt-4.1"
     openai_embedding_model: str = "text-embedding-3-small"
     openai_temperature: float = 0.3
+    openai_vision_model: str = "gpt-4o-mini"  # фото-модерация (блок 9)
+
+    # ===== Supabase Storage (блок 9) =====
+    supabase_url: str = ""
+    supabase_service_key: str = ""
+    supabase_storage_bucket: str = "lead-photos"
 
     # ===== Telegram-алерты (блок 8) =====
     # Бот «Лиды» — business-алерты Ане (эскалация/VIP/блок).

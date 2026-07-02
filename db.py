@@ -368,6 +368,62 @@ async def save_outbound(lead_phone: str, text: str, sender: str = "anna") -> Non
                          "lead_phone=%s", lead_phone)
 
 
+async def save_photo(lead_phone: str, storage_url: str | None, storage_path: str | None,
+                     verdict: str, analysis: dict | None = None,
+                     reasons: list | None = None, channel: str = "whatsapp") -> None:
+    """Сохранить фото + результат Vision в lead_photos. is_primary если первое фото лида.
+
+    Транзакция с FOR UPDATE на лида: сериализует конкурентные save_photo одного номера,
+    иначе два одновременных фото могли бы оба стать is_primary (гонка NOT EXISTS).
+    """
+    pool = _get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # блокируем строку лида — сериализуем вычисление is_primary
+                await conn.execute("SELECT 1 FROM leads WHERE phone = $1 FOR UPDATE", lead_phone)
+                has_primary = await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM lead_photos WHERE lead_phone = $1 AND is_primary = true)",
+                    lead_phone,
+                )
+                await conn.execute(
+                    "INSERT INTO lead_photos "
+                    "(lead_phone, channel, storage_url, storage_path, vision_analyzed, "
+                    " vision_analysis, vision_verdict, vision_reasons, received_at, analyzed_at, is_primary) "
+                    "VALUES ($1, $2, $3, $4, true, $5, $6, $7, now(), now(), $8)",
+                    lead_phone, channel, storage_url, storage_path,
+                    analysis or {}, verdict, reasons or [], not has_primary,
+                )
+    except Exception:
+        logger.exception("save_photo failed: lead_phone=%s", lead_phone)
+        raise
+
+
+async def mark_photo_received(phone: str, received: bool) -> None:
+    """Отметить leads.photo_received (флаг «фото прислано и одобрено»)."""
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET photo_received = $2, updated_at = now() WHERE phone = $1",
+            phone, received,
+        )
+    except Exception:
+        logger.exception("mark_photo_received failed: phone=%s", phone)
+        raise
+
+
+async def count_recent_photos(phone: str, hours: int = 1) -> int:
+    """Сколько фото прислал лид за последние N часов (флуд-защита)."""
+    try:
+        return await _get_pool().fetchval(
+            "SELECT count(*) FROM lead_photos "
+            "WHERE lead_phone = $1 AND received_at > now() - make_interval(hours => $2)",
+            phone, hours,
+        )
+    except Exception:
+        logger.exception("count_recent_photos failed: phone=%s", phone)
+        raise
+
+
 async def get_scenario_title(scenario_id) -> str | None:
     """Заголовок сценария по id (для reason при блокировке). None если нет/невалидный id."""
     if not isinstance(scenario_id, int):

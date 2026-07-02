@@ -15,6 +15,7 @@ import db
 import escalation
 import filters
 import sender
+import vision
 from config import settings
 from debounce import Debouncer
 from normalize import normalize_wazzup_message
@@ -157,6 +158,10 @@ async def lifespan(app: FastAPI):
         await db.init_pool()
     else:
         logger.warning("SUPABASE_DB_DSN не задан — БД не подключена")
+    # Прогрев кэшей промптов (синхронное чтение файлов) — чтобы не блокировать event
+    # loop на первом запросе под нагрузкой.
+    ai.load_system_prompt()
+    vision.load_vision_prompt()
     debouncer = Debouncer(_process_burst, delay=4.0, max_wait=15.0)
     yield
     if debouncer is not None:
