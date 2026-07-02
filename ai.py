@@ -218,7 +218,17 @@ async def _call_openai(user_context: str) -> dict:
             },
         )
         r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"]
+        data = r.json()
+        content = data["choices"][0]["message"]["content"]
+    # Расход токенов — для мониторинга стоимости. cached_tokens: часть prompt,
+    # покрытая prompt-кэшем OpenAI (дешевле в 4 раза) — почти весь system prompt.
+    usage = data.get("usage") or {}
+    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+    logger.info(
+        "OpenAI usage: prompt=%s (cached=%s) completion=%s total=%s",
+        usage.get("prompt_tokens"), cached,
+        usage.get("completion_tokens"), usage.get("total_tokens"),
+    )
     return json.loads(content)
 
 
