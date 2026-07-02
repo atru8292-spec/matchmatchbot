@@ -397,6 +397,8 @@ class TestProcessBurst:
                 "extracted": {}, "needs_escalation": False, "used_scenario_id": 1,
             }),
         )
+        # sender.send мокаем чтобы не было реального asyncio.sleep внутри
+        monkeypatch.setattr(main.sender, "send", AsyncMock(return_value=1))
 
         await main._process_burst("wa_521000000000")
 
@@ -433,6 +435,8 @@ class TestProcessBurst:
                 "extracted": {}, "needs_escalation": False, "used_scenario_id": 1,
             }),
         )
+        # sender.send мокаем чтобы не было реального asyncio.sleep внутри
+        monkeypatch.setattr(main.sender, "send", AsyncMock(return_value=1))
 
         await main._process_burst("wa_999")
 
@@ -467,6 +471,8 @@ class TestProcessBurst:
                 "extracted": {}, "needs_escalation": False, "used_scenario_id": 1,
             }),
         )
+        # sender.send мокаем чтобы не было реального asyncio.sleep внутри
+        monkeypatch.setattr(main.sender, "send", AsyncMock(return_value=1))
 
         with caplog.at_level(logging.INFO, logger="matchmatch"):
             await main._process_burst("wa_521000000001")
@@ -726,8 +732,8 @@ class TestRunAI:
         monkeypatch.setattr(db, "block_lead", block_mock)
         title_mock = AsyncMock(return_value=None)
         monkeypatch.setattr(db, "get_scenario_title", title_mock)
-        send_mock = MagicMock()
-        monkeypatch.setattr(main, "_send_stub", send_mock)
+        send_mock = AsyncMock(return_value=1)
+        monkeypatch.setattr(main.sender, "send", send_mock)
         return gen_mock, update_mock, funnel_mock, block_mock, title_mock, send_mock
 
     # --- 1. respond + extracted → update_lead_fields вызван ---
@@ -746,7 +752,7 @@ class TestRunAI:
 
         update_mock.assert_awaited_once_with("wa_test", age=40)
         funnel_mock.assert_awaited_once()
-        send_mock.assert_called_once()
+        send_mock.assert_awaited_once()
         block_mock.assert_not_awaited()
 
     # --- 2. respond без extracted → update_lead_fields НЕ вызван ---
@@ -801,7 +807,7 @@ class TestRunAI:
         # escort НЕ передаётся → по умолчанию False внутри db.block_lead
         assert "escort" not in (block_mock.call_args.kwargs or {})
         funnel_mock.assert_not_awaited()
-        send_mock.assert_called_once()
+        send_mock.assert_awaited_once()
 
     # --- 5. block с scenario_id=None и title=None → reason="AI-блок по сценарию" ---
 
@@ -842,7 +848,7 @@ class TestRunAI:
         with caplog.at_level(logging.INFO):
             await main._run_ai("wa_esc", {}, "quiero más info")
 
-        send_mock.assert_called_once_with("wa_esc", ["Te contactaré"])
+        send_mock.assert_awaited_once_with("wa_esc", ["Te contactaré"])
         block_mock.assert_not_awaited()
         # _run_ai логирует "escalate" + "TODO-алерт Ане"
         assert "escalate" in caplog.text.lower() or "Ане" in caplog.text
@@ -865,7 +871,7 @@ class TestRunAI:
 
         # несмотря на падение update_lead_fields, дальнейший action отрабатывает
         funnel_mock.assert_awaited_once()
-        send_mock.assert_called_once()
+        send_mock.assert_awaited_once()
         block_mock.assert_not_awaited()
 
     # --- 8. rejected ветка _apply_decision: set_funnel_stage("rejected") И _run_ai вызван ---
@@ -878,7 +884,7 @@ class TestRunAI:
         monkeypatch.setattr(db, "update_lead_fields", AsyncMock())
         monkeypatch.setattr(db, "block_lead", AsyncMock())
         monkeypatch.setattr(db, "get_scenario_title", AsyncMock(return_value=None))
-        monkeypatch.setattr(main, "_send_stub", MagicMock())
+        monkeypatch.setattr(main.sender, "send", AsyncMock(return_value=1))
         gen_mock = AsyncMock(return_value={
             "messages": ["Lo siento"], "funnel_stage": None, "action": "respond",
             "extracted": {}, "needs_escalation": False, "used_scenario_id": None,

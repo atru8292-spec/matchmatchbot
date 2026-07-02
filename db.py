@@ -351,6 +351,23 @@ async def search_scenarios_by_vector(vector_literal: str, top_k: int = 3) -> lis
     return [dict(r) for r in rows]
 
 
+async def save_outbound(lead_phone: str, text: str, sender: str = "anna") -> None:
+    """Сохранить исходящее сообщение бота в messages (processed=true, без external_id).
+
+    НЕ бросает: сообщение уже отправлено лиду, потеря записи в БД не критична и не
+    должна прерывать отправку остальных бабблов. Ошибку логируем (единственное место).
+    """
+    try:
+        await _get_pool().execute(
+            "INSERT INTO messages (lead_phone, direction, sender, text, processed, processed_at) "
+            "VALUES ($1, 'outbound', $2, $3, true, now())",
+            lead_phone, sender, text,
+        )
+    except Exception:
+        logger.exception("save_outbound failed (сообщение отправлено, запись не сохранена): "
+                         "lead_phone=%s", lead_phone)
+
+
 async def get_scenario_title(scenario_id) -> str | None:
     """Заголовок сценария по id (для reason при блокировке). None если нет/невалидный id."""
     if not isinstance(scenario_id, int):

@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 import ai
 import db
 import filters
+import sender
 from config import settings
 from debounce import Debouncer
 from normalize import normalize_wazzup_message
@@ -111,10 +112,11 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
     if action == "block":
         # AI-блок через fixed-сценарий. reason из сценария (за что), без escort-инкремента
         # (escort-счётчик ведёт filters). block_lead сам ставит стадию 'lost' в транзакции.
+        # Порядок: сначала block (гарантирован), потом прощальное сообщение.
         title = await db.get_scenario_title(result["used_scenario_id"])
         reason = f"AI: {title}" if title else "AI-блок по сценарию"
         await db.block_lead(phone, reason)
-        _send_stub(phone, messages)  # прощальное сообщение лиду
+        await sender.send(phone, messages)  # прощальное сообщение лиду
         logger.info("AI block [%s]: %s (scenario=%s) | TODO-алерт Ане",
                     phone, reason, result["used_scenario_id"])
         return
@@ -124,7 +126,7 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
         await db.set_funnel_stage(phone, result["funnel_stage"],
                                   meta={"scenario_id": result["used_scenario_id"]})
 
-    _send_stub(phone, messages)  # messages лиду (реальная отправка — блок 7)
+    await sender.send(phone, messages)  # messages лиду
     if action == "escalate":
         # НЕ молчаливо: лид получил messages, плюс поднимаем флаг Ане.
         logger.info("AI escalate [%s] (scenario=%s) | TODO-алерт Ане (сообщения лиду отправлены)",
@@ -132,15 +134,6 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
     else:
         logger.info("AI respond [%s] (scenario=%s, funnel=%s)",
                     phone, result["used_scenario_id"], result["funnel_stage"])
-
-
-def _send_stub(phone: str, messages: list) -> None:
-    """Заглушка отправки (реальный sender — блок 7): логируем, что отправили бы.
-
-    TODO (блок 7): заменить на `await sender.send(phone, messages)` — НЕ забыть await
-    на всех call-site (_run_ai), иначе корутина не выполнится и лид не получит сообщений.
-    """
-    logger.info("→ отправка лиду %s (%d сообщ.): %s", phone, len(messages), messages)
 
 
 @asynccontextmanager
