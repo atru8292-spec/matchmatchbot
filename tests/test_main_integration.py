@@ -923,3 +923,112 @@ class TestRunAIFailureIsolation:
         decision = _f.Decision(action="rejected", reason="возраст")
         # не должно бросить
         await main._apply_decision("wa_y", decision, {}, "tengo 20")
+
+
+# ---------------------------------------------------------------------------
+# Часть 7: _apply_decision silent — бот молчит, ничего не вызывает
+# ---------------------------------------------------------------------------
+
+class TestApplyDecisionSilent:
+    """action='silent' → бот полностью молчит: не отвечает, не блокирует, стадию не трогает."""
+
+    async def test_silent_no_sender_send(self, monkeypatch, caplog):
+        """action='silent' → sender.send НЕ вызван."""
+        import logging
+        send_mock = AsyncMock()
+        monkeypatch.setattr(main.sender, "send", send_mock)
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(ai, "generate_reply", AsyncMock())
+
+        decision = filters.Decision(action="silent", reason="молчу — русский номер +7, не целевой регион")
+
+        with caplog.at_level(logging.INFO, logger="matchmatch"):
+            await main._apply_decision("wa_79991234567", decision, {}, "привет")
+
+        send_mock.assert_not_awaited()
+
+    async def test_silent_no_block_lead(self, monkeypatch):
+        """action='silent' → db.block_lead НЕ вызван (не блокируем, вдруг ошибка)."""
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        block_mock = AsyncMock()
+        monkeypatch.setattr(db, "block_lead", block_mock)
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(ai, "generate_reply", AsyncMock())
+
+        decision = filters.Decision(action="silent", reason="молчу — русский номер +7, не целевой регион")
+
+        await main._apply_decision("wa_79991234567", decision, {}, "привет")
+
+        block_mock.assert_not_awaited()
+
+    async def test_silent_no_set_funnel_stage(self, monkeypatch):
+        """action='silent' → db.set_funnel_stage НЕ вызван (стадию не меняем)."""
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        funnel_mock = AsyncMock()
+        monkeypatch.setattr(db, "set_funnel_stage", funnel_mock)
+        monkeypatch.setattr(ai, "generate_reply", AsyncMock())
+
+        decision = filters.Decision(action="silent", reason="молчу — кириллица/русский язык, не целевой лид")
+
+        await main._apply_decision("wa_5215551234567", decision, {}, "привет")
+
+        funnel_mock.assert_not_awaited()
+
+    async def test_silent_no_generate_reply(self, monkeypatch):
+        """action='silent' → ai.generate_reply НЕ вызван (экономия токенов)."""
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        gen_mock = AsyncMock()
+        monkeypatch.setattr(ai, "generate_reply", gen_mock)
+
+        decision = filters.Decision(action="silent", reason="молчу — русский номер +7, не целевой регион")
+
+        await main._apply_decision("wa_79991234567", decision, {}, "привет")
+
+        gen_mock.assert_not_awaited()
+
+    async def test_silent_does_not_raise(self, monkeypatch):
+        """action='silent' → функция завершается без исключения."""
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(ai, "generate_reply", AsyncMock())
+
+        decision = filters.Decision(action="silent", reason="тест")
+
+        # не должно бросать
+        await main._apply_decision("wa_79991234567", decision, {}, "привет")
+
+    async def test_silent_logs_decision(self, monkeypatch, caplog):
+        """action='silent' → в логе присутствует 'РЕШЕНИЕ silent'."""
+        import logging
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(ai, "generate_reply", AsyncMock())
+
+        decision = filters.Decision(action="silent", reason="молчу — русский номер +7, не целевой регион")
+
+        with caplog.at_level(logging.INFO, logger="matchmatch"):
+            await main._apply_decision("wa_79991234567", decision, {}, "привет")
+
+        assert "РЕШЕНИЕ silent" in caplog.text
+
+    async def test_silent_cyrillic_reason_logs(self, monkeypatch, caplog):
+        """Проверяем что reason из Decision попадает в лог (кириллица-ветка)."""
+        import logging
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(ai, "generate_reply", AsyncMock())
+
+        reason = "молчу — кириллица/русский язык, не целевой лид"
+        decision = filters.Decision(action="silent", reason=reason)
+
+        with caplog.at_level(logging.INFO, logger="matchmatch"):
+            await main._apply_decision("wa_5215551234567", decision, {}, "привет как дела")
+
+        assert "РЕШЕНИЕ silent" in caplog.text

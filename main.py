@@ -51,7 +51,7 @@ async def _process_burst(phone: str) -> None:
     # Детерминированное решение по залпу (whitelist/блок/отказ/AI).
     lead = await db.get_lead_by_phone(phone) or {}
     whitelisted = await db.is_whitelisted(phone)
-    decision = filters.decide(lead, whitelisted, combined)
+    decision = filters.decide(lead, whitelisted, combined, phone)
     await _apply_decision(phone, decision, lead, combined)
 
 
@@ -64,6 +64,12 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
         # Бот молчит; сообщение уже в истории. TODO (блок 8): алерт Ане в Telegram.
         logger.info("РЕШЕНИЕ silent_whitelist [%s]: %s | TODO-алерт Ане: 'написал %s'",
                     phone, decision.reason, name)
+        return
+
+    if decision.action == "silent":
+        # Не целевой регион/язык. Молчим, НЕ блокируем, стадию не трогаем.
+        # Сообщение уже сохранено в messages (история). AI не вызываем — экономия токенов.
+        logger.info("РЕШЕНИЕ silent [%s]: %s", phone, decision.reason)
         return
 
     if decision.action == "blocked":

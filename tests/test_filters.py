@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from filters import Decision, decide, is_aggression, is_escort_mention
+from filters import Decision, decide, is_aggression, is_escort_mention, is_russian_number, has_cyrillic
 
 
 # ===========================================================================
@@ -493,3 +493,194 @@ class TestEscortMentionPluralsAndPhrases:
     def test_sexteto_de_jazz_false(self):
         """'sexteto de jazz' — sexteto не содержит sexo как целое слово → False."""
         assert is_escort_mention("sexteto de jazz") is False
+
+
+# ===========================================================================
+# Тесты нового фильтра "silent" — русский номер (+7) и кириллица
+# ===========================================================================
+
+
+class TestIsRussianNumber:
+    """is_russian_number — только wa_7... считается русским/казахским."""
+
+    def test_russian_mobile_true(self):
+        """wa_79991234567 — очевидный РФ номер → True."""
+        assert is_russian_number("wa_79991234567") is True
+
+    def test_kazakhstan_7_true(self):
+        """wa_77012345678 — Казахстан тоже +7 → True (не целевой регион)."""
+        assert is_russian_number("wa_77012345678") is True
+
+    def test_mexico_52_false(self):
+        """wa_5215551234567 — Мексика +52, не +7 → False."""
+        assert is_russian_number("wa_5215551234567") is False
+
+    def test_mexico_52_with_7_inside_false(self):
+        """wa_5271234567 — начинается на wa_52, цифра 7 внутри не считается → False."""
+        assert is_russian_number("wa_5271234567") is False
+
+    def test_empty_string_false(self):
+        """Пустая строка → False."""
+        assert is_russian_number("") is False
+
+    def test_short_wa_1234_false(self):
+        """wa_1234 — начинается на wa_1, не wa_7 → False."""
+        assert is_russian_number("wa_1234") is False
+
+    def test_none_safe(self):
+        """None передан как phone (совместимость) → False, без исключения."""
+        assert is_russian_number(None) is False  # type: ignore[arg-type]
+
+    def test_us_number_false(self):
+        """wa_15555550100 — США +1 → False."""
+        assert is_russian_number("wa_15555550100") is False
+
+
+class TestHasCyrillic:
+    """has_cyrillic — кириллические символы в тексте."""
+
+    def test_pure_russian_true(self):
+        """привет — только кириллица → True."""
+        assert has_cyrillic("привет") is True
+
+    def test_pure_latin_false(self):
+        """hola — только латиница → False."""
+        assert has_cyrillic("hola") is False
+
+    def test_mixed_cyrillic_latin_true(self):
+        """спасибо guapo — смесь, есть кириллица → True."""
+        assert has_cyrillic("спасибо guapo") is True
+
+    def test_empty_string_false(self):
+        """Пустая строка → False."""
+        assert has_cyrillic("") is False
+
+    def test_digits_special_chars_false(self):
+        """123 !!! — только цифры и спецсимволы, кириллицы нет → False."""
+        assert has_cyrillic("123 !!!") is False
+
+    def test_capital_cyrillic_true(self):
+        """ПРИВЕТ — заглавные кириллические → True."""
+        assert has_cyrillic("ПРИВЕТ") is True
+
+    def test_yo_letter_true(self):
+        """Буква ё входит в [а-яёА-ЯЁ] → True."""
+        assert has_cyrillic("ёлка") is True
+
+    def test_none_safe(self):
+        """None → False, без исключения."""
+        assert has_cyrillic(None) is False  # type: ignore[arg-type]
+
+
+class TestDecideSilentByPhone:
+    """decide: русский номер (+7) → action='silent' независимо от текста."""
+
+    def test_russian_phone_hola_silent(self):
+        """Русский номер, испанский текст → всё равно silent (номер проверяется первым)."""
+        d = decide({}, False, "hola", "wa_79991234567")
+        assert d.action == "silent"
+
+    def test_silent_no_alert_manager(self):
+        """silent → alert_manager=False (Аню не беспокоим)."""
+        d = decide({}, False, "hola", "wa_79991234567")
+        assert d.alert_manager is False
+
+    def test_silent_no_block_permanent(self):
+        """silent → block_permanent=False (не дисквалификация, вдруг ошибка)."""
+        d = decide({}, False, "hola", "wa_79991234567")
+        assert d.block_permanent is False
+
+    def test_silent_no_is_escort(self):
+        """silent → is_escort=False."""
+        d = decide({}, False, "hola", "wa_79991234567")
+        assert d.is_escort is False
+
+    def test_silent_reason_not_empty(self):
+        """silent → reason содержит пояснение (не пустая строка)."""
+        d = decide({}, False, "hola", "wa_79991234567")
+        assert d.reason  # непустая строка
+
+
+class TestDecideSilentByCyrillic:
+    """decide: кириллица в тексте → action='silent'."""
+
+    def test_cyrillic_text_any_phone_silent(self):
+        """Кириллица + мексиканский номер → silent (текст нецелевой)."""
+        d = decide({}, False, "привет как estas", "wa_5215551234567")
+        assert d.action == "silent"
+
+    def test_cyrillic_text_no_phone_silent(self):
+        """phone дефолт '' (совместимость) + кириллица → silent."""
+        d = decide({}, False, "привет")
+        assert d.action == "silent"
+
+    def test_cyrillic_mixed_text_silent(self):
+        """Смешанный текст с кириллицей → silent."""
+        d = decide({}, False, "hola меня зовут Ivan")
+        assert d.action == "silent"
+
+
+class TestDecideSilentPriority:
+    """Проверка приоритета: whitelist/DNC/manual > silent."""
+
+    def test_whitelist_before_silent_russian_phone(self):
+        """Whitelist + русский номер + кириллица → silent_whitelist, НЕ silent."""
+        d = decide({}, True, "привет", "wa_79991234567")
+        assert d.action == "silent_whitelist"
+        assert d.alert_manager is True
+
+    def test_do_not_contact_before_silent(self):
+        """do_not_contact=True + русский номер + кириллица → silent_whitelist, НЕ silent."""
+        d = decide({"do_not_contact": True}, False, "привет", "wa_79991234567")
+        assert d.action == "silent_whitelist"
+
+    def test_whitelist_before_silent_cyrillic_only(self):
+        """Whitelist + кириллица (нейтральный номер) → silent_whitelist."""
+        d = decide({}, True, "привет как дела", "wa_5215551234567")
+        assert d.action == "silent_whitelist"
+
+    def test_escort_after_silent_not_triggered_on_russian_phone(self):
+        """Русский номер → silent ДО escort-проверки (escort не выполняется)."""
+        d = decide({}, False, "busco sexo", "wa_79991234567")
+        # порядок: silent раньше escort → action='silent', не 'blocked'
+        assert d.action == "silent"
+
+    def test_escort_after_silent_not_triggered_on_cyrillic(self):
+        """Кириллица → silent ДО escort-проверки."""
+        d = decide({}, False, "ищу sexo", "wa_5215551234567")
+        assert d.action == "silent"
+
+
+class TestDecideSilentRegression:
+    """Регрессия: фильтр silent не ломает нормальную логику на мексиканских номерах."""
+
+    def test_mexico_spanish_text_needs_ai(self):
+        """Мексиканский номер + испанский текст без кириллицы → needs_ai (не silent)."""
+        d = decide({}, False, "hola quiero informacion", "wa_5215551234567")
+        assert d.action == "needs_ai"
+
+    def test_mexico_escort_text_blocked(self):
+        """Мексиканский номер + escort-текст → blocked (не silent, silent не должен перехватить)."""
+        d = decide({}, False, "busco sexo", "wa_5215551234567")
+        assert d.action == "blocked"
+        assert d.is_escort is True
+
+    def test_mexico_young_age_rejected(self):
+        """Мексиканский номер + age=24 + испанский текст → rejected (age-фильтр работает)."""
+        d = decide({"age": 24}, False, "hola", "wa_5215551234567")
+        assert d.action == "rejected"
+
+    def test_mexico_old_age_rejected(self):
+        """Мексиканский номер + age=70 → rejected (MAX_AGE=65)."""
+        d = decide({"age": 70}, False, "hola", "wa_5215551234567")
+        assert d.action == "rejected"
+
+    def test_no_phone_spanish_text_needs_ai(self):
+        """phone не передан (дефолт '') + испанский текст → needs_ai (обратная совместимость)."""
+        d = decide({}, False, "hola quiero informacion")
+        assert d.action == "needs_ai"
+
+    def test_aggression_mexico_blocked(self):
+        """Мексиканский номер + агрессия → blocked (aggressive-фильтр работает)."""
+        d = decide({}, False, "idiota", "wa_5215551234567")
+        assert d.action == "blocked"

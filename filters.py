@@ -27,12 +27,14 @@ _AGGRESSION_RE = re.compile(
     r"\b(idiota|est[uú]pid[oa]|pendej\w*|mierda|cabr[oó]n|est[aá]fa|estafador\w*|fraude)\b",
     re.IGNORECASE,
 )
+# Кириллица — признак нецелевого лида (агентство работает с мексиканцами по-испански).
+_CYRILLIC_RE = re.compile(r"[а-яёА-ЯЁ]")
 
 
 @dataclass(frozen=True)
 class Decision:
     """Результат детерминированного решения по залпу лида."""
-    action: str                 # respond | silent_whitelist | blocked | rejected | needs_ai
+    action: str                 # respond | silent_whitelist | silent | blocked | rejected | needs_ai
     reason: str                 # краткая причина (для лога/алерта/эскалации)
     alert_manager: bool = False # нужно ли уведомить Аню (сам алерт — блок 8)
     block_permanent: bool = False  # блок навсегда (do_not_contact + manual надолго)
@@ -47,6 +49,20 @@ def is_escort_mention(text: str) -> bool:
 def is_aggression(text: str) -> bool:
     """Явная агрессия/оскорбление."""
     return bool(_AGGRESSION_RE.search(text or ""))
+
+
+def is_russian_number(phone: str) -> bool:
+    """Номер с кодом страны +7 (Россия/Казахстан) — не целевой регион.
+
+    Код +7 однозначный: только он начинается с 7 (нет других кодов стран на 7).
+    Мексика — wa_52, поэтому wa_7... надёжно отделяется от других префиксов.
+    """
+    return (phone or "").startswith("wa_7")
+
+
+def has_cyrillic(text: str) -> bool:
+    """Текст содержит кириллицу (русский язык) — не целевой лид."""
+    return bool(_CYRILLIC_RE.search(text or ""))
 
 
 def _manual_active(lead: dict) -> bool:
@@ -68,10 +84,11 @@ def _manual_active(lead: dict) -> bool:
         return True
 
 
-def decide(lead: dict, is_whitelisted: bool, user_text: str) -> Decision:
+def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "") -> Decision:
     """Принять детерминированное решение по лиду и склеенному тексту залпа.
 
     lead — строка leads (dict) или {} для нового. Порядок приоритетов фиксирован.
+    phone — 'wa_<digits>' (для проверки региона); по умолчанию '' (совместимость).
     """
     lead = lead or {}
     text = user_text or ""
@@ -84,6 +101,13 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str) -> Decision:
         return Decision("silent_whitelist", f"do_not_contact: {name}", alert_manager=True)
     if _manual_active(lead):
         return Decision("silent_whitelist", f"manual mode: менеджер ведёт {name}", alert_manager=True)
+
+    # 1.5) Не целевой регион/язык (русский номер +7 или кириллица) → тихо молчим.
+    #      НЕ блокируем (не дисквалификация, вдруг ошибка) — просто не тратим AI-вызов.
+    if is_russian_number(phone):
+        return Decision("silent", "молчу — русский номер +7, не целевой регион")
+    if has_cyrillic(text):
+        return Decision("silent", "молчу — кириллица/русский язык, не целевой лид")
 
     # 2) Escort/секс-услуги → блок навсегда (с ПЕРВОГО упоминания).
     if is_escort_mention(text):
