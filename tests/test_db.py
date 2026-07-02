@@ -852,3 +852,28 @@ class TestSetFunnelStage:
         assert any("make_interval" in sql for sql in all_sql), (
             f"Ожидали make_interval в SQL для qualified, вызовы: {all_sql}"
         )
+
+
+class TestSearchScenariosByVector:
+    """RAG-запрос по эмбеддингу: cosine, исключение scheduled, top_k."""
+
+    async def test_sql_excludes_scheduled_and_uses_cosine(self, pool):
+        pool.fetch.return_value = [{"id": 1, "template_es": "x", "mode": "bot_auto",
+                                    "ai_allowed": True, "blocks_lead": False, "score": 0.7}]
+        res = await db.search_scenarios_by_vector("[0.1,0.2]", top_k=3)
+        sql, *params = pool.fetch.call_args.args
+        # служебные исключены
+        assert "trigger_type IS DISTINCT FROM 'scheduled'" in sql
+        # косинус + только активные с эмбеддингом
+        assert "embedding <=> $1::vector" in sql
+        assert "is_active = true" in sql
+        assert "embedding IS NOT NULL" in sql
+        # параметры: вектор $1, top_k $2
+        assert params[0] == "[0.1,0.2]"
+        assert params[1] == 3
+        assert isinstance(res, list) and res[0]["id"] == 1
+
+    async def test_returns_list_of_dicts(self, pool):
+        pool.fetch.return_value = []
+        res = await db.search_scenarios_by_vector("[0.1]")
+        assert res == []

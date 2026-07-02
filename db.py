@@ -335,10 +335,13 @@ async def search_scenarios_by_vector(vector_literal: str, top_k: int = 3) -> lis
     vector_literal — эмбеддинг запроса в формате '[..]'. score = 1 - cosine_distance.
     """
     try:
+        # trigger_type IS DISTINCT FROM 'scheduled' — исключаем служебные исходящие
+        # сценарии (утренние/фоллоу-ап по таймеру), их берёт планировщик отдельно.
         rows = await _get_pool().fetch(
             "SELECT id, template_es, mode, ai_allowed, blocks_lead, "
             "1 - (embedding <=> $1::vector) AS score "
             "FROM scenarios WHERE embedding IS NOT NULL AND is_active = true "
+            "AND trigger_type IS DISTINCT FROM 'scheduled' "
             "ORDER BY embedding <=> $1::vector LIMIT $2",
             vector_literal, top_k,
         )
