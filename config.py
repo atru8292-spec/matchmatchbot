@@ -32,5 +32,11 @@ class Settings(BaseSettings):
     # Пусто → БД не подключается (пул не создаётся), сервис работает без БД.
     supabase_db_dsn: str = ""
 
+    # ===== OpenAI (блок 6) =====
+    openai_api_key: str = ""
+    openai_chat_model: str = "gpt-4.1"
+    openai_embedding_model: str = "text-embedding-3-small"
+    openai_temperature: float = 0.3
+
 
 settings = Settings()
