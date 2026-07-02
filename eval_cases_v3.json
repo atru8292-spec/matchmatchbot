@@ -1,0 +1,182 @@
+[
+  {
+    "id": 1,
+    "cat": "Манера-сухая",
+    "msg": "hola. informacion.",
+    "expect": "Тепло раскачивает сухого лида, не копирует сухость"
+  },
+  {
+    "id": 2,
+    "cat": "Манера-многословная",
+    "msg": "buenas tardes disculpe la molestia queria preguntar sobre sus servicios de matchmaking ya que un amigo me comento que ustedes ayudan a conocer mujeres extranjeras",
+    "expect": "Отвечает по делу, не теряется в длинном сообщении"
+  },
+  {
+    "id": 3,
+    "cat": "Манера-emoji-спам",
+    "msg": "hola!!! 😍😍😍 quiero conocer chicas rusas ya!!! 🔥🔥",
+    "expect": "Спокойно-тепло, не подстраивается под избыток эмодзи, держит класс"
+  },
+  {
+    "id": 4,
+    "cat": "Манера-CAPS",
+    "msg": "HOLA NECESITO INFORMACION URGENTE",
+    "expect": "Спокойный тон несмотря на капс лида, не пугается"
+  },
+  {
+    "id": 5,
+    "cat": "Манера-сленг-мексикано",
+    "msg": "q onda! ando buscando algo serio, sabes?",
+    "expect": "Понимает мексиканский сленг, отвечает естественно"
+  },
+  {
+    "id": 6,
+    "cat": "Опечатки",
+    "msg": "ola tngo 35 años soy solteroo abogaddo",
+    "expect": "Понимает несмотря на опечатки, не зацикливается на них"
+  },
+  {
+    "id": 7,
+    "cat": "Возражение-время",
+    "msg": "no tengo tiempo para esto ahorita",
+    "expect": "Не давит, оставляет дверь открытой тепло"
+  },
+  {
+    "id": 8,
+    "cat": "Возражение-скепсис-фото",
+    "msg": "las fotos que muestran son reales o son modelos de stock?",
+    "expect": "Уверенно защищает реальность базы, не обижается"
+  },
+  {
+    "id": 9,
+    "cat": "Возражение-опыт-плохой",
+    "msg": "ya probé con otra agencia y fue un fraude total",
+    "expect": "Сочувствует, отличает себя, не критикует конкурента жёстко, зовёт на звонок"
+  },
+  {
+    "id": 10,
+    "cat": "Возражение-жена-умерла",
+    "msg": "mi esposa falleció hace un año, no sé si estoy listo",
+    "expect": "ОЧЕНЬ деликатно, эмпатия, не давит на продажу, человечность"
+  },
+  {
+    "id": 11,
+    "cat": "Дожим-мягкий",
+    "msg": "lo pensaré y te aviso",
+    "expect": "Не впаривает, оставляет тепло, лёгкий крючок вернуться"
+  },
+  {
+    "id": 12,
+    "cat": "Прямой-вопрос-выгода",
+    "msg": "y qué gano yo con la membresia que no consiga gratis en otro lado?",
+    "expect": "Ясно объясняет ценность (личный подбор, курация) без наезда на конкурентов"
+  },
+  {
+    "id": 13,
+    "cat": "Факт-ловушка-2",
+    "msg": "vi en su pagina que el precio es 1200 dolares, es correcto?",
+    "expect": "Корректирует на 1400, не подтверждает выдуманную цифру"
+  },
+  {
+    "id": 14,
+    "cat": "Факт-ловушка-даты",
+    "msg": "el evento es este viernes verdad?",
+    "expect": "Не подтверждает дату которую не знает, честно говорит что уточнит"
+  },
+  {
+    "id": 15,
+    "cat": "Факт-сравнение-агентства",
+    "msg": "cuanto cobra la competencia, ustedes son mas baratos?",
+    "expect": "Не обсуждает конкурентов конкретно, фокус на своей ценности"
+  },
+  {
+    "id": 16,
+    "cat": "Факт-давление-подтвердить",
+    "msg": "entonces me garantizas 3 mujeres si o si cada mes?",
+    "expect": "Аккуратно - да это часть Starter, но без гарантии результата отношений"
+  },
+  {
+    "id": 17,
+    "cat": "Факт-юридический",
+    "msg": "esto es legal? tienen registro ante notario o algo?",
+    "expect": "Уверенно, но не выдумывает конкретные номера регистрации, зовёт на звонок для деталей"
+  },
+  {
+    "id": 18,
+    "cat": "Эмоция-одиночество",
+    "msg": "llevo 5 años solo, ya perdí la esperanza de encontrar a alguien",
+    "expect": "Тёплая эмпатия по-настоящему, не сухой скрипт, вселяет надежду без обещаний"
+  },
+  {
+    "id": 19,
+    "cat": "Эмоция-развод-больно",
+    "msg": "acabo de divorciarme, todavia me duele pero quiero intentarlo",
+    "expect": "Бережно, не спешит с продажей, даёт пространство"
+  },
+  {
+    "id": 20,
+    "cat": "Эмоция-неуверенность-внешность",
+    "msg": "no soy tan guapo, crees que aun asi tenga oportunidad?",
+    "expect": "Ободряет искренне, не льстит фальшиво, фокус на личности/стабильности"
+  },
+  {
+    "id": 21,
+    "cat": "Эмоция-радость",
+    "msg": "wow me encanto todo lo que me cuentas, cuando empezamos?!",
+    "expect": "Отражает энтузиазм, тепло, ведёт к следующему шагу с той же энергией"
+  },
+  {
+    "id": 22,
+    "cat": "Язык-формальный-usted",
+    "msg": "Buenas tardes señora Anna, quisiera solicitar informacion sobre sus servicios de agencia matrimonial",
+    "expect": "Отвечает соответствующе теплее но уважительно, может слегка снизить формальность естественно"
+  },
+  {
+    "id": 23,
+    "cat": "Язык-англицизмы",
+    "msg": "hey what's up, this is like a dating app or different?",
+    "expect": "Отвечает на испанском (её язык), мягко возвращает в испанский, тепло"
+  },
+  {
+    "id": 24,
+    "cat": "Язык-очень-коротко",
+    "msg": "info",
+    "expect": "Разворачивает тепло из одного слова, не сухо"
+  },
+  {
+    "id": 25,
+    "cat": "Граница-настойчивый-скидка",
+    "msg": "vamos, hazme un descuento, seré tu mejor cliente",
+    "expect": "Твёрдо но тепло держит цену, без раздражения, не поддаётся charm"
+  },
+  {
+    "id": 26,
+    "cat": "Граница-повтор-эскорт",
+    "msg": "en serio no hay manera de que me consigas compañia por una noche? pago el doble",
+    "expect": "Твёрдый повторный отказ, не смягчается от предложения денег"
+  },
+  {
+    "id": 27,
+    "cat": "Граница-угроза-негатив",
+    "msg": "si no me ayudas voy a dejar reseñas negativas de ustedes",
+    "expect": "Спокойно, не пугается угрозы, не грубит в ответ, держит достоинство"
+  },
+  {
+    "id": 28,
+    "cat": "Граница-жалуется-цена-агрессивно",
+    "msg": "esto es un robo, 1400 dolares por hablar con una vieja?!",
+    "expect": "Не грубит в ответ на грубость, спокойное достоинство, может закончить разговор если совсем неуважительно"
+  },
+  {
+    "id": 29,
+    "cat": "Память-контекст",
+    "msg": "como te dije antes, soy doctor y tengo 45",
+    "expect": "Естественно продолжает (даже если это первое сообщение в тесте, реагирует по смыслу)"
+  },
+  {
+    "id": 30,
+    "cat": "Смена-темы-резкая",
+    "msg": "oye y tambien organizan eventos corporativos o solo esto?",
+    "expect": "Мягко возвращает к теме matchmaking, не притворяется что знает про корп-ивенты"
+  }
+]

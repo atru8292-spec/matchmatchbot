@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response
 
+import ai
 import db
 import filters
 from config import settings
@@ -50,11 +51,12 @@ async def _process_burst(phone: str) -> None:
     lead = await db.get_lead_by_phone(phone) or {}
     whitelisted = await db.is_whitelisted(phone)
     decision = filters.decide(lead, whitelisted, combined)
-    await _apply_decision(phone, decision, lead)
+    await _apply_decision(phone, decision, lead, combined)
 
 
-async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict) -> None:
-    """Выполнить решение filters.decide. AI-ветки пока — заглушки (блок 6)."""
+async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
+                          combined: str) -> None:
+    """Выполнить решение filters.decide. needs_ai → реальный вызов AI (ai.py)."""
     name = lead.get("whatsapp_name") or lead.get("name") or phone
 
     if decision.action == "silent_whitelist":
@@ -70,15 +72,75 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict) 
         logger.info("РЕШЕНИЕ blocked [%s]: %s | TODO-алерт Ане", phone, decision.reason)
         return
 
-    if decision.action == "rejected":
-        # Не прошёл жёсткий фильтр. Текст вежливого отказа сформирует AI (блок 6).
-        await db.set_funnel_stage(phone, "rejected", meta={"reason": decision.reason})
-        logger.info("РЕШЕНИЕ rejected [%s]: %s | TODO: вежливый отказ (AI, блок 6)",
-                    phone, decision.reason)
+    # rejected и needs_ai → AI-ядро. Оборачиваем в try/except: сообщения залпа уже
+    # помечены processed до этой точки, поэтому падение AI/БД здесь = тихая потеря
+    # ответа (повтора не будет). Ловим, логируем; алерт Ане навесит блок 8.
+    if decision.action in ("rejected", "needs_ai"):
+        try:
+            if decision.action == "rejected":
+                # не прошёл жёсткий фильтр по известным полям; текст отказа сформирует AI
+                await db.set_funnel_stage(phone, "rejected", meta={"reason": decision.reason})
+                logger.info("РЕШЕНИЕ rejected [%s]: %s", phone, decision.reason)
+            await _run_ai(phone, lead, combined)
+        except Exception:
+            logger.exception(
+                "обработка AI упала [%s] — лид без ответа, сообщения уже processed. "
+                "TODO (блок 8): алерт Ане", phone,
+            )
         return
 
-    # needs_ai / respond — пока заглушка, в блоке 6 здесь будет вызов AI.
-    logger.info("РЕШЕНИЕ %s [%s]: %s | → AI (блок 6)", decision.action, phone, decision.reason)
+    logger.warning("неизвестное решение %s [%s]", decision.action, phone)
+
+
+async def _run_ai(phone: str, lead: dict, combined: str) -> None:
+    """Сгенерировать и применить ответ AI: extracted → стадия → action → отправка."""
+    history = await db.get_conversation_history(phone, 30)
+    result = await ai.generate_reply(lead, history, combined)
+
+    # 1. Извлечённые поля лида (age/profession/is_single/city/interest) — уже
+    #    провалидированы в ai (только реальные непустые поля из whitelist LEAD_COLUMNS).
+    if result["extracted"]:
+        try:
+            await db.update_lead_fields(phone, **result["extracted"])
+        except Exception:
+            logger.exception("не смог обновить extracted для %s: %s", phone, result["extracted"])
+
+    action = result["action"]
+    messages = result["messages"]
+
+    if action == "block":
+        # AI-блок через fixed-сценарий. reason из сценария (за что), без escort-инкремента
+        # (escort-счётчик ведёт filters). block_lead сам ставит стадию 'lost' в транзакции.
+        title = await db.get_scenario_title(result["used_scenario_id"])
+        reason = f"AI: {title}" if title else "AI-блок по сценарию"
+        await db.block_lead(phone, reason)
+        _send_stub(phone, messages)  # прощальное сообщение лиду
+        logger.info("AI block [%s]: %s (scenario=%s) | TODO-алерт Ане",
+                    phone, reason, result["used_scenario_id"])
+        return
+
+    # respond / escalate — стадию ставит AI (если вернул валидную).
+    if result["funnel_stage"]:
+        await db.set_funnel_stage(phone, result["funnel_stage"],
+                                  meta={"scenario_id": result["used_scenario_id"]})
+
+    _send_stub(phone, messages)  # messages лиду (реальная отправка — блок 7)
+    if action == "escalate":
+        # НЕ молчаливо: лид получил messages, плюс поднимаем флаг Ане.
+        logger.info("AI escalate [%s] (scenario=%s) | TODO-алерт Ане (сообщения лиду отправлены)",
+                    phone, result["used_scenario_id"])
+    else:
+        logger.info("AI respond [%s] (scenario=%s, funnel=%s)",
+                    phone, result["used_scenario_id"], result["funnel_stage"])
+
+
+def _send_stub(phone: str, messages: list) -> None:
+    """Заглушка отправки (реальный sender — блок 7): логируем, что отправили бы.
+
+    TODO (блок 7): заменить на `await sender.send(phone, messages)` — НЕ забыть await
+    на всех call-site (_run_ai), иначе корутина не выполнится и лид не получит сообщений.
+    """
+    logger.info("→ отправка лиду %s (%d сообщ.): %s", phone, len(messages), messages)
 
 
 @asynccontextmanager

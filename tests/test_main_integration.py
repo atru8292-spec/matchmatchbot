@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+import ai
 import db
 import filters
 import main
@@ -387,6 +388,15 @@ class TestProcessBurst:
             AsyncMock(return_value={"whatsapp_name": "Test", "age": 35, "is_single": True}),
         )
         monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(
+            ai, "generate_reply",
+            AsyncMock(return_value={
+                "messages": ["ok"], "funnel_stage": None, "action": "respond",
+                "extracted": {}, "needs_escalation": False, "used_scenario_id": 1,
+            }),
+        )
 
         await main._process_burst("wa_521000000000")
 
@@ -414,6 +424,15 @@ class TestProcessBurst:
             AsyncMock(return_value={"whatsapp_name": "Test", "age": 35, "is_single": True}),
         )
         monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(
+            ai, "generate_reply",
+            AsyncMock(return_value={
+                "messages": ["ok"], "funnel_stage": None, "action": "respond",
+                "extracted": {}, "needs_escalation": False, "used_scenario_id": 1,
+            }),
+        )
 
         await main._process_burst("wa_999")
 
@@ -439,6 +458,15 @@ class TestProcessBurst:
             AsyncMock(return_value={"whatsapp_name": "Test", "age": 35, "is_single": True}),
         )
         monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(
+            ai, "generate_reply",
+            AsyncMock(return_value={
+                "messages": ["ok"], "funnel_stage": None, "action": "respond",
+                "extracted": {}, "needs_escalation": False, "used_scenario_id": 1,
+            }),
+        )
 
         with caplog.at_level(logging.INFO, logger="matchmatch"):
             await main._process_burst("wa_521000000001")
@@ -628,7 +656,7 @@ class TestApplyDecisionBlocked:
         )
         lead = {}
 
-        await main._apply_decision(phone, decision, lead)
+        await main._apply_decision(phone, decision, lead, "текст")
 
         block_mock.assert_awaited_once_with(phone, decision.reason, escort=True)
         set_funnel_mock.assert_not_awaited()
@@ -647,7 +675,7 @@ class TestApplyDecisionBlocked:
         )
         lead = {}
 
-        await main._apply_decision(phone, decision, lead)
+        await main._apply_decision(phone, decision, lead, "текст")
 
         block_mock.assert_awaited_once_with(phone, decision.reason, escort=False)
         set_funnel_mock.assert_not_awaited()
@@ -663,5 +691,229 @@ class TestApplyDecisionBlocked:
             decision = filters.Decision(
                 action="blocked", reason="тест", is_escort=is_escort,
             )
-            await main._apply_decision("wa_777", decision, {})
+            await main._apply_decision("wa_777", decision, {}, "текст")
             set_funnel_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Часть 6: TestRunAI — прямые async-тесты main._run_ai
+# ---------------------------------------------------------------------------
+
+class TestRunAI:
+    """Юнит-тесты _run_ai: AI генерирует ответ → extracted/funnel_stage/action отрабатывают корректно."""
+
+    _DEFAULT_RESULT = {
+        "messages": ["Hola!"],
+        "funnel_stage": "qualifying",
+        "action": "respond",
+        "extracted": {"age": 40},
+        "needs_escalation": False,
+        "used_scenario_id": 5,
+    }
+
+    def _mock_ai_deps(self, monkeypatch, *, result: dict | None = None,
+                      update_lead_side_effect=None):
+        """Замокать все AI/DB зависимости _run_ai; вернуть ключевые моки."""
+        res = result if result is not None else dict(self._DEFAULT_RESULT)
+        gen_mock = AsyncMock(return_value=res)
+        monkeypatch.setattr(ai, "generate_reply", gen_mock)
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
+        update_mock = AsyncMock(side_effect=update_lead_side_effect)
+        monkeypatch.setattr(db, "update_lead_fields", update_mock)
+        funnel_mock = AsyncMock()
+        monkeypatch.setattr(db, "set_funnel_stage", funnel_mock)
+        block_mock = AsyncMock()
+        monkeypatch.setattr(db, "block_lead", block_mock)
+        title_mock = AsyncMock(return_value=None)
+        monkeypatch.setattr(db, "get_scenario_title", title_mock)
+        send_mock = MagicMock()
+        monkeypatch.setattr(main, "_send_stub", send_mock)
+        return gen_mock, update_mock, funnel_mock, block_mock, title_mock, send_mock
+
+    # --- 1. respond + extracted → update_lead_fields вызван ---
+
+    async def test_respond_with_extracted_calls_update_lead_fields(self, monkeypatch):
+        """action=respond, extracted={age:40} → db.update_lead_fields(phone, age=40) вызван."""
+        _, update_mock, funnel_mock, block_mock, _, send_mock = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                "messages": ["Hola!"], "funnel_stage": "qualifying", "action": "respond",
+                "extracted": {"age": 40}, "needs_escalation": False, "used_scenario_id": 5,
+            },
+        )
+
+        await main._run_ai("wa_test", {}, "Hola, tengo 40 años")
+
+        update_mock.assert_awaited_once_with("wa_test", age=40)
+        funnel_mock.assert_awaited_once()
+        send_mock.assert_called_once()
+        block_mock.assert_not_awaited()
+
+    # --- 2. respond без extracted → update_lead_fields НЕ вызван ---
+
+    async def test_respond_empty_extracted_no_update(self, monkeypatch):
+        """extracted={} → db.update_lead_fields НЕ вызывается."""
+        _, update_mock, _, _, _, _ = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                "messages": ["Hola!"], "funnel_stage": "qualifying", "action": "respond",
+                "extracted": {}, "needs_escalation": False, "used_scenario_id": 5,
+            },
+        )
+
+        await main._run_ai("wa_test", {}, "Hola")
+
+        update_mock.assert_not_awaited()
+
+    # --- 3. respond без funnel_stage → set_funnel_stage НЕ вызван ---
+
+    async def test_respond_no_funnel_stage_skips_set_funnel(self, monkeypatch):
+        """funnel_stage=None → db.set_funnel_stage НЕ вызывается."""
+        _, _, funnel_mock, _, _, _ = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                "messages": ["Hola!"], "funnel_stage": None, "action": "respond",
+                "extracted": {}, "needs_escalation": False, "used_scenario_id": 5,
+            },
+        )
+
+        await main._run_ai("wa_test", {}, "Hola")
+
+        funnel_mock.assert_not_awaited()
+
+    # --- 4. block с used_scenario_id=7 → get_scenario_title(7); reason="AI: <title>" ---
+
+    async def test_block_with_scenario_id_uses_title_as_reason(self, monkeypatch):
+        """action=block, scenario_id=7, title="Лиду меньше 28" → block_lead(reason="AI: Лиду меньше 28")."""
+        _, _, funnel_mock, block_mock, title_mock, send_mock = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                "messages": ["Adiós"], "funnel_stage": None, "action": "block",
+                "extracted": {}, "needs_escalation": False, "used_scenario_id": 7,
+            },
+        )
+        title_mock.return_value = "Лиду меньше 28"
+
+        await main._run_ai("wa_block", {}, "tengo 20")
+
+        title_mock.assert_awaited_once_with(7)
+        block_mock.assert_awaited_once_with("wa_block", "AI: Лиду меньше 28")
+        # escort НЕ передаётся → по умолчанию False внутри db.block_lead
+        assert "escort" not in (block_mock.call_args.kwargs or {})
+        funnel_mock.assert_not_awaited()
+        send_mock.assert_called_once()
+
+    # --- 5. block с scenario_id=None и title=None → reason="AI-блок по сценарию" ---
+
+    async def test_block_no_scenario_id_uses_fallback_reason(self, monkeypatch):
+        """used_scenario_id=None, get_scenario_title→None → reason="AI-блок по сценарию"."""
+        _, _, _, block_mock, title_mock, _ = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                "messages": ["Adiós"], "funnel_stage": None, "action": "block",
+                "extracted": {}, "needs_escalation": False, "used_scenario_id": None,
+            },
+        )
+        title_mock.return_value = None
+
+        await main._run_ai("wa_block2", {}, "texto")
+
+        block_mock.assert_awaited_once_with("wa_block2", "AI-блок по сценарию")
+
+    # --- 6. escalate → _send_stub вызван, block_lead НЕ вызван, лог Ане ---
+
+    async def test_escalate_sends_messages_no_block(self, monkeypatch, caplog):
+        """action=escalate → _send_stub вызван, block_lead НЕ вызван, лог про флаг Ане."""
+        import logging
+        _, _, funnel_mock, block_mock, _, send_mock = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                # funnel_stage=None: ai.py валидирует стадию против FUNNEL_STAGES, а
+                # "escalate" — это action, не стадия. С None set_funnel_stage не зовётся.
+                "messages": ["Te contactaré"], "funnel_stage": None, "action": "escalate",
+                "extracted": {}, "needs_escalation": True, "used_scenario_id": 3,
+            },
+        )
+
+        with caplog.at_level(logging.INFO, logger="matchmatch.ai"):
+            # matchmatch.ai ловим тоже, но основной логгер "matchmatch"
+            pass
+
+        with caplog.at_level(logging.INFO):
+            await main._run_ai("wa_esc", {}, "quiero más info")
+
+        send_mock.assert_called_once_with("wa_esc", ["Te contactaré"])
+        block_mock.assert_not_awaited()
+        # _run_ai логирует "escalate" + "TODO-алерт Ане"
+        assert "escalate" in caplog.text.lower() or "Ане" in caplog.text
+
+    # --- 7. update_lead_fields бросает Exception → _run_ai не падает, action отрабатывает ---
+
+    async def test_update_lead_fields_exception_does_not_crash_run_ai(self, monkeypatch):
+        """update_lead_fields → Exception: _run_ai не бросает, action=respond продолжает."""
+        _, _, funnel_mock, block_mock, _, send_mock = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                "messages": ["Hola!"], "funnel_stage": "qualifying", "action": "respond",
+                "extracted": {"age": 40}, "needs_escalation": False, "used_scenario_id": 5,
+            },
+            update_lead_side_effect=Exception("DB connection lost"),
+        )
+
+        # не должно бросать
+        await main._run_ai("wa_crash", {}, "tengo 40")
+
+        # несмотря на падение update_lead_fields, дальнейший action отрабатывает
+        funnel_mock.assert_awaited_once()
+        send_mock.assert_called_once()
+        block_mock.assert_not_awaited()
+
+    # --- 8. rejected ветка _apply_decision: set_funnel_stage("rejected") И _run_ai вызван ---
+
+    async def test_apply_decision_rejected_calls_set_funnel_and_run_ai(self, monkeypatch):
+        """action=rejected → set_funnel_stage("rejected") И ai.generate_reply awaited."""
+        funnel_mock = AsyncMock()
+        monkeypatch.setattr(db, "set_funnel_stage", funnel_mock)
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(db, "update_lead_fields", AsyncMock())
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        monkeypatch.setattr(db, "get_scenario_title", AsyncMock(return_value=None))
+        monkeypatch.setattr(main, "_send_stub", MagicMock())
+        gen_mock = AsyncMock(return_value={
+            "messages": ["Lo siento"], "funnel_stage": None, "action": "respond",
+            "extracted": {}, "needs_escalation": False, "used_scenario_id": None,
+        })
+        monkeypatch.setattr(ai, "generate_reply", gen_mock)
+
+        decision = filters.Decision(action="rejected", reason="Возраст 25 вне 28-65")
+
+        await main._apply_decision("wa_rej", decision, {}, "tengo 25")
+
+        # set_funnel_stage вызван с "rejected" И метой
+        funnel_mock.assert_awaited_once()
+        call_args = funnel_mock.call_args
+        assert call_args.args[0] == "wa_rej"
+        assert call_args.args[1] == "rejected"
+        # _run_ai вызван → generate_reply awaited
+        gen_mock.assert_awaited_once()
+
+
+class TestRunAIFailureIsolation:
+    """Падение _run_ai не должно пробрасываться (сообщения уже processed, поток должен жить)."""
+
+    async def test_run_ai_exception_caught_in_apply_decision(self, monkeypatch, caplog):
+        import logging, filters as _f
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(side_effect=RuntimeError("db down")))
+        decision = _f.Decision(action="needs_ai", reason="test")
+        with caplog.at_level(logging.ERROR, logger="matchmatch"):
+            # не должно бросить наружу
+            await main._apply_decision("wa_x", decision, {}, "hola")
+        assert any("обработка AI упала" in r.message for r in caplog.records)
+
+    async def test_rejected_run_ai_exception_caught(self, monkeypatch):
+        import filters as _f
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(side_effect=RuntimeError("boom")))
+        decision = _f.Decision(action="rejected", reason="возраст")
+        # не должно бросить
+        await main._apply_decision("wa_y", decision, {}, "tengo 20")

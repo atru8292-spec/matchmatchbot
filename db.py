@@ -351,6 +351,17 @@ async def search_scenarios_by_vector(vector_literal: str, top_k: int = 3) -> lis
     return [dict(r) for r in rows]
 
 
+async def get_scenario_title(scenario_id) -> str | None:
+    """Заголовок сценария по id (для reason при блокировке). None если нет/невалидный id."""
+    if not isinstance(scenario_id, int):
+        return None
+    try:
+        return await _get_pool().fetchval("SELECT title FROM scenarios WHERE id = $1", scenario_id)
+    except Exception:
+        logger.exception("get_scenario_title failed: id=%s", scenario_id)
+        return None
+
+
 async def is_whitelisted(phone: str) -> bool:
     """Есть ли номер в bot_whitelist (бот для него молчит)."""
     try:
