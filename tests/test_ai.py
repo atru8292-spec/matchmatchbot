@@ -583,3 +583,52 @@ class TestFunnelStageValidation:
     def test_none_stage_stays_none(self):
         r = ai._validate_output({"messages": ["x"], "action": "respond", "funnel_stage": None})
         assert r["funnel_stage"] is None
+
+
+class TestDualThreshold:
+    """Двойной порог: блокировки требуют score>=0.60, обычный фикс — >=0.45."""
+
+    async def test_block_scenario_below_060_goes_to_ai(self, monkeypatch):
+        # блокирующий фикс с 0.50 (в зоне 0.45-0.60) → НЕ fixed, идёт в AI
+        monkeypatch.setattr(ai, "search_scenarios", AsyncMock(return_value=[
+            {"id": 9, "ai_allowed": False, "score": 0.50, "mode": "bot_then_block",
+             "blocks_lead": True, "template_es": "bloqueo"}]))
+        call = AsyncMock(return_value={"messages": ["respuesta ai"], "action": "respond"})
+        monkeypatch.setattr(ai, "_call_openai", call)
+        r = await ai.generate_reply({}, [], "pregunta ambigua")
+        call.assert_awaited_once()
+        assert r["messages"] == ["respuesta ai"]
+
+    async def test_block_scenario_above_060_is_fixed(self, monkeypatch):
+        # блокирующий фикс с 0.65 (>=0.60) → fixed, OpenAI НЕ вызван
+        monkeypatch.setattr(ai, "search_scenarios", AsyncMock(return_value=[
+            {"id": 7, "ai_allowed": False, "score": 0.65, "mode": "bot_then_block",
+             "blocks_lead": True, "template_es": "bloqueo directo"}]))
+        call = AsyncMock()
+        monkeypatch.setattr(ai, "_call_openai", call)
+        r = await ai.generate_reply({}, [], "tengo 24")
+        call.assert_not_awaited()
+        assert r["action"] == "block"
+        assert r["used_scenario_id"] == 7
+
+    async def test_nonblock_fixed_at_050_is_fixed(self, monkeypatch):
+        # НЕ-блокирующий фикс (скидка) с 0.50 (>=0.45) → fixed без OpenAI
+        monkeypatch.setattr(ai, "search_scenarios", AsyncMock(return_value=[
+            {"id": 39, "ai_allowed": False, "score": 0.50, "mode": "bot_auto",
+             "blocks_lead": False, "template_es": "no hay descuentos"}]))
+        call = AsyncMock()
+        monkeypatch.setattr(ai, "_call_openai", call)
+        r = await ai.generate_reply({}, [], "descuento?")
+        call.assert_not_awaited()
+        assert r["used_scenario_id"] == 39
+        assert r["action"] == "respond"
+
+    async def test_nonblock_fixed_below_045_goes_to_ai(self, monkeypatch):
+        # НЕ-блок фикс с 0.42 (<0.45) → в AI
+        monkeypatch.setattr(ai, "search_scenarios", AsyncMock(return_value=[
+            {"id": 40, "ai_allowed": False, "score": 0.42, "mode": "bot_auto",
+             "blocks_lead": False, "template_es": "soy anna"}]))
+        call = AsyncMock(return_value={"messages": ["ai resp"], "action": "respond"})
+        monkeypatch.setattr(ai, "_call_openai", call)
+        await ai.generate_reply({}, [], "algo")
+        call.assert_awaited_once()

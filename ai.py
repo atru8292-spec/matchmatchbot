@@ -28,7 +28,15 @@ logger = logging.getLogger("matchmatch.ai")
 _PROMPT_PATH = os.path.join(os.path.dirname(__file__), "anna_prompt_v4.md")
 _system_prompt_cache: str | None = None
 
-# Порог уверенности RAG: ниже — считаем, что подходящего сценария нет (fallback).
+# Пороги уверенности RAG (score = 1 - cosine_distance):
+# - FIXED_BLOCK_SCORE: блокирующий фикс-сценарий (bot_then_block / blocks_lead) отдаём
+#   дословно только при ВЫСОКОЙ уверенности — блок необратим (бан навсегда).
+#   Ниже порога → в AI (v4 с гибкостью разрулит по контексту).
+# - FIXED_SCORE: не-блокирующий фикс-ответ (скидка, "ты бот") — обычный ответ,
+#   корректируется в диалоге, порог ниже.
+# - FALLBACK_SCORE: ниже — подходящего сценария нет, в контекст AI не кладём.
+FIXED_BLOCK_SCORE = 0.60
+FIXED_SCORE = 0.45
 FALLBACK_SCORE = 0.40
 MAX_MESSAGES = 4
 _FALLBACK_MESSAGE = "Ahorita te contesto guapo 🤍"
@@ -231,11 +239,18 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
 
     top = scenarios[0] if scenarios else None
 
-    # Ветка 1: фиксированный сценарий (ai_allowed=false) с уверенным матчем → без OpenAI.
-    if top and not top.get("ai_allowed") and top.get("score", 0) >= FALLBACK_SCORE:
-        logger.info("фикс-сценарий #%s (score=%.3f), OpenAI не вызываю",
-                    top["id"], top["score"])
-        return _fixed_reply(top)
+    # Ветка 1: фиксированный сценарий (ai_allowed=false) → template дословно, без OpenAI.
+    # Порог зависит от необратимости: блокировка требует высокой уверенности (0.60),
+    # обычный фикс-ответ — ниже (0.45). Ниже порога → уходим в AI.
+    if top and not top.get("ai_allowed"):
+        is_block = top.get("mode") == "bot_then_block" or top.get("blocks_lead")
+        threshold = FIXED_BLOCK_SCORE if is_block else FIXED_SCORE
+        if top.get("score", 0) >= threshold:
+            logger.info("фикс-сценарий #%s (score=%.3f >= %.2f, block=%s), OpenAI не вызываю",
+                        top["id"], top["score"], threshold, is_block)
+            return _fixed_reply(top)
+        logger.info("фикс-сценарий #%s score=%.3f < %.2f (block=%s) → в AI",
+                    top["id"], top["score"], threshold, is_block)
 
     # Ветка 2/3: AI генерит. При низком score сценарии не передаём (fallback в промпте).
     confident = [s for s in scenarios if s.get("score", 0) >= FALLBACK_SCORE]
