@@ -329,6 +329,25 @@ async def block_lead(phone: str, reason: str, escort: bool = False) -> None:
         raise
 
 
+async def search_scenarios_by_vector(vector_literal: str, top_k: int = 3) -> list[dict]:
+    """RAG: top-K активных сценариев по косинусной близости (pgvector <=>).
+
+    vector_literal — эмбеддинг запроса в формате '[..]'. score = 1 - cosine_distance.
+    """
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT id, template_es, mode, ai_allowed, blocks_lead, "
+            "1 - (embedding <=> $1::vector) AS score "
+            "FROM scenarios WHERE embedding IS NOT NULL AND is_active = true "
+            "ORDER BY embedding <=> $1::vector LIMIT $2",
+            vector_literal, top_k,
+        )
+    except Exception:
+        logger.exception("search_scenarios_by_vector failed")
+        raise
+    return [dict(r) for r in rows]
+
+
 async def is_whitelisted(phone: str) -> bool:
     """Есть ли номер в bot_whitelist (бот для него молчит)."""
     try:
