@@ -16,6 +16,7 @@ import logging
 import asyncpg
 from asyncpg.exceptions import UniqueViolationError
 
+import funnel
 from config import settings
 
 logger = logging.getLogger("matchmatch.db")
@@ -286,3 +287,125 @@ async def mark_messages_processed(ids: list) -> int:
         logger.exception("mark_messages_processed failed: ids=%s", ids)
         raise
     return len(rows)
+
+
+async def block_lead(phone: str, reason: str, escort: bool = False) -> None:
+    """Заблокировать лида навсегда И перевести в 'lost' — атомарно (одна транзакция).
+
+    Как WF1: manual_until = now()+100 лет (в auto бот не вернётся). Для escort
+    инкрементим escort_mention_count (счёт с первого упоминания — баг WF1 исправлен).
+    Стадию 'lost' и запись в funnel_events делаем ЗДЕСЬ же, чтобы не было десинхрона
+    (заблокирован, но стадия не сменилась). next_followup_at обнуляем (не догоняем).
+    """
+    escort_sql = (
+        "escort_mention_count = COALESCE(escort_mention_count, 0) + 1, " if escort else ""
+    )
+    pool = _get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                current = await conn.fetchval(
+                    "SELECT funnel_stage FROM leads WHERE phone = $1 FOR UPDATE", phone
+                )
+                if current is None:
+                    logger.warning("block_lead: лид %s не найден", phone)
+                    return
+                await conn.execute(
+                    "UPDATE leads SET do_not_contact = true, mode = 'manual', "
+                    "manual_until = now() + interval '100 years', escalate_reason = $2, "
+                    f"{escort_sql}"
+                    "funnel_stage = 'lost', next_followup_at = NULL, "
+                    "updated_at = now() WHERE phone = $1",
+                    phone, reason,
+                )
+                if current != "lost":
+                    await conn.execute(
+                        "INSERT INTO funnel_events (lead_phone, from_stage, to_stage, meta) "
+                        "VALUES ($1, $2, 'lost', $3)",
+                        phone, current, {"reason": reason},
+                    )
+    except Exception:
+        logger.exception("block_lead failed: phone=%s reason=%s", phone, reason)
+        raise
+
+
+async def is_whitelisted(phone: str) -> bool:
+    """Есть ли номер в bot_whitelist (бот для него молчит)."""
+    try:
+        row = await _get_pool().fetchrow("SELECT 1 FROM bot_whitelist WHERE phone = $1", phone)
+    except Exception:
+        logger.exception("is_whitelisted failed: phone=%s", phone)
+        raise
+    return row is not None
+
+
+async def touch_last_inbound(phone: str) -> None:
+    """Обновить last_inbound_at=now() (метка для фоллоу-апов)."""
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET last_inbound_at = now(), updated_at = now() WHERE phone = $1",
+            phone,
+        )
+    except Exception:
+        logger.exception("touch_last_inbound failed: phone=%s", phone)
+        raise
+
+
+async def set_funnel_stage(phone: str, to_stage: str, meta: dict | None = None) -> bool:
+    """Сменить стадию воронки лида атомарно (в одной транзакции).
+
+    Если стадия РЕАЛЬНО меняется:
+      - UPDATE leads.funnel_stage
+      - INSERT funnel_events(from_stage, to_stage, meta)
+      - проставить next_followup_at по funnel.FOLLOWUP_FIRST_DELAY_HOURS
+        (или NULL для NO_FOLLOWUP_STAGES) и сбросить followup_sent_count=0
+    Если стадия та же — ничего не делаем (не плодим funnel_events). Вернуть: менялось ли.
+    """
+    if to_stage not in funnel.FUNNEL_STAGES:
+        raise ValueError(f"Неизвестная стадия воронки: {to_stage!r}")
+
+    pool = _get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                current = await conn.fetchval(
+                    "SELECT funnel_stage FROM leads WHERE phone = $1 FOR UPDATE", phone
+                )
+                if current is None:
+                    logger.warning("set_funnel_stage: лид %s не найден", phone)
+                    return False
+                if current == to_stage:
+                    return False  # без изменения — не логируем событие
+
+                # next_followup_at: для no-followup стадий NULL, иначе now()+delay
+                if to_stage in funnel.NO_FOLLOWUP_STAGES:
+                    await conn.execute(
+                        "UPDATE leads SET funnel_stage = $1, next_followup_at = NULL, "
+                        "followup_sent_count = 0, updated_at = now() WHERE phone = $2",
+                        to_stage, phone,
+                    )
+                else:
+                    hours = funnel.FOLLOWUP_FIRST_DELAY_HOURS.get(to_stage)
+                    if hours is not None:
+                        await conn.execute(
+                            "UPDATE leads SET funnel_stage = $1, "
+                            "next_followup_at = now() + make_interval(hours => $2), "
+                            "followup_sent_count = 0, updated_at = now() WHERE phone = $3",
+                            to_stage, hours, phone,
+                        )
+                    else:
+                        # активная стадия без расписания догона (напр. new/qualifying)
+                        await conn.execute(
+                            "UPDATE leads SET funnel_stage = $1, updated_at = now() WHERE phone = $2",
+                            to_stage, phone,
+                        )
+
+                await conn.execute(
+                    "INSERT INTO funnel_events (lead_phone, from_stage, to_stage, meta) "
+                    "VALUES ($1, $2, $3, $4)",
+                    phone, current, to_stage, meta or {},
+                )
+        return True
+    except Exception:
+        logger.exception("set_funnel_stage failed: phone=%s to=%s", phone, to_stage)
+        raise

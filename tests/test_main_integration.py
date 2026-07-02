@@ -21,6 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import db
+import filters
 import main
 from config import settings
 
@@ -102,6 +103,19 @@ def mock_upsert_lead(monkeypatch):
 
 
 @pytest.fixture()
+def mock_touch_inbound(monkeypatch):
+    """db.touch_last_inbound → AsyncMock().
+
+    Нужен во ВСЕХ тестах _handle_incoming где is_ready=True и normalize вернул не-None:
+    touch_last_inbound вызывается после upsert_lead (перед insert_message), без мока
+    ронит RuntimeError из _get_pool() и прерывает цепочку вызовов.
+    """
+    m = AsyncMock()
+    monkeypatch.setattr(db, "touch_last_inbound", m)
+    return m
+
+
+@pytest.fixture()
 def mock_insert_true(monkeypatch):
     """db.insert_message → AsyncMock(return_value=True), db.is_ready → True."""
     monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -117,7 +131,7 @@ def mock_insert_true(monkeypatch):
 class TestHandleIncoming:
 
     async def test_valid_text_insert_args_and_trigger(
-        self, monkeypatch, mock_debouncer, mock_upsert_lead
+        self, monkeypatch, mock_debouncer, mock_upsert_lead, mock_touch_inbound
     ):
         """Валидный текст → insert вызван ровно раз с верными аргументами, trigger — раз."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -140,7 +154,7 @@ class TestHandleIncoming:
         mock_debouncer.trigger.assert_awaited_once_with("wa_521234567890")
 
     async def test_duplicate_insert_false_no_trigger(
-        self, monkeypatch, mock_debouncer, mock_upsert_lead
+        self, monkeypatch, mock_debouncer, mock_upsert_lead, mock_touch_inbound
     ):
         """insert_message → False (дубль) → trigger НЕ вызван."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -230,7 +244,7 @@ class TestHandleIncoming:
         mock_debouncer.trigger.assert_not_awaited()
 
     async def test_insert_exception_does_not_propagate(
-        self, monkeypatch, mock_debouncer, mock_upsert_lead
+        self, monkeypatch, mock_debouncer, mock_upsert_lead, mock_touch_inbound
     ):
         """Исключение в insert_message → поглощается обработчиком, не бросается наружу."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -244,7 +258,7 @@ class TestHandleIncoming:
         mock_debouncer.trigger.assert_not_awaited()
 
     async def test_image_message_insert_with_photo_meta(
-        self, monkeypatch, mock_debouncer, mock_upsert_lead
+        self, monkeypatch, mock_debouncer, mock_upsert_lead, mock_touch_inbound
     ):
         """type=image → insert с meta={'content_type': 'photo'}."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -263,9 +277,9 @@ class TestHandleIncoming:
     async def test_upsert_called_before_insert(
         self, monkeypatch, mock_debouncer
     ):
-        """upsert_lead должен быть вызван РАНЬШЕ insert_message (FK-гарантия).
+        """upsert_lead → touch_last_inbound → insert_message (FK-гарантия + метка времени).
 
-        Реализовано через общий список call_order, заполняемый side_effect обоих моков.
+        Реализовано через общий список call_order, заполняемый side_effect всех трёх моков.
         Регрессионный тест: если кто-то переставит строки местами — тест упадёт.
         """
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -276,22 +290,26 @@ class TestHandleIncoming:
             call_order.append("upsert")
             return {"phone": phone}
 
+        async def _touch_side(phone):
+            call_order.append("touch")
+
         async def _insert_side(*args, **kwargs):
             call_order.append("insert")
             return True
 
         monkeypatch.setattr(db, "upsert_lead", _upsert_side)
+        monkeypatch.setattr(db, "touch_last_inbound", _touch_side)
         monkeypatch.setattr(db, "insert_message", _insert_side)
 
         await main._handle_incoming(_text_msg("msg-order-1", "521234567890@c.us", "Hola"))
 
-        assert call_order == ["upsert", "insert"], (
-            f"Ожидали ['upsert','insert'], получили {call_order}. "
-            "FK на leads.phone нарушен: insert_message вызван до upsert_lead."
+        assert call_order == ["upsert", "touch", "insert"], (
+            f"Ожидали ['upsert','touch','insert'], получили {call_order}. "
+            "FK на leads.phone нарушен или touch_last_inbound не между upsert и insert."
         )
 
     async def test_upsert_lead_called_with_correct_args(
-        self, monkeypatch, mock_debouncer
+        self, monkeypatch, mock_debouncer, mock_touch_inbound
     ):
         """upsert_lead вызван с правильным phone ('wa_'+цифры) и whatsapp_name (title-case).
 
@@ -312,7 +330,7 @@ class TestHandleIncoming:
         )
 
     async def test_upsert_lead_no_contact_name_uses_wa_lead(
-        self, monkeypatch, mock_debouncer
+        self, monkeypatch, mock_debouncer, mock_touch_inbound
     ):
         """Без contact.name → whatsapp_name='WA Lead' (фолбэк из normalize)."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
@@ -363,6 +381,12 @@ class TestProcessBurst:
         monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(return_value=msgs))
         mark_mock = AsyncMock()
         monkeypatch.setattr(db, "mark_messages_processed", mark_mock)
+        # _process_burst теперь вызывает get_lead_by_phone и is_whitelisted после mark
+        monkeypatch.setattr(
+            db, "get_lead_by_phone",
+            AsyncMock(return_value={"whatsapp_name": "Test", "age": 35, "is_single": True}),
+        )
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
 
         await main._process_burst("wa_521000000000")
 
@@ -384,6 +408,12 @@ class TestProcessBurst:
         monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(return_value=msgs))
         mark_mock = AsyncMock()
         monkeypatch.setattr(db, "mark_messages_processed", mark_mock)
+        # _process_burst теперь вызывает get_lead_by_phone и is_whitelisted после mark
+        monkeypatch.setattr(
+            db, "get_lead_by_phone",
+            AsyncMock(return_value={"whatsapp_name": "Test", "age": 35, "is_single": True}),
+        )
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
 
         await main._process_burst("wa_999")
 
@@ -403,6 +433,12 @@ class TestProcessBurst:
         ]
         monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(return_value=msgs))
         monkeypatch.setattr(db, "mark_messages_processed", AsyncMock())
+        # _process_burst теперь вызывает get_lead_by_phone и is_whitelisted после mark
+        monkeypatch.setattr(
+            db, "get_lead_by_phone",
+            AsyncMock(return_value={"whatsapp_name": "Test", "age": 35, "is_single": True}),
+        )
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
 
         with caplog.at_level(logging.INFO, logger="matchmatch"):
             await main._process_burst("wa_521000000001")
@@ -423,6 +459,7 @@ class TestWebhookWithMocks:
         monkeypatch.setattr(db, "is_ready", lambda: True)
         upsert_mock = AsyncMock(return_value={"phone": "wa_mock"})
         monkeypatch.setattr(db, "upsert_lead", upsert_mock)
+        monkeypatch.setattr(db, "touch_last_inbound", AsyncMock())
         insert_mock = AsyncMock(return_value=True)
         monkeypatch.setattr(db, "insert_message", insert_mock)
         fake_deb = MagicMock()
@@ -446,6 +483,7 @@ class TestWebhookWithMocks:
         """type=image через эндпоинт → meta content_type='photo'."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
         monkeypatch.setattr(db, "upsert_lead", AsyncMock(return_value={"phone": "wa_mock"}))
+        monkeypatch.setattr(db, "touch_last_inbound", AsyncMock())
         insert_mock = AsyncMock(return_value=True)
         monkeypatch.setattr(db, "insert_message", insert_mock)
         fake_deb = MagicMock()
@@ -464,6 +502,7 @@ class TestWebhookWithMocks:
         """Исключение в insert первого сообщения → второе всё равно обрабатывается → 200."""
         monkeypatch.setattr(db, "is_ready", lambda: True)
         monkeypatch.setattr(db, "upsert_lead", AsyncMock(return_value={"phone": "wa_mock"}))
+        monkeypatch.setattr(db, "touch_last_inbound", AsyncMock())
         # Первый вызов — Exception, второй — True
         insert_mock = AsyncMock(side_effect=[Exception("boom"), True])
         monkeypatch.setattr(db, "insert_message", insert_mock)
@@ -564,3 +603,65 @@ class TestWebhookRegression:
         payload = {"messages": [_text_msg()]}
         response = client.post(f"/webhook/wazzup/{GOOD_SECRET}", json=payload)
         assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Часть 5: _apply_decision blocked — блок через db.block_lead (не set_funnel_stage)
+# ---------------------------------------------------------------------------
+
+class TestApplyDecisionBlocked:
+    """Проверяем, что action='blocked' вызывает ТОЛЬКО db.block_lead (с is_escort из Decision),
+    а db.set_funnel_stage НЕ вызывается — стадия 'lost' теперь ставится внутри block_lead.
+    """
+
+    async def test_blocked_escort_true_calls_block_lead_escort_true(self, monkeypatch):
+        """decision.is_escort=True → block_lead(phone, reason, escort=True) вызван."""
+        block_mock = AsyncMock()
+        monkeypatch.setattr(db, "block_lead", block_mock)
+        set_funnel_mock = AsyncMock()
+        monkeypatch.setattr(db, "set_funnel_stage", set_funnel_mock)
+
+        phone = "wa_555"
+        decision = filters.Decision(
+            action="blocked", reason="Ищет интим-услуги",
+            alert_manager=True, block_permanent=True, is_escort=True,
+        )
+        lead = {}
+
+        await main._apply_decision(phone, decision, lead)
+
+        block_mock.assert_awaited_once_with(phone, decision.reason, escort=True)
+        set_funnel_mock.assert_not_awaited()
+
+    async def test_blocked_escort_false_calls_block_lead_escort_false(self, monkeypatch):
+        """decision.is_escort=False → block_lead(phone, reason, escort=False) вызван."""
+        block_mock = AsyncMock()
+        monkeypatch.setattr(db, "block_lead", block_mock)
+        set_funnel_mock = AsyncMock()
+        monkeypatch.setattr(db, "set_funnel_stage", set_funnel_mock)
+
+        phone = "wa_666"
+        decision = filters.Decision(
+            action="blocked", reason="Агрессивное поведение",
+            alert_manager=True, block_permanent=True, is_escort=False,
+        )
+        lead = {}
+
+        await main._apply_decision(phone, decision, lead)
+
+        block_mock.assert_awaited_once_with(phone, decision.reason, escort=False)
+        set_funnel_mock.assert_not_awaited()
+
+    async def test_blocked_set_funnel_stage_never_called(self, monkeypatch):
+        """action='blocked' — set_funnel_stage НЕ вызывается ни в каком случае (стадия ставится внутри block_lead)."""
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        set_funnel_mock = AsyncMock()
+        monkeypatch.setattr(db, "set_funnel_stage", set_funnel_mock)
+
+        for is_escort in (True, False):
+            set_funnel_mock.reset_mock()
+            decision = filters.Decision(
+                action="blocked", reason="тест", is_escort=is_escort,
+            )
+            await main._apply_decision("wa_777", decision, {})
+            set_funnel_mock.assert_not_awaited()

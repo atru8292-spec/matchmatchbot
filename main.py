@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Response
 
 import db
+import filters
 from config import settings
 from debounce import Debouncer
 from normalize import normalize_wazzup_message
@@ -27,10 +28,11 @@ debouncer: Debouncer | None = None
 
 
 async def _process_burst(phone: str) -> None:
-    """on_flush для debounce (пока БЕЗ AI).
+    """on_flush для debounce: собрать залп, принять детерминированное решение.
 
     Читаем склеенный залп непроцессенных inbound из БД (источник истины — не память),
-    логируем и помечаем processed. В блоке 6 вместо лога встанет вызов AI.
+    помечаем processed, затем filters.decide. AI-ветки (needs_ai/respond) пока логируют
+    заглушку — реальный вызов AI встанет сюда в блоке 6.
     """
     msgs = await db.get_unprocessed_inbound(phone)
     if not msgs:
@@ -43,6 +45,40 @@ async def _process_burst(phone: str) -> None:
         phone, len(msgs), content_types, combined,
     )
     await db.mark_messages_processed([m["id"] for m in msgs])
+
+    # Детерминированное решение по залпу (whitelist/блок/отказ/AI).
+    lead = await db.get_lead_by_phone(phone) or {}
+    whitelisted = await db.is_whitelisted(phone)
+    decision = filters.decide(lead, whitelisted, combined)
+    await _apply_decision(phone, decision, lead)
+
+
+async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict) -> None:
+    """Выполнить решение filters.decide. AI-ветки пока — заглушки (блок 6)."""
+    name = lead.get("whatsapp_name") or lead.get("name") or phone
+
+    if decision.action == "silent_whitelist":
+        # Бот молчит; сообщение уже в истории. TODO (блок 8): алерт Ане в Telegram.
+        logger.info("РЕШЕНИЕ silent_whitelist [%s]: %s | TODO-алерт Ане: 'написал %s'",
+                    phone, decision.reason, name)
+        return
+
+    if decision.action == "blocked":
+        # Блок навсегда + стадия lost — атомарно внутри block_lead. is_escort из
+        # Decision (не парсим текст reason). TODO (блок 8): алерт Ане.
+        await db.block_lead(phone, decision.reason, escort=decision.is_escort)
+        logger.info("РЕШЕНИЕ blocked [%s]: %s | TODO-алерт Ане", phone, decision.reason)
+        return
+
+    if decision.action == "rejected":
+        # Не прошёл жёсткий фильтр. Текст вежливого отказа сформирует AI (блок 6).
+        await db.set_funnel_stage(phone, "rejected", meta={"reason": decision.reason})
+        logger.info("РЕШЕНИЕ rejected [%s]: %s | TODO: вежливый отказ (AI, блок 6)",
+                    phone, decision.reason)
+        return
+
+    # needs_ai / respond — пока заглушка, в блоке 6 здесь будет вызов AI.
+    logger.info("РЕШЕНИЕ %s [%s]: %s | → AI (блок 6)", decision.action, phone, decision.reason)
 
 
 @asynccontextmanager
@@ -137,6 +173,8 @@ async def _handle_incoming(msg) -> None:
         # FK на leads.phone. upsert создаёт лида (или обновляет имя); status/mode/
         # funnel_stage/source проставятся дефолтами схемы при INSERT.
         await db.upsert_lead(nm.phone, whatsapp_name=nm.user_name)
+        # Метка времени входящего — для планировщика фоллоу-апов (блок позже).
+        await db.touch_last_inbound(nm.phone)
 
         inserted = await db.insert_message(
             nm.phone,

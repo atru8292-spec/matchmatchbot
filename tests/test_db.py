@@ -19,11 +19,12 @@ import db
 
 
 class FakePool:
-    """Заглушка asyncpg.Pool: fetchrow и fetch — AsyncMock."""
+    """Заглушка asyncpg.Pool: fetchrow, fetch и execute — AsyncMock."""
 
     def __init__(self):
         self.fetchrow = AsyncMock()
         self.fetch = AsyncMock()
+        self.execute = AsyncMock()  # нужен для block_lead / touch_last_inbound
 
 
 @pytest.fixture()
@@ -549,3 +550,305 @@ class TestMarkMessagesProcessed:
 
         _, *params = pool.fetch.call_args.args
         assert params[0] == ids
+
+
+# ---------------------------------------------------------------------------
+# is_whitelisted
+# ---------------------------------------------------------------------------
+
+
+class TestIsWhitelisted:
+    async def test_returns_true_when_row_found(self, pool):
+        """fetchrow вернул строку → True (номер в whitelist)."""
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+
+        result = await db.is_whitelisted("wa_1")
+
+        assert result is True
+
+    async def test_returns_false_when_not_found(self, pool):
+        """fetchrow вернул None (нет в whitelist) → False."""
+        pool.fetchrow.return_value = None
+
+        result = await db.is_whitelisted("wa_1")
+
+        assert result is False
+
+    async def test_sql_contains_bot_whitelist(self, pool):
+        """SQL обращается к таблице bot_whitelist."""
+        pool.fetchrow.return_value = None
+
+        await db.is_whitelisted("wa_1")
+
+        sql = pool.fetchrow.call_args.args[0]
+        assert "bot_whitelist" in sql
+
+    async def test_phone_passed_as_param(self, pool):
+        """phone передаётся отдельным параметром $1, не вставляется в SQL."""
+        pool.fetchrow.return_value = None
+        phone = "wa_521234567890"
+
+        await db.is_whitelisted(phone)
+
+        sql, *params = pool.fetchrow.call_args.args
+        assert phone not in sql
+        assert "$1" in sql
+        assert params[0] == phone
+
+
+# ---------------------------------------------------------------------------
+# block_lead — транзакционная реализация (acquire → conn.fetchval → conn.execute)
+# ---------------------------------------------------------------------------
+
+
+class TestBlockLead:
+    """block_lead теперь транзакционный: pool.acquire() → FakeConn.
+    Используем transactional_pool fixture (те же FakeConn/FakePoolWithAcquire что у TestSetFunnelStage).
+    conn.execute вызывается 1 или 2 раза: [0] = UPDATE leads, [1] = INSERT funnel_events (если current != 'lost').
+    """
+
+    async def test_escort_true_sql_contains_escort_count(self, transactional_pool):
+        """escort=True → UPDATE SQL содержит escort_mention_count (инкремент)."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "new"  # лид найден, стадия не 'lost'
+
+        await db.block_lead("wa_1", "Ищет интим-услуги", escort=True)
+
+        update_sql = conn.execute.call_args_list[0].args[0]
+        assert "escort_mention_count" in update_sql
+
+    async def test_escort_true_sql_contains_do_not_contact(self, transactional_pool):
+        """escort=True → UPDATE SQL содержит do_not_contact = true."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "new"
+
+        await db.block_lead("wa_1", "Ищет интим-услуги", escort=True)
+
+        update_sql = conn.execute.call_args_list[0].args[0]
+        assert "do_not_contact = true" in update_sql
+
+    async def test_escort_true_sql_contains_100_years(self, transactional_pool):
+        """escort=True → UPDATE SQL содержит interval '100 years' (блок навсегда)."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "new"
+
+        await db.block_lead("wa_1", "Ищет интим-услуги", escort=True)
+
+        update_sql = conn.execute.call_args_list[0].args[0]
+        assert "interval '100 years'" in update_sql
+
+    async def test_escort_true_sql_contains_lost_and_null(self, transactional_pool):
+        """escort=True → UPDATE SQL содержит funnel_stage = 'lost' и next_followup_at = NULL."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "new"
+
+        await db.block_lead("wa_1", "Ищет интим-услуги", escort=True)
+
+        update_sql = conn.execute.call_args_list[0].args[0]
+        assert "funnel_stage = 'lost'" in update_sql
+        assert "next_followup_at = NULL" in update_sql
+
+    async def test_escort_true_inserts_funnel_event(self, transactional_pool):
+        """current != 'lost' + escort=True → второй execute INSERT в funnel_events с to_stage 'lost'."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "new"
+
+        await db.block_lead("wa_1", "Ищет интим-услуги", escort=True)
+
+        all_sql = [call.args[0] for call in conn.execute.call_args_list]
+        assert any("funnel_events" in sql for sql in all_sql), (
+            f"INSERT в funnel_events не найден, вызовы execute: {all_sql}"
+        )
+        funnel_sql = next(sql for sql in all_sql if "funnel_events" in sql)
+        assert "'lost'" in funnel_sql
+
+    async def test_escort_false_no_escort_count(self, transactional_pool):
+        """escort=False → UPDATE SQL НЕ содержит escort_mention_count."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "new"
+
+        await db.block_lead("wa_1", "Агрессия", escort=False)
+
+        update_sql = conn.execute.call_args_list[0].args[0]
+        assert "escort_mention_count" not in update_sql
+
+    async def test_escort_false_still_blocks(self, transactional_pool):
+        """escort=False → do_not_contact + manual_until 100 лет — блок всё равно ставится."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "new"
+
+        await db.block_lead("wa_1", "Агрессия", escort=False)
+
+        update_sql = conn.execute.call_args_list[0].args[0]
+        assert "do_not_contact = true" in update_sql
+        assert "interval '100 years'" in update_sql
+
+    async def test_not_found_returns_without_execute(self, transactional_pool):
+        """fetchval вернул None (лид не найден) → ранний return, conn.execute НЕ вызван."""
+        conn = transactional_pool
+        conn.fetchval.return_value = None  # лид не найден
+
+        await db.block_lead("wa_missing", "test reason", escort=False)
+
+        conn.execute.assert_not_called()
+
+    async def test_already_lost_no_funnel_event(self, transactional_pool):
+        """current='lost' → UPDATE выполняется, но INSERT в funnel_events НЕ вызывается."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "lost"  # уже заблокирован
+
+        await db.block_lead("wa_1", "Агрессия", escort=False)
+
+        # UPDATE должен быть вызван ровно один раз
+        assert conn.execute.call_count == 1, (
+            f"Ожидали ровно 1 execute (UPDATE), получили {conn.execute.call_count}"
+        )
+        # И это не INSERT в funnel_events
+        only_sql = conn.execute.call_args_list[0].args[0]
+        assert "funnel_events" not in only_sql, (
+            "INSERT в funnel_events не ожидался (current='lost' уже), SQL: {only_sql}"
+        )
+
+    async def test_phone_and_reason_passed_as_params(self, transactional_pool):
+        """phone и reason передаются параметрами ($1,$2), не вставляются в SQL-строку."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "new"
+        phone = "wa_555"
+        reason = "тест"
+
+        await db.block_lead(phone, reason, escort=False)
+
+        # Первый execute — UPDATE leads SET ... WHERE phone = $1
+        update_call = conn.execute.call_args_list[0]
+        sql, *params = update_call.args
+        assert phone not in sql
+        assert phone in params
+        assert reason in params
+
+
+# ---------------------------------------------------------------------------
+# touch_last_inbound
+# ---------------------------------------------------------------------------
+
+
+class TestTouchLastInbound:
+    async def test_sql_contains_last_inbound_at_now(self, pool):
+        """SQL обновляет last_inbound_at = now()."""
+        await db.touch_last_inbound("wa_1")
+
+        sql = pool.execute.call_args.args[0]
+        assert "last_inbound_at = now()" in sql
+
+    async def test_sql_contains_phone_param(self, pool):
+        """phone передаётся параметром $1."""
+        phone = "wa_999"
+
+        await db.touch_last_inbound(phone)
+
+        sql, *params = pool.execute.call_args.args
+        assert phone not in sql
+        assert params[0] == phone
+
+
+# ---------------------------------------------------------------------------
+# set_funnel_stage — транзакционный мок
+# ---------------------------------------------------------------------------
+
+
+class _FakeAsyncCtxManager:
+    """Async context manager-заглушка для мокинга acquire() и transaction()."""
+
+    def __init__(self, value=None):
+        self._value = value
+
+    async def __aenter__(self):
+        return self._value
+
+    async def __aexit__(self, *args):
+        pass
+
+
+class FakeConn:
+    """Заглушка asyncpg.Connection: fetchval + execute."""
+
+    def __init__(self):
+        self.fetchval = AsyncMock()
+        self.execute = AsyncMock()
+
+    def transaction(self):
+        return _FakeAsyncCtxManager(None)
+
+
+class FakePoolWithAcquire:
+    """Заглушка pool с acquire() → async ctx → FakeConn."""
+
+    def __init__(self, conn: "FakeConn"):
+        self._conn = conn
+
+    def acquire(self):
+        return _FakeAsyncCtxManager(self._conn)
+
+
+@pytest.fixture()
+def transactional_pool():
+    """Подменить db._pool на FakePoolWithAcquire, вернуть FakeConn для проверок."""
+    conn = FakeConn()
+    fake_pool = FakePoolWithAcquire(conn)
+    original = db._pool
+    db._pool = fake_pool
+    yield conn
+    db._pool = original
+
+
+class TestSetFunnelStage:
+    async def test_unknown_stage_raises_value_error(self):
+        """to_stage не в FUNNEL_STAGES → ValueError до обращения к пулу."""
+        with pytest.raises(ValueError, match="bogus"):
+            await db.set_funnel_stage("wa_1", "bogus")
+
+    async def test_same_stage_returns_false_no_execute(self, transactional_pool):
+        """current == to_stage → возвращает False и НЕ вызывает ни одного execute."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "qualified"  # текущая стадия = то, что хотим
+
+        result = await db.set_funnel_stage("wa_1", "qualified")
+
+        assert result is False
+        conn.execute.assert_not_called()
+
+    async def test_stage_change_returns_true_and_inserts_funnel_event(self, transactional_pool):
+        """Реальная смена стадии → возвращает True, один из execute содержит 'funnel_events'."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "new"  # было "new", будет "qualifying"
+
+        result = await db.set_funnel_stage("wa_1", "qualifying")
+
+        assert result is True
+        all_sql = [call.args[0] for call in conn.execute.call_args_list]
+        assert any("funnel_events" in sql for sql in all_sql), (
+            f"INSERT в funnel_events не найден среди вызовов execute: {all_sql}"
+        )
+
+    async def test_lost_stage_sets_next_followup_null(self, transactional_pool):
+        """Стадия 'lost' (NO_FOLLOWUP) → SQL UPDATE содержит 'next_followup_at = NULL'."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "pitched"
+
+        await db.set_funnel_stage("wa_1", "lost")
+
+        all_sql = [call.args[0] for call in conn.execute.call_args_list]
+        assert any("next_followup_at = NULL" in sql for sql in all_sql), (
+            f"Ожидали next_followup_at = NULL, SQL-вызовы: {all_sql}"
+        )
+
+    async def test_qualified_stage_uses_make_interval(self, transactional_pool):
+        """Стадия 'qualified' (FOLLOWUP_FIRST_DELAY_HOURS=48) → SQL содержит 'make_interval'."""
+        conn = transactional_pool
+        conn.fetchval.return_value = "photo_pending"
+
+        await db.set_funnel_stage("wa_1", "qualified")
+
+        all_sql = [call.args[0] for call in conn.execute.call_args_list]
+        assert any("make_interval" in sql for sql in all_sql), (
+            f"Ожидали make_interval в SQL для qualified, вызовы: {all_sql}"
+        )
