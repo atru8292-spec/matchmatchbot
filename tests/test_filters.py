@@ -684,3 +684,36 @@ class TestDecideSilentRegression:
         """Мексиканский номер + агрессия → blocked (aggressive-фильтр работает)."""
         d = decide({}, False, "idiota", "wa_5215551234567")
         assert d.action == "blocked"
+
+
+class TestSilentBypass:
+    """bypass_phones: номера-исключения silent-фильтра проходят дальше."""
+
+    BYPASS = frozenset({"wa_79635378880", "wa_79635708880"})
+
+    def test_bypass_ru_number_passes_to_ai(self):
+        r = decide({}, False, "hola quiero info", "wa_79635378880", self.BYPASS)
+        assert r.action == "needs_ai"
+
+    def test_bypass_ru_number_cyrillic_passes(self):
+        # bypass пропускает и кириллицу для этого номера
+        r = decide({}, False, "привет", "wa_79635378880", self.BYPASS)
+        assert r.action == "needs_ai"
+
+    def test_non_bypass_ru_still_silent(self):
+        r = decide({}, False, "hola", "wa_79001112233", self.BYPASS)
+        assert r.action == "silent"
+
+    def test_bypass_does_not_disable_cyrillic_for_others(self):
+        r = decide({}, False, "привет", "wa_5215551234567", self.BYPASS)
+        assert r.action == "silent"
+
+    def test_empty_bypass_default_ru_silent(self):
+        # без bypass (дефолт) — старое поведение
+        r = decide({}, False, "hola", "wa_79991234567")
+        assert r.action == "silent"
+
+    def test_bypass_does_not_break_escort_for_bypassed(self):
+        # bypass снимает только silent; escort по-прежнему блокирует
+        r = decide({}, False, "busco sexo", "wa_79635378880", self.BYPASS)
+        assert r.action == "blocked"

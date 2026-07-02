@@ -38,5 +38,21 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_temperature: float = 0.3
 
+    # ===== Фильтры =====
+    # Номера-исключения для silent-фильтра (тестовые/доверенные): для них НЕ применяем
+    # silent по +7/кириллице. Список цифр через запятую, напр. "79635708880,79635378880".
+    silent_bypass_phones: str = ""
+
+    @property
+    def silent_bypass_set(self) -> frozenset[str]:
+        """Нормализованные 'wa_<digits>' номера-исключения silent-фильтра."""
+        import re as _re
+        out = set()
+        for raw in self.silent_bypass_phones.split(","):
+            digits = _re.sub(r"\D", "", raw)
+            if digits:
+                out.add("wa_" + digits)
+        return frozenset(out)
+
 
 settings = Settings()

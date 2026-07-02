@@ -51,7 +51,8 @@ async def _process_burst(phone: str) -> None:
     # Детерминированное решение по залпу (whitelist/блок/отказ/AI).
     lead = await db.get_lead_by_phone(phone) or {}
     whitelisted = await db.is_whitelisted(phone)
-    decision = filters.decide(lead, whitelisted, combined, phone)
+    decision = filters.decide(lead, whitelisted, combined, phone,
+                              settings.silent_bypass_set)
     await _apply_decision(phone, decision, lead, combined)
 
 

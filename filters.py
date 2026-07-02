@@ -84,11 +84,13 @@ def _manual_active(lead: dict) -> bool:
         return True
 
 
-def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "") -> Decision:
+def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
+           bypass_phones: frozenset = frozenset()) -> Decision:
     """Принять детерминированное решение по лиду и склеенному тексту залпа.
 
     lead — строка leads (dict) или {} для нового. Порядок приоритетов фиксирован.
     phone — 'wa_<digits>' (для проверки региона); по умолчанию '' (совместимость).
+    bypass_phones — номера-исключения silent-фильтра (тестовые/доверенные).
     """
     lead = lead or {}
     text = user_text or ""
@@ -104,10 +106,12 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "") ->
 
     # 1.5) Не целевой регион/язык (русский номер +7 или кириллица) → тихо молчим.
     #      НЕ блокируем (не дисквалификация, вдруг ошибка) — просто не тратим AI-вызов.
-    if is_russian_number(phone):
-        return Decision("silent", "молчу — русский номер +7, не целевой регион")
-    if has_cyrillic(text):
-        return Decision("silent", "молчу — кириллица/русский язык, не целевой лид")
+    #      Номера из bypass_phones (тестовые/доверенные) проверку пропускают.
+    if phone not in bypass_phones:
+        if is_russian_number(phone):
+            return Decision("silent", "молчу — русский номер +7, не целевой регион")
+        if has_cyrillic(text):
+            return Decision("silent", "молчу — кириллица/русский язык, не целевой лид")
 
     # 2) Escort/секс-услуги → блок навсегда (с ПЕРВОГО упоминания).
     if is_escort_mention(text):
