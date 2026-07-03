@@ -78,9 +78,9 @@ def _btn(text: str, action: str, phone: str) -> dict:
 
 
 def lead_action_kb(phone: str) -> dict:
-    """Кнопки под эскалацией 'клиент готов': взять себе / заблокировать / карточка."""
+    """Кнопки под эскалацией 'клиент готов': взять себе / прекратить диалог / карточка."""
     return {"inline_keyboard": [
-        [_btn("🤝 Взять себе", "takeover", phone), _btn("⛔ Заблокировать", "block", phone)],
+        [_btn("🤝 Взять себе", "takeover", phone), _btn("🔕 Прекратить диалог", "block", phone)],
         [_btn("📇 Карточка", "card", phone)],
     ]}
 
@@ -102,11 +102,11 @@ def block_action_kb(phone: str) -> dict:
 
 
 def photo_action_kb(phone: str) -> dict:
-    """Кнопки под фото на ручной проверке: одобрить / просить другое / заблокировать."""
+    """Кнопки под фото на ручной проверке: одобрить / просить другое / прекратить диалог."""
     return {"inline_keyboard": [
         [_btn("✅ Одобрить фото", "photo_ok", phone)],
         [_btn("🔄 Просить другое", "photo_retry", phone),
-         _btn("⛔ Заблокировать", "photo_reject", phone)],
+         _btn("🔕 Прекратить диалог", "photo_reject", phone)],
         [_btn("📇 Карточка", "card", phone)],
     ]}
 
@@ -115,7 +115,7 @@ def card_action_kb(phone: str, is_manual: bool) -> dict:
     """Кнопки под карточкой лида: тумблер takeover/release по текущему режиму + блок."""
     toggle = (_btn("↩️ Вернуть боту", "release", phone) if is_manual
               else _btn("🤝 Взять себе", "takeover", phone))
-    return {"inline_keyboard": [[toggle, _btn("⛔ Заблокировать", "block", phone)]]}
+    return {"inline_keyboard": [[toggle, _btn("🔕 Прекратить диалог", "block", phone)]]}
 
 
 def _throttled(key: tuple, window_sec: int) -> bool:
@@ -168,9 +168,9 @@ async def notify_vip(lead: dict) -> None:
 
 
 async def notify_block(lead: dict, reason: str) -> None:
-    """Лид заблокирован (escort/агрессия/casual/фото) — Аня в курсе."""
+    """Бот прекратил диалог с лидом (escort/агрессия/casual/фото) — Аня в курсе."""
     text = (
-        "⛔ Заблокирован\n"
+        "🔕 Бот прекратил диалог\n"
         f"Причина: {reason}\n"
         f"Лид: {_lead_name(lead)}\n"
         f"👉 Посмотреть переписку: {_wa_link((lead or {}).get('phone', ''))}"
@@ -181,7 +181,7 @@ async def notify_block(lead: dict, reason: str) -> None:
 
 
 async def notify_photo_review(lead: dict, reason: str) -> None:
-    """Фото на ручной проверке — Аня решает кнопками (одобрить/другое/заблокировать)."""
+    """Фото на ручной проверке — Аня решает кнопками (одобрить/другое/прекратить диалог)."""
     text = (
         "📸 Фото на ручной проверке\n"
         f"Лид: {_lead_name(lead)}\n"

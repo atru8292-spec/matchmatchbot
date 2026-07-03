@@ -2,14 +2,14 @@
 
 Аня и разработка управляют ботом прямо из Telegram, не заходя в БД:
   /leads, /lead, /takeover, /release, /block, /whitelist_add/remove/list
-плюс inline-кнопки под алертами эскалации (взять себе / заблокировать / решение по фото).
+плюс inline-кнопки под алертами эскалации (взять себе / прекратить диалог / решение по фото).
 
 Транспорт — Telegram webhook: эндпоинт в main.py принимает update и зовёт handle_update.
 Команды доступны только authorized user_id (config.manager_admin_ids). Модуль НИКОГДА
 не роняет вебхук: любой сбой ловим, логируем, по возможности отвечаем текстом об ошибке.
 
 Импортирует db и escalation (одностороннее — escalation про manager_bot не знает).
-Фото-действия (одобрить/другое/заблокировать) переиспользуют main._run_ai/_send_scenario
+Фото-действия (одобрить/другое/прекратить диалог) переиспользуют main._run_ai/_send_scenario
 через ленивый импорт внутри функции (main грузит manager_bot для эндпоинта — избегаем цикла).
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ HELP_TEXT = (
     "/lead <phone> — карточка лида (история, стадия, статус)\n"
     "/takeover <phone> — забрать лида себе (бот молчит)\n"
     "/release <phone> — вернуть лида боту\n"
-    "/block <phone> [причина] — заблокировать\n"
+    "/block <phone> [причина] — прекратить диалог\n"
     "/whitelist_add <phone> <причина> — добавить в whitelist\n"
     "/whitelist_remove <phone> — убрать из whitelist\n"
     "/whitelist_list — показать whitelist\n"
@@ -143,7 +143,7 @@ def format_lead_card(lead: dict, history: list[dict], whitelisted: bool) -> tupl
     if whitelisted:
         lines.append("⭐ В whitelist (VIP/клиент — бот молчит)")
     if lead.get("do_not_contact"):
-        lines.append("⛔ do_not_contact")
+        lines.append("🔕 Диалог прекращён")
 
     lines.append("\n💬 Последние сообщения:")
     if not history:
@@ -279,9 +279,9 @@ async def _cmd_block(chat_id, args, frm) -> None:
     if not lead:
         await _reply(chat_id, f"Лид не найден: {_digits(phone)}")
         return
-    reason = " ".join(args[1:]) or "ручной блок (менеджер)"
+    reason = " ".join(args[1:]) or "прекращено вручную (менеджер)"
     await db.block_lead(phone, reason)
-    await _reply(chat_id, f"⛔ Заблокирован {_digits(phone)}: {reason}")
+    await _reply(chat_id, f"🔕 Бот прекратил диалог с {_digits(phone)}: {reason}")
 
 
 async def _cmd_wl_add(chat_id, args, frm) -> None:
@@ -383,9 +383,9 @@ async def _cb_block(chat_id, cb_id, phone) -> None:
         await _answer_callback(cb_id, "Не найден")
         await _reply(chat_id, f"Лид не найден: {_digits(phone)}")
         return
-    await db.block_lead(phone, "ручной блок (кнопка)")
-    await _answer_callback(cb_id, "Заблокирован")
-    await _reply(chat_id, f"⛔ Заблокирован {_digits(phone)}.")
+    await db.block_lead(phone, "прекращено кнопкой (менеджер)")
+    await _answer_callback(cb_id, "Диалог прекращён")
+    await _reply(chat_id, f"🔕 Бот прекратил диалог с {_digits(phone)}.")
 
 
 async def _cb_card(chat_id, cb_id, phone) -> None:
@@ -410,8 +410,8 @@ async def _cb_photo_ok(chat_id, cb_id, phone) -> None:
     # Лида могли заблокировать, пока фото ждало решения — не пишем в do_not_contact
     # (иначе бот отправит сообщение заблокированному, т.к. _run_ai минует filters.decide).
     if lead.get("do_not_contact"):
-        await _answer_callback(cb_id, "Лид заблокирован")
-        await _reply(chat_id, f"⚠️ {_digits(phone)} заблокирован — одобрение отменено.")
+        await _answer_callback(cb_id, "Диалог уже прекращён")
+        await _reply(chat_id, f"⚠️ с {_digits(phone)} диалог уже прекращён — одобрение отменено.")
         return
 
     await db.set_auto(phone)                       # бот снова ведёт диалог
@@ -442,6 +442,6 @@ async def _cb_photo_reject(chat_id, cb_id, phone) -> None:
     title = await db.get_scenario_title(12)
     await db.block_lead(phone, f"Vision (ручной отказ): {title or 'фото неприемлемо'}")
     await _answer_callback(cb_id, "Отклонено")
-    await _reply(chat_id, f"⛔ Фото отклонено, {_digits(phone)} заблокирован.")
+    await _reply(chat_id, f"🔕 Фото отклонено, бот прекратил диалог с {_digits(phone)}.")
     import main
     await main._send_scenario(phone, 12)

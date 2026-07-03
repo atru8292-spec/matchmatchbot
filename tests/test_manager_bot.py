@@ -173,6 +173,10 @@ class TestCommands:
         await mb.handle_update(_msg("/block wa_521234567890 спам и грубость"))
         block_mock.assert_awaited_once()
         assert block_mock.call_args.args[1] == "спам и грубость"
+        # Терминология: Аня не видит слова «заблокир», только про прекращение диалога.
+        reply = _patch_io["reply"].call_args.args[1]
+        assert "прекратил диалог" in reply
+        assert "заблокир" not in reply.lower()
 
     async def test_block_not_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=None))
@@ -255,6 +259,9 @@ class TestCallbacks:
         monkeypatch.setattr(db, "block_lead", block_mock)
         await mb.handle_update(_cb("mb:block:wa_1"))
         block_mock.assert_awaited_once()
+        # Терминология: нейтрально, без слова «заблокир» (тост + ответ).
+        assert "заблокир" not in _patch_io["reply"].call_args.args[1].lower()
+        assert "заблокир" not in _patch_io["answer"].call_args.args[1].lower()
 
     async def test_block_not_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=None))
@@ -293,7 +300,7 @@ class TestCallbacks:
         await mb.handle_update(_cb("mb:photo_ok:wa_1"))
         set_auto.assert_not_awaited()
         run_ai.assert_not_awaited()
-        assert "заблокирован" in _patch_io["reply"].call_args.args[1].lower()
+        assert "прекращён" in _patch_io["reply"].call_args.args[1].lower()
 
     async def test_photo_ok_not_found_aborts(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=None))

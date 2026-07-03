@@ -238,7 +238,7 @@ class TestNotifyBlock:
         assert send_mock.call_args.args[0] == "MGR"
 
     async def test_text_content(self, monkeypatch):
-        """Текст: '⛔ Заблокирован', 'Причина:', имя, wa.me ссылка."""
+        """Текст: '🔕 Бот прекратил диалог', 'Причина:', имя, wa.me ссылка."""
         monkeypatch.setattr(escalation.settings, "tg_manager_bot_token", "MGR")
         monkeypatch.setattr(escalation.settings, "tg_manager_chat_id", "C1")
         send_mock = AsyncMock()
@@ -248,7 +248,8 @@ class TestNotifyBlock:
         await escalation.notify_block(lead, "Ищет интим-услуги")
 
         text = send_mock.call_args.args[2]
-        assert "⛔ Заблокирован" in text
+        assert "🔕 Бот прекратил диалог" in text
+        assert "заблокир" not in text.lower()  # нейтральная формулировка для Ани
         assert "Причина: Ищет интим-услуги" in text
         assert "Лид: Carlos" in text
         assert "https://wa.me/79635378880" in text
