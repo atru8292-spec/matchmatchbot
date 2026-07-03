@@ -14,6 +14,7 @@ import ai
 import db
 import escalation
 import filters
+import manager_bot
 import sender
 import vision
 from config import settings
@@ -128,9 +129,9 @@ async def _process_photo(phone: str, lead: dict, content_uri: str) -> None:
         await _send_scenario(phone, 12)
         await escalation.notify_block(lead, "неприемлемое фото")
     else:  # manual
-        # Пограничное → бот молчит, Аня решает по фото.
+        # Пограничное → бот молчит, Аня решает по фото кнопками (блок 11).
         await db.update_lead_fields(phone, mode="manual")
-        await escalation.notify_escalation(lead, "Фото на ручной проверке", res.get("reason", "[фото]"))
+        await escalation.notify_photo_review(lead, res.get("reason", "[фото]"))
 
 
 async def _send_scenario(phone: str, scenario_id: int) -> None:
@@ -247,6 +248,10 @@ async def lifespan(app: FastAPI):
     # loop на первом запросе под нагрузкой.
     ai.load_system_prompt()
     vision.load_vision_prompt()
+    # Менеджер-бот (блок 11): без admin_ids команды/кнопки никому не доступны. Частый
+    # случай — TG_MANAGER_CHAT_ID это группа (отрицательный id, не совпадёт с user_id).
+    if not settings.manager_admin_ids:
+        logger.warning("TG_MANAGER_ADMIN_IDS пуст — менеджер-бот никому не доступен")
     debouncer = Debouncer(_process_burst, delay=4.0, max_wait=15.0)
     yield
     if debouncer is not None:
@@ -308,6 +313,25 @@ async def wazzup_webhook(secret: str, request: Request):
     except Exception:
         logger.exception("Webhook: ошибка обработки пейлоада")
 
+    return Response(status_code=200)
+
+
+@app.post("/webhook/telegram/{secret}")
+async def telegram_webhook(secret: str, request: Request):
+    """Приём вебхука менеджер-бота (Telegram, бот «Лиды»).
+
+    - Секрет в пути (как у Wazzup). Пустой секрет в конфиге → 403 (fail-safe).
+    - Тело — Telegram Update; авторизация и логика в manager_bot.handle_update.
+    - ВСЕГДА 200 (кроме неверного секрета) — Telegram иначе будет ретраить.
+    """
+    if not settings.tg_webhook_secret or secret != settings.tg_webhook_secret:
+        logger.warning("Telegram webhook: неверный/пустой секрет в пути")
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        update = await request.json()
+        await manager_bot.handle_update(update)
+    except Exception:
+        logger.exception("Telegram webhook: ошибка обработки update")
     return Response(status_code=200)
 
 

@@ -383,3 +383,81 @@ class TestSendTelegramDirect:
 
         # не должно бросить
         await escalation._send_telegram("valid-token", "12345", "test text")
+
+
+# ---------------------------------------------------------------------------
+# Блок 11: inline-клавиатуры + проброс reply_markup + notify_photo_review
+# ---------------------------------------------------------------------------
+
+
+class TestKeyboards:
+    def test_lead_action_kb_has_takeover_and_block(self):
+        kb = escalation.lead_action_kb("wa_1")
+        data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        assert "mb:takeover:wa_1" in data
+        assert "mb:block:wa_1" in data
+
+    def test_photo_action_kb_actions(self):
+        kb = escalation.photo_action_kb("wa_1")
+        data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        assert "mb:photo_ok:wa_1" in data
+        assert "mb:photo_retry:wa_1" in data
+        assert "mb:photo_reject:wa_1" in data
+
+    def test_card_action_kb_auto_shows_takeover(self):
+        kb = escalation.card_action_kb("wa_1", is_manual=False)
+        data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        assert "mb:takeover:wa_1" in data
+
+    def test_card_action_kb_manual_shows_release(self):
+        kb = escalation.card_action_kb("wa_1", is_manual=True)
+        data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        assert "mb:release:wa_1" in data
+
+    def test_callback_data_within_64_bytes(self):
+        """Telegram лимит callback_data — 64 байта."""
+        kb = escalation.photo_action_kb("wa_521234567890")
+        for row in kb["inline_keyboard"]:
+            for b in row:
+                assert len(b["callback_data"].encode()) <= 64
+
+
+class TestReplyMarkupPassthrough:
+    async def test_notify_escalation_passes_keyboard(self, monkeypatch):
+        monkeypatch.setattr(escalation.settings, "tg_manager_bot_token", "MGR")
+        monkeypatch.setattr(escalation.settings, "tg_manager_chat_id", "C1")
+        send_mock = AsyncMock()
+        monkeypatch.setattr(escalation, "_send_telegram", send_mock)
+        await escalation.notify_escalation(_lead(), "reason", "last")
+        kb = send_mock.call_args.args[3]
+        assert kb and "inline_keyboard" in kb
+
+    async def test_notify_photo_review_uses_photo_kb(self, monkeypatch):
+        monkeypatch.setattr(escalation.settings, "tg_manager_bot_token", "MGR")
+        monkeypatch.setattr(escalation.settings, "tg_manager_chat_id", "C1")
+        send_mock = AsyncMock()
+        monkeypatch.setattr(escalation, "_send_telegram", send_mock)
+        await escalation.notify_photo_review(_lead(), "размыто")
+        text = send_mock.call_args.args[2]
+        kb = send_mock.call_args.args[3]
+        assert "ручной проверке" in text
+        data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        assert "mb:photo_ok:wa_79635378880" in data
+
+    async def test_send_to_manager_uses_manager_token(self, monkeypatch):
+        monkeypatch.setattr(escalation.settings, "tg_manager_bot_token", "MGR")
+        monkeypatch.setattr(escalation.settings, "tg_manager_chat_id", "C1")
+        send_mock = AsyncMock()
+        monkeypatch.setattr(escalation, "_send_telegram", send_mock)
+        await escalation.send_to_manager("привет")
+        assert send_mock.call_args.args[0] == "MGR"
+        assert send_mock.call_args.args[1] == "C1"
+
+    async def test_send_telegram_includes_reply_markup_in_payload(self, monkeypatch):
+        """reply_markup доходит до payload запроса Telegram."""
+        cls = _make_http_client_cls()
+        monkeypatch.setattr(escalation.httpx, "AsyncClient", cls)
+        kb = {"inline_keyboard": [[{"text": "x", "callback_data": "mb:card:wa_1"}]]}
+        await escalation._send_telegram("TOK", "CHAT", "text", kb)
+        payload = cls._post_mock.call_args.kwargs["json"]
+        assert payload["reply_markup"] == kb

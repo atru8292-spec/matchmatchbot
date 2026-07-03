@@ -17,6 +17,11 @@
 ## Вебхук / деплой
 - [ ] **Wazzup вебхук на постоянный публичный URL** (не localtunnel!) — домен сервера +
       `/webhook/wazzup/<secret>`, `PATCH /v3/webhooks` с `messagesAndStatuses=true`.
+- [ ] **Telegram вебхук менеджер-бота** (блок 11): `setWebhook` на `<домен>/webhook/telegram/<TG_WEBHOOK_SECRET>`
+      для бота «Лиды» (`TG_MANAGER_BOT_TOKEN`). Проверить `getWebhookInfo`. Локально — тот же localtunnel.
+- [ ] **TG_WEBHOOK_SECRET** — длинный случайный (как WAZZUP_WEBHOOK_SECRET). Пустой → эндпоинт 403.
+- [ ] **TG_MANAGER_ADMIN_IDS** — Telegram user_id Ани и разработки (csv). Пусто → фолбэк на
+      chat_id из TG_MANAGER_CHAT_ID/TG_ALERTS_CHAT_ID. Чужие id команды/кнопки не получают.
 - [ ] **uvicorn с `--no-access-log`** (секрет в URL иначе утекает в journald) — в systemd-юните.
 - [ ] systemd: автоперезапуск, `journalctl` логи (блок 12).
 

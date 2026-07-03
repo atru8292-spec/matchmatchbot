@@ -507,6 +507,85 @@ async def remove_from_whitelist(phone: str) -> None:
         logger.info("whitelist: удалён %s", key)
 
 
+async def list_whitelist(limit: int = 100) -> list[dict]:
+    """Текущий whitelist (для /whitelist_list менеджер-бота), новые сверху."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT phone, reason, added_by, added_at FROM bot_whitelist "
+            "ORDER BY added_at DESC LIMIT $1",
+            limit,
+        )
+    except Exception:
+        logger.exception("list_whitelist failed")
+        raise
+    return [dict(r) for r in rows]
+
+
+# ===== Менеджер-бот: takeover / release / список лидов (блок 11) =====
+
+async def set_manual(phone: str) -> bool:
+    """Takeover: mode='manual', manual_until=NULL (бессрочно) — бот молчит, ведёт Аня.
+
+    manual_until=NULL трактуется filters._manual_active как активный бессрочный manual
+    (в отличие от block_lead, где ставится now()+100 лет). Возврат — найден ли лид.
+    """
+    try:
+        row = await _get_pool().fetchrow(
+            "UPDATE leads SET mode = 'manual', manual_until = NULL, updated_at = now() "
+            "WHERE phone = $1 RETURNING phone",
+            phone,
+        )
+    except Exception:
+        logger.exception("set_manual failed: phone=%s", phone)
+        raise
+    found = row is not None
+    logger.info("takeover: %s → manual (найден=%s)", phone, found)
+    return found
+
+
+async def set_auto(phone: str) -> bool:
+    """Release: mode='auto', manual_until=NULL — бот снова отвечает. Возврат — найден ли лид."""
+    try:
+        row = await _get_pool().fetchrow(
+            "UPDATE leads SET mode = 'auto', manual_until = NULL, updated_at = now() "
+            "WHERE phone = $1 RETURNING phone",
+            phone,
+        )
+    except Exception:
+        logger.exception("set_auto failed: phone=%s", phone)
+        raise
+    found = row is not None
+    logger.info("release: %s → auto (найден=%s)", phone, found)
+    return found
+
+
+async def list_active_leads(limit: int = 15, stage: str | None = None) -> list[dict]:
+    """Активные лиды для /leads: свежие сверху (по last_inbound_at). Опц. фильтр по стадии.
+
+    Без stage — все стадии из funnel.ACTIVE_STAGES. NULLS LAST: у кого нет времени
+    входящего — в конце.
+    """
+    try:
+        if stage:
+            rows = await _get_pool().fetch(
+                "SELECT phone, whatsapp_name, name, funnel_stage, mode, last_inbound_at "
+                "FROM leads WHERE funnel_stage = $1 "
+                "ORDER BY last_inbound_at DESC NULLS LAST LIMIT $2",
+                stage, limit,
+            )
+        else:
+            rows = await _get_pool().fetch(
+                "SELECT phone, whatsapp_name, name, funnel_stage, mode, last_inbound_at "
+                "FROM leads WHERE funnel_stage = ANY($1::text[]) "
+                "ORDER BY last_inbound_at DESC NULLS LAST LIMIT $2",
+                list(funnel.ACTIVE_STAGES), limit,
+            )
+    except Exception:
+        logger.exception("list_active_leads failed: stage=%s limit=%s", stage, limit)
+        raise
+    return [dict(r) for r in rows]
+
+
 async def touch_last_inbound(phone: str) -> None:
     """Обновить last_inbound_at=now() (метка для фоллоу-апов)."""
     try:

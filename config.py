@@ -52,6 +52,28 @@ class Settings(BaseSettings):
     tg_alerts_bot_token: str = ""
     tg_alerts_chat_id: str = ""
 
+    # ===== Менеджер-бот (блок 11) =====
+    # Секрет в пути вебхука Telegram (как у Wazzup): /webhook/telegram/<secret>.
+    # Пусто → эндпоинт отвергает любые запросы (fail-safe, команды не принимаются).
+    tg_webhook_secret: str = ""
+    # Кто может слать команды/жать кнопки (Telegram user_id через запятую). Пусто →
+    # дефолт {tg_manager_chat_id, tg_alerts_chat_id} (Аня + разработка). В личке
+    # user_id == chat_id, поэтому chat_id админов подходят напрямую.
+    tg_manager_admin_ids: str = ""
+
+    @property
+    def manager_admin_ids(self) -> frozenset[int]:
+        """Множество разрешённых Telegram user_id для менеджер-бота."""
+        raw = self.tg_manager_admin_ids.strip()
+        if not raw:
+            raw = ",".join(x for x in (self.tg_manager_chat_id, self.tg_alerts_chat_id) if x)
+        out = set()
+        for part in raw.split(","):
+            part = part.strip()
+            if part.lstrip("-").isdigit():
+                out.add(int(part))
+        return frozenset(out)
+
     # ===== Фильтры =====
     # Номера-исключения для silent-фильтра (тестовые/доверенные): для них НЕ применяем
     # silent по +7/кириллице. Список цифр через запятую, напр. "79635708880,79635378880".

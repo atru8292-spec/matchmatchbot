@@ -1235,6 +1235,8 @@ class TestProcessPhoto:
         monkeypatch.setattr(main.escalation, "notify_block", notify_block_mock)
         notify_esc_mock = AsyncMock()
         monkeypatch.setattr(main.escalation, "notify_escalation", notify_esc_mock)
+        notify_photo_mock = AsyncMock()
+        monkeypatch.setattr(main.escalation, "notify_photo_review", notify_photo_mock)
         notify_err_mock = AsyncMock()
         monkeypatch.setattr(main.escalation, "notify_error", notify_err_mock)
         run_ai_mock = AsyncMock()
@@ -1255,6 +1257,7 @@ class TestProcessPhoto:
             "send": send_mock,
             "notify_block": notify_block_mock,
             "notify_escalation": notify_esc_mock,
+            "notify_photo_review": notify_photo_mock,
             "notify_error": notify_err_mock,
             "_run_ai": run_ai_mock,
         }
@@ -1313,13 +1316,14 @@ class TestProcessPhoto:
     # --- 4. verdict=manual ---
 
     async def test_verdict_manual_updates_lead_and_escalates(self, monkeypatch):
-        """verdict=manual → update_lead_fields(mode="manual") + notify_escalation вызван; block_lead НЕ вызван."""
+        """verdict=manual → update_lead_fields(mode="manual") + notify_photo_review (кнопки, блок 11); block_lead НЕ вызван."""
         mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "manual", "reason": "unclear"})
 
         await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
 
         mocks["update_lead_fields"].assert_awaited_once_with(self.PHONE, mode="manual")
-        mocks["notify_escalation"].assert_awaited_once()
+        mocks["notify_photo_review"].assert_awaited_once()
+        mocks["notify_escalation"].assert_not_awaited()
         mocks["block_lead"].assert_not_awaited()
         mocks["_run_ai"].assert_not_awaited()
         mocks["send"].assert_not_awaited()
@@ -1356,13 +1360,13 @@ class TestProcessPhoto:
     # --- 7. analyze_photo возвращает manual-фолбэк ---
 
     async def test_analyze_returns_manual_triggers_manual_branch(self, monkeypatch):
-        """analyze_photo возвращает {"verdict":"manual","reason":"vision failed"} → ветка manual: update_lead_fields + notify_escalation."""
+        """analyze_photo возвращает {"verdict":"manual","reason":"vision failed"} → ветка manual: update_lead_fields + notify_photo_review."""
         mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "manual", "reason": "vision failed"})
 
         await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
 
         mocks["update_lead_fields"].assert_awaited_once_with(self.PHONE, mode="manual")
-        mocks["notify_escalation"].assert_awaited_once()
+        mocks["notify_photo_review"].assert_awaited_once()
         mocks["block_lead"].assert_not_awaited()
         mocks["send"].assert_not_awaited()
         mocks["save_photo"].assert_awaited_once()

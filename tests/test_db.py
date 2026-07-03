@@ -1167,3 +1167,88 @@ class TestRemoveFromWhitelist:
         with caplog.at_level(logging.WARNING, logger="matchmatch.db"):
             await db.remove_from_whitelist("wa_1")
         assert any("не найден при удалении" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# set_manual / set_auto / list_active_leads / list_whitelist (блок 11)
+# ---------------------------------------------------------------------------
+
+
+class TestSetManual:
+    async def test_returns_true_when_found(self, pool):
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+        assert await db.set_manual("wa_1") is True
+
+    async def test_returns_false_when_not_found(self, pool):
+        pool.fetchrow.return_value = None
+        assert await db.set_manual("wa_1") is False
+
+    async def test_sql_sets_manual_and_nulls_until(self, pool):
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+        await db.set_manual("wa_1")
+        sql = pool.fetchrow.call_args.args[0]
+        assert "mode = 'manual'" in sql
+        assert "manual_until = NULL" in sql
+
+    async def test_error_raises(self, pool):
+        pool.fetchrow.side_effect = RuntimeError("db")
+        with pytest.raises(RuntimeError):
+            await db.set_manual("wa_1")
+
+
+class TestSetAuto:
+    async def test_returns_true_when_found(self, pool):
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+        assert await db.set_auto("wa_1") is True
+
+    async def test_returns_false_when_not_found(self, pool):
+        pool.fetchrow.return_value = None
+        assert await db.set_auto("wa_1") is False
+
+    async def test_sql_sets_auto(self, pool):
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+        await db.set_auto("wa_1")
+        sql = pool.fetchrow.call_args.args[0]
+        assert "mode = 'auto'" in sql
+
+
+class TestListActiveLeads:
+    async def test_no_stage_uses_active_stages_array(self, pool):
+        pool.fetch.return_value = []
+        await db.list_active_leads()
+        sql, *params = pool.fetch.call_args.args
+        assert "funnel_stage = ANY" in sql
+        # первый параметр — список активных стадий
+        assert isinstance(params[0], list)
+        assert "new" in params[0]
+
+    async def test_with_stage_filters(self, pool):
+        pool.fetch.return_value = []
+        await db.list_active_leads(stage="qualifying")
+        sql, *params = pool.fetch.call_args.args
+        assert "funnel_stage = $1" in sql
+        assert params[0] == "qualifying"
+
+    async def test_limit_passed(self, pool):
+        pool.fetch.return_value = []
+        await db.list_active_leads(limit=5)
+        params = pool.fetch.call_args.args[1:]
+        assert 5 in params
+
+    async def test_returns_dicts(self, pool):
+        pool.fetch.return_value = [{"phone": "wa_1"}]
+        out = await db.list_active_leads()
+        assert out == [{"phone": "wa_1"}]
+
+
+class TestListWhitelist:
+    async def test_queries_bot_whitelist(self, pool):
+        pool.fetch.return_value = []
+        await db.list_whitelist()
+        sql = pool.fetch.call_args.args[0]
+        assert "FROM bot_whitelist" in sql
+
+    async def test_returns_dicts(self, pool):
+        pool.fetch.return_value = [{"phone": "wa_1", "reason": "VIP"}]
+        out = await db.list_whitelist()
+        assert out[0]["reason"] == "VIP"

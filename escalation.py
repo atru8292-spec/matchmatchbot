@@ -35,16 +35,23 @@ def _lead_name(lead: dict) -> str:
     return (lead or {}).get("whatsapp_name") or (lead or {}).get("name") or "лид"
 
 
-async def _send_telegram(token: str, chat_id: str, text: str) -> None:
-    """Отправить сообщение ботом. Пустой токен/сбой — лог, НЕ бросает."""
+async def _send_telegram(token: str, chat_id: str, text: str,
+                         reply_markup: dict | None = None) -> None:
+    """Отправить сообщение ботом. Пустой токен/сбой — лог, НЕ бросает.
+
+    reply_markup — inline-клавиатура Telegram (кнопки под сообщением), опционально.
+    """
     if not token or not chat_id:
         logger.debug("Telegram не настроен (нет токена/chat_id), алерт не отправлен: %s", text[:80])
         return
+    payload: dict = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+                json=payload,
             )
             r.raise_for_status()
     except httpx.HTTPStatusError as e:
@@ -53,6 +60,62 @@ async def _send_telegram(token: str, chat_id: str, text: str) -> None:
     except Exception:
         # Сетевые ошибки (таймаут/обрыв) URL с токеном не раскрывают.
         logger.exception("не смог отправить Telegram-алерт")
+
+
+async def send_to_manager(text: str, reply_markup: dict | None = None) -> None:
+    """Публичная отправка боту «Лиды» (Ане) — для ответов менеджер-бота (блок 11)."""
+    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
+                         text, reply_markup)
+
+
+# ===== Inline-клавиатуры под алертами (действия менеджер-бота, блок 11) =====
+# callback_data: 'mb:<action>:<phone>' — парсит manager_bot. ≤64 байт (phone ~15).
+CB = "mb"
+
+
+def _btn(text: str, action: str, phone: str) -> dict:
+    return {"text": text, "callback_data": f"{CB}:{action}:{phone}"}
+
+
+def lead_action_kb(phone: str) -> dict:
+    """Кнопки под эскалацией 'клиент готов': взять себе / заблокировать / карточка."""
+    return {"inline_keyboard": [
+        [_btn("🤝 Взять себе", "takeover", phone), _btn("⛔ Заблокировать", "block", phone)],
+        [_btn("📇 Карточка", "card", phone)],
+    ]}
+
+
+def vip_action_kb(phone: str) -> dict:
+    """Кнопки под VIP-алертом: взять себе / карточка (бот и так молчит)."""
+    return {"inline_keyboard": [
+        [_btn("🤝 Взять себе", "takeover", phone)],
+        [_btn("📇 Карточка", "card", phone)],
+    ]}
+
+
+def block_action_kb(phone: str) -> dict:
+    """Кнопки под алертом блокировки: вернуть боту (если ошибочно) / карточка."""
+    return {"inline_keyboard": [
+        [_btn("↩️ Вернуть боту", "release", phone)],
+        [_btn("📇 Карточка", "card", phone)],
+    ]}
+
+
+def photo_action_kb(phone: str) -> dict:
+    """Кнопки под фото на ручной проверке: одобрить / просить другое / заблокировать."""
+    return {"inline_keyboard": [
+        [_btn("✅ Одобрить фото", "photo_ok", phone)],
+        [_btn("🔄 Просить другое", "photo_retry", phone),
+         _btn("⛔ Заблокировать", "photo_reject", phone)],
+        [_btn("📇 Карточка", "card", phone)],
+    ]}
+
+
+def card_action_kb(phone: str, is_manual: bool) -> dict:
+    """Кнопки под карточкой лида: тумблер takeover/release по текущему режиму + блок."""
+    toggle = (_btn("↩️ Вернуть боту", "release", phone) if is_manual
+              else _btn("🤝 Взять себе", "takeover", phone))
+    return {"inline_keyboard": [[toggle, _btn("⛔ Заблокировать", "block", phone)]]}
 
 
 def _throttled(key: tuple, window_sec: int) -> bool:
@@ -87,7 +150,9 @@ async def notify_escalation(lead: dict, reason: str, last_msg: str) -> None:
         f'Последнее сообщение: "{last_msg}"\n'
         f"👉 Написать: {_wa_link((lead or {}).get('phone', ''))}"
     )
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id, text)
+    phone = (lead or {}).get("phone", "")
+    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
+                         text, lead_action_kb(phone) if phone else None)
 
 
 async def notify_vip(lead: dict) -> None:
@@ -97,7 +162,9 @@ async def notify_vip(lead: dict) -> None:
         f"{_lead_name(lead)}\n"
         f"👉 Ответь лично: {_wa_link((lead or {}).get('phone', ''))}"
     )
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id, text)
+    phone = (lead or {}).get("phone", "")
+    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
+                         text, vip_action_kb(phone) if phone else None)
 
 
 async def notify_block(lead: dict, reason: str) -> None:
@@ -108,7 +175,22 @@ async def notify_block(lead: dict, reason: str) -> None:
         f"Лид: {_lead_name(lead)}\n"
         f"👉 Посмотреть переписку: {_wa_link((lead or {}).get('phone', ''))}"
     )
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id, text)
+    phone = (lead or {}).get("phone", "")
+    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
+                         text, block_action_kb(phone) if phone else None)
+
+
+async def notify_photo_review(lead: dict, reason: str) -> None:
+    """Фото на ручной проверке — Аня решает кнопками (одобрить/другое/заблокировать)."""
+    text = (
+        "📸 Фото на ручной проверке\n"
+        f"Лид: {_lead_name(lead)}\n"
+        f"Vision: {reason}\n"
+        f"👉 Открыть чат: {_wa_link((lead or {}).get('phone', ''))}"
+    )
+    phone = (lead or {}).get("phone", "")
+    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
+                         text, photo_action_kb(phone) if phone else None)
 
 
 # ===== Technical (бот «Ошибки») =====

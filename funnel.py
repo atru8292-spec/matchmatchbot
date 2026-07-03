@@ -33,6 +33,11 @@ NO_FOLLOWUP_STAGES: frozenset[str] = frozenset({
     "client_starter", "client_standard", "client_vip", "event_attended",
 })
 
+# Активные стадии — лид ещё в работе (не клиент, не отказ). Для /leads менеджер-бота.
+ACTIVE_STAGES: tuple[str, ...] = (
+    "new", "qualifying", "photo_pending", "qualified", "pitched", "videocall_set",
+)
+
 # Задел под фоллоу-апы (планировщик — отдельный блок позже).
 # stage → задержка первого догона в ЧАСАХ от смены стадии. Растущие интервалы и
 # лимит попыток планировщик применит сам; здесь — момент первого next_followup_at.

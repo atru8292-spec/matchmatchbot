@@ -262,3 +262,41 @@ class TestMalformedAndEdgePayloads:
             json={"messages": None},
         )
         assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Telegram webhook менеджер-бота (блок 11)
+# ---------------------------------------------------------------------------
+
+import main
+from unittest.mock import AsyncMock
+
+
+class TestTelegramWebhook:
+    def test_empty_secret_config_forbids(self, monkeypatch):
+        """Пустой tg_webhook_secret в конфиге → любой запрос 403 (fail-safe)."""
+        monkeypatch.setattr(main.settings, "tg_webhook_secret", "")
+        r = client.post("/webhook/telegram/anything", json={"update_id": 1})
+        assert r.status_code == 403
+
+    def test_wrong_secret_forbidden(self, monkeypatch):
+        monkeypatch.setattr(main.settings, "tg_webhook_secret", "tgsecret")
+        r = client.post("/webhook/telegram/WRONG", json={"update_id": 1})
+        assert r.status_code == 403
+
+    def test_correct_secret_calls_handle_update(self, monkeypatch):
+        monkeypatch.setattr(main.settings, "tg_webhook_secret", "tgsecret")
+        handle_mock = AsyncMock()
+        monkeypatch.setattr(main.manager_bot, "handle_update", handle_mock)
+        update = {"update_id": 5, "message": {"text": "/help"}}
+        r = client.post("/webhook/telegram/tgsecret", json=update)
+        assert r.status_code == 200
+        handle_mock.assert_awaited_once_with(update)
+
+    def test_handler_exception_still_200(self, monkeypatch):
+        """Сбой обработки update не должен уронить ответ (иначе Telegram ретраит)."""
+        monkeypatch.setattr(main.settings, "tg_webhook_secret", "tgsecret")
+        monkeypatch.setattr(main.manager_bot, "handle_update",
+                            AsyncMock(side_effect=RuntimeError("boom")))
+        r = client.post("/webhook/telegram/tgsecret", json={"update_id": 1})
+        assert r.status_code == 200
