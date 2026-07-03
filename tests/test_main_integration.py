@@ -734,6 +734,7 @@ class TestRunAI:
         monkeypatch.setattr(db, "get_scenario_title", title_mock)
         send_mock = AsyncMock(return_value=1)
         monkeypatch.setattr(main.sender, "send", send_mock)
+        monkeypatch.setattr(db, "arm_followup_if_missing", AsyncMock())  # блок 13
         return gen_mock, update_mock, funnel_mock, block_mock, title_mock, send_mock
 
     # --- 1. respond + extracted → update_lead_fields вызван ---
@@ -1050,6 +1051,7 @@ class TestEscalationIntegration:
         monkeypatch.setattr(db, "block_lead", AsyncMock())
         monkeypatch.setattr(db, "get_scenario_title", AsyncMock(return_value="Хочу контакт девушки"))
         monkeypatch.setattr(main.sender, "send", AsyncMock(return_value=1))
+        monkeypatch.setattr(db, "arm_followup_if_missing", AsyncMock())  # блок 13
         # Эскалация
         vip_mock = AsyncMock()
         block_mock = AsyncMock()
@@ -1623,3 +1625,17 @@ class TestProcessBurstWrapper:
         err = AsyncMock(); monkeypatch.setattr(main.escalation, "notify_error", err)
         await main._process_burst("wa_1")   # не должно бросить
         err.assert_awaited_once()
+
+
+class TestRunAiArmsFollowup:
+    async def test_arms_followup_when_timer_missing(self, monkeypatch):
+        """Лид остался 'new' (AI не сменил стадию) → взводим таймер догона."""
+        monkeypatch.setattr(main.ai, "generate_reply", AsyncMock(return_value={
+            "messages": ["hola"], "action": "respond", "funnel_stage": None,
+            "extracted": {}, "used_scenario_id": None, "needs_escalation": False,
+            "send_invitation": False}))
+        monkeypatch.setattr(main.db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        arm = AsyncMock(); monkeypatch.setattr(main.db, "arm_followup_if_missing", arm)
+        await main._run_ai("wa_1", {"phone": "wa_1", "funnel_stage": "new"}, "hola")
+        arm.assert_awaited_once_with("wa_1", main.funnel.FOLLOWUP_FIRST_DELAY_HOURS["new"])

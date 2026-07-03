@@ -604,3 +604,28 @@ class TestSetEventValidation:
         await mb.handle_update(_msg("/set_event 2026-08-15 | Av X"))
         setm.assert_not_awaited()
         assert "времени" in _patch_io["reply"].call_args.args[1].lower()
+
+
+class TestLinkCommands:
+    async def test_set_event_link_stores(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/set_event_link https://pay.example/evt"))
+        setm.assert_awaited_once_with("event_link", "https://pay.example/evt")
+
+    async def test_set_event_link_rejects_non_url(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/set_event_link notaurl"))
+        setm.assert_not_awaited()
+
+    async def test_set_course_link_stores(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/set_course_link https://rusaencdmx.com/curso"))
+        setm.assert_awaited_once_with("course_link", "https://rusaencdmx.com/curso")
+
+    async def test_event_shows_links(self, _patch_io, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "event_active": "1", "event_date": "2026-08-15", "event_link": "https://pay/x",
+            "course_link": "https://c/curso", "invitation_ready": "1"}))
+        await mb.handle_update(_msg("/event"))
+        reply = _patch_io["reply"].call_args.args[1]
+        assert "https://pay/x" in reply and "https://c/curso" in reply

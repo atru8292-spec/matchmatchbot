@@ -1379,3 +1379,13 @@ class TestEventReminderIdempotency:
         sql, *params = pool.execute.call_args.args
         assert "INSERT INTO events" in sql
         assert params == ["wa_1", "remind_day", "2026-08-15"]
+
+
+class TestArmFollowupIfMissing:
+    async def test_sql_guards_null_and_sets_interval(self, pool):
+        await db.arm_followup_if_missing("wa_1", 48)
+        sql, *params = pool.execute.call_args.args
+        assert "next_followup_at IS NULL" in sql          # не перетираем существующий таймер
+        assert "make_interval(hours =>" in sql
+        assert "followup_sent_count = 0" in sql
+        assert params == ["wa_1", 48]

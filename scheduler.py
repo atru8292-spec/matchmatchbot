@@ -36,6 +36,16 @@ def _bubbles(template: str) -> list[str]:
     return [p.strip() for p in (template or "").split("\n\n") if p.strip()]
 
 
+def _personalize(text: str, name: str | None, rung: int) -> str:
+    """Подстановка имени в follow-up: [имя] → имя/guapo всегда; 'Hola guapo' → 'Hola {имя}'
+    на 1-й и 3-й попытке (rung 0 и 2), если имя известно — чтобы не долбить 'guapo' каждый раз."""
+    display = (name or "").strip()
+    text = text.replace("[имя]", display or "guapo")
+    if display and rung in (0, 2):
+        text = text.replace("Hola guapo", f"Hola {display}")
+    return text
+
+
 def _fill_event(template: str, settings_map: dict) -> str:
     """Подставить время/адрес из app_settings в плейсхолдеры сценария."""
     addr = settings_map.get("event_address") or ""
@@ -65,7 +75,9 @@ async def run_followups() -> int:
                 logger.error("followup: нет template сценария %s", scenario_id)
                 await escalation.notify_error("scheduler.followup", f"нет сценария {scenario_id}")
                 continue
-            sent = await sender.send(phone, _bubbles(tmpl))
+            name = ld.get("whatsapp_name") or ld.get("name")
+            bubbles = [_personalize(b, name, count) for b in _bubbles(tmpl)]
+            sent = await sender.send(phone, bubbles)
             if sent == 0:
                 # Wazzup не принял (send не бросает, вернул 0) — НЕ жжём ступень лестницы,
                 # оставляем next_followup_at как есть, повторим на следующем тике.
@@ -75,8 +87,9 @@ async def run_followups() -> int:
                        else datetime.now(timezone.utc) + timedelta(days=next_days))
             await db.mark_followup_sent(phone, next_at)
             done += 1
-        except Exception:
+        except Exception as e:
             logger.exception("followup упал для %s", phone)
+            await escalation.notify_error("scheduler.followup", repr(e), phone)
     if done:
         logger.info("followups: отправлено %d", done)
     return done
@@ -130,8 +143,9 @@ async def _send_event_batch(kind: str, scenario_id: int, settings_map: dict,
                 continue  # Wazzup не принял — не логируем маркер, повторим на след. тике
             await db.log_event_reminder(phone, kind, date_str)
             sent += 1
-        except Exception:
+        except Exception as e:
             logger.exception("event reminder %s упал для %s", kind, phone)
+            await escalation.notify_error("scheduler.event", repr(e), phone)
     if sent:
         logger.info("event reminder %s: отправлено %d (дата %s)", kind, sent, date_str)
     return sent

@@ -350,6 +350,24 @@ async def due_followups(no_followup_stages: list[str], max_followups: int,
     return [dict(r) for r in rows]
 
 
+async def arm_followup_if_missing(phone: str, hours: int) -> None:
+    """Взвести первый таймер догона, ЕСЛИ он ещё не стоит (next_followup_at IS NULL).
+
+    Нужно для лидов, застрявших на 'new' (стадия проставляется дефолтом при INSERT, не через
+    set_funnel_stage, поэтому таймер не ставится). Зовём после ответа бота. Существующий
+    таймер (например от смены стадии) НЕ трогаем — не сбиваем расписание догонов."""
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET next_followup_at = now() + make_interval(hours => $2), "
+            "followup_sent_count = 0, updated_at = now() "
+            "WHERE phone = $1 AND next_followup_at IS NULL",
+            phone, hours,
+        )
+    except Exception:
+        logger.exception("arm_followup_if_missing failed: phone=%s", phone)
+        raise
+
+
 async def mark_followup_sent(phone: str, next_followup_at) -> None:
     """Инкремент followup_sent_count + новый next_followup_at (или None → NULL, финиш)."""
     try:
@@ -799,7 +817,7 @@ async def set_funnel_stage(phone: str, to_stage: str, meta: dict | None = None) 
                             to_stage, hours, phone,
                         )
                     else:
-                        # активная стадия без расписания догона (напр. new/qualifying)
+                        # активная стадия, для которой нет записи в FOLLOWUP_FIRST_DELAY_HOURS
                         await conn.execute(
                             "UPDATE leads SET funnel_stage = $1, updated_at = now() WHERE phone = $2",
                             to_stage, phone,

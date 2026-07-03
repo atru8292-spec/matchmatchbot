@@ -423,3 +423,50 @@ class TestSendImage:
         ok = await sender.send_image("wa_1", "https://x/inv.jpg")
         assert ok is False
         err.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Плейсхолдеры ссылок [course_link]/[event_link] (блок 13)
+# ---------------------------------------------------------------------------
+
+
+class TestLinkPlaceholders:
+    async def test_fills_course_link(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings",
+                            AsyncMock(return_value={"course_link": "https://c/curso"}))
+        out = await sender._fill_link_placeholders("cursos aquí: [course_link]")
+        assert out == "cursos aquí: https://c/curso"
+
+    async def test_empty_course_link_drops_bubble(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings",
+                            AsyncMock(return_value={"course_link": ""}))
+        out = await sender._fill_link_placeholders("cursos aquí: [course_link]")
+        assert out is None   # пустая ссылка → баббл не отправляем
+
+    async def test_no_placeholder_untouched_no_db(self, monkeypatch, db_pool):
+        get = AsyncMock(); monkeypatch.setattr(sender.db, "get_settings", get)
+        out = await sender._fill_link_placeholders("Hola guapo 🤍")
+        assert out == "Hola guapo 🤍"
+        get.assert_not_awaited()   # без плейсхолдера в БД не ходим
+
+    async def test_send_skips_bubble_when_link_empty(self, monkeypatch, db_pool):
+        cls = _make_http_client_cls()
+        monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
+        monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
+        monkeypatch.setattr(sender.db, "get_settings", AsyncMock(return_value={"course_link": ""}))
+        sent = await sender.send("wa_1", ["Gracias 🤍", "cursos: [course_link]"])
+        assert sent == 1   # первый баббл ушёл, второй (только ссылка, пусто) — нет
+
+
+class TestLinkPlaceholdersTwoPass:
+    async def test_both_present_one_empty_drops_whole_bubble(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings",
+                            AsyncMock(return_value={"course_link": "https://c", "event_link": ""}))
+        out = await sender._fill_link_placeholders("cursos [course_link] pago [event_link]")
+        assert out is None   # event_link пуст → весь баббл дропаем, course не теряем частично
+
+    async def test_both_present_both_filled(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings",
+                            AsyncMock(return_value={"course_link": "https://c", "event_link": "https://e"}))
+        out = await sender._fill_link_placeholders("cursos [course_link] pago [event_link]")
+        assert out == "cursos https://c pago https://e"

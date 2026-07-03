@@ -64,6 +64,29 @@ async def send_one(chat_id: str, text: str) -> bool:
         return False
 
 
+_LINK_PLACEHOLDERS = (("[course_link]", "course_link"), ("[event_link]", "event_link"))
+
+
+async def _fill_link_placeholders(text: str) -> str | None:
+    """Подставить ссылки из app_settings в [course_link]/[event_link].
+
+    Ссылка задана → подставляем. Ссылка пустая → возвращаем None (баббл не отправляем,
+    чтобы лид не получил «... aquí: » без ссылки). Плейсхолдеры вынесены в отдельные
+    бабблы (см. миграцию 005), поэтому дроп баббла не рвёт остальной текст.
+    """
+    present = [(ph, key) for ph, key in _LINK_PLACEHOLDERS if ph in text]
+    if not present:
+        return text
+    settings_map = await db.get_settings([key for _, key in present])
+    # Сначала проверяем ВСЕ: если хоть одна нужная ссылка пуста — дропаем баббл целиком
+    # (не подставляем частично, чтобы не потерять уже вставленное и не оставить дыру).
+    if any(not (settings_map.get(key) or "").strip() for _, key in present):
+        return None
+    for ph, key in present:
+        text = text.replace(ph, settings_map[key].strip())
+    return text
+
+
 async def send_image(phone: str, image_url: str) -> bool:
     """Отправить картинку в WhatsApp через Wazzup (contentUri = публичный URL). Не бросает.
 
@@ -108,6 +131,9 @@ async def send(phone: str, messages: list) -> int:
     chat_id = phone.replace("wa_", "", 1)
     sent = 0
     for text in messages:
+        text = await _fill_link_placeholders(text)
+        if not text or not text.strip():
+            continue  # баббл был только про ссылку, а ссылка не задана — пропускаем
         await asyncio.sleep(compute_delay(text))
         ok = await send_one(chat_id, text)
         if ok:

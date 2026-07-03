@@ -16,6 +16,7 @@ import ai
 import db
 import escalation
 import filters
+import funnel
 import manager_bot
 import scheduler
 import sender
@@ -247,6 +248,12 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
                                   meta={"scenario_id": result["used_scenario_id"]})
 
     await sender.send(phone, messages)  # messages лиду
+    # Блок 13: взвести догон, если таймер ещё не стоит (лид застрял на 'new' — стадия
+    # ставится дефолтом при INSERT, не через set_funnel_stage). Существующий таймер не трогаем.
+    stage_now = result["funnel_stage"] or lead.get("funnel_stage")
+    hours = funnel.FOLLOWUP_FIRST_DELAY_HOURS.get(stage_now)
+    if hours:
+        await db.arm_followup_if_missing(phone, hours)
     # Блок 13: лид спросил детали/локацию ивента (AI выставил send_invitation) →
     # шлём картинку-приглашение, если Аня отметила её готовой (иначе тихо пропустим).
     # Обёрнуто: сбой отправки картинки не должен ронять уже успешный ответ лиду.

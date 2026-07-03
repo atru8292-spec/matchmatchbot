@@ -180,3 +180,47 @@ class TestTick:
         await scheduler.tick()
         err.assert_awaited()             # алерт по сбою followups
         e.assert_awaited_once()          # event-часть всё равно отработала
+
+
+class TestPersonalize:
+    def test_fills_imya_placeholder(self):
+        assert scheduler._personalize("Hola [имя]!", "Carlos", 2) == "Hola Carlos!"
+
+    def test_imya_fallback_guapo(self):
+        assert scheduler._personalize("Hola [имя]!", None, 2) == "Hola guapo!"
+
+    def test_guapo_to_name_on_odd_rung(self):
+        # rung 0 (1-я попытка) → по имени
+        assert scheduler._personalize("Hola guapo! 🤍", "Carlos", 0) == "Hola Carlos! 🤍"
+
+    def test_guapo_kept_on_even_rung(self):
+        # rung 1 (2-я попытка) → оставляем guapo
+        assert scheduler._personalize("Hola guapo! 🤍", "Carlos", 1) == "Hola guapo! 🤍"
+
+    def test_no_name_keeps_guapo(self):
+        assert scheduler._personalize("Hola guapo!", None, 0) == "Hola guapo!"
+
+
+class TestFollowupPersonalized:
+    async def test_followup_uses_name_on_first_rung(self, monkeypatch):
+        lead = {"phone": "wa_1", "funnel_stage": "qualified", "followup_sent_count": 0,
+                "whatsapp_name": "Carlos", "name": None}
+        monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[lead]))
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola guapo! 🤍 sigues?"))
+        send = AsyncMock(return_value=1); monkeypatch.setattr(sender, "send", send)
+        monkeypatch.setattr(db, "mark_followup_sent", AsyncMock())
+        await scheduler.run_followups()
+        bubbles = send.call_args.args[1]
+        assert any("Carlos" in b for b in bubbles)
+        assert not any("guapo" in b for b in bubbles)
+
+
+class TestFollowupAlerts:
+    async def test_per_lead_failure_alerts(self, monkeypatch):
+        lead = {"phone": "wa_1", "funnel_stage": "qualified", "followup_sent_count": 0,
+                "whatsapp_name": None, "name": None}
+        monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[lead]))
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(side_effect=RuntimeError("db")))
+        err = AsyncMock(); monkeypatch.setattr(scheduler.escalation, "notify_error", err)
+        await scheduler.run_followups()
+        err.assert_awaited_once()

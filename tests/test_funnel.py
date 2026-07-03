@@ -190,9 +190,16 @@ class TestFollowupFirstDelayHours:
     def test_videocall_set_24h(self):
         assert FOLLOWUP_FIRST_DELAY_HOURS["videocall_set"] == 24
 
-    def test_exactly_three_stages(self):
-        """Ровно три стадии имеют заданную первую задержку фоллоу-апа."""
-        assert len(FOLLOWUP_FIRST_DELAY_HOURS) == 3
+    def test_early_stages_have_delay(self):
+        """Ранние стадии тоже догоняются (блок 13): new/qualifying/photo_pending."""
+        assert FOLLOWUP_FIRST_DELAY_HOURS["new"] == 48
+        assert FOLLOWUP_FIRST_DELAY_HOURS["qualifying"] == 24
+        assert FOLLOWUP_FIRST_DELAY_HOURS["photo_pending"] == 24
+
+    def test_covers_all_active_stages(self):
+        """Все активные стадии имеют задержку догона (иначе молчун на стадии не пингуется)."""
+        for stage in funnel.ACTIVE_STAGES:
+            assert stage in FOLLOWUP_FIRST_DELAY_HOURS, f"нет задержки для {stage}"
 
     def test_all_values_are_positive_int(self):
         """Все задержки — положительные целые числа (часы)."""

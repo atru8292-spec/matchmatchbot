@@ -133,8 +133,8 @@
     "blocks_lead": false,
     "messages": [
       "Gracias por el info guapo 🤍",
-      "Mira, ahorita tengo una lista de espera que puede tardar entre 6 y 12 meses. Mientras, te invito a tomar nuestros cursos en línea aquí: www.rusaenmexico.com",
-      "Cuando se desocupan lugares para la agencia, primero consideramos a las personas que ya tomaron nuestros cursos, y de ahí los demás"
+      "Mira, ahorita tengo una lista de espera que puede tardar entre 6 y 12 meses.",
+      "Mientras, te invito a tomar nuestros cursos en línea aquí: [course_link]. Cuando se desocupan lugares para la agencia, primero consideramos a quienes ya tomaron los cursos, y de ahí los demás"
     ],
     "note": "",
     "trigger_es": "soy mesero / soy conductor / estudiante / desempleado / no tengo trabajo"
@@ -161,7 +161,8 @@
     "blocks_lead": true,
     "messages": [
       "Gracias por la foto guapo 🤍",
-      "Ahorita tengo una lista de espera para la agencia. Mientras, te invito a tomar nuestro curso de cómo conectar con mujeres eslavas aquí: www.rusaenmexico.com"
+      "Ahorita tengo una lista de espera para la agencia.",
+      "Mientras, te invito a tomar nuestro curso de cómo conectar con mujeres eslavas aquí: [course_link]"
     ],
     "note": "",
     "trigger_es": "foto inapropiada / foto desnudo / nude"
@@ -233,7 +234,8 @@
     "blocks_lead": false,
     "messages": [
       "Todo bien guapo, respeto tu decisión 🤍",
-      "Te dejo en nuestra lista por si algún día cambia algo. Mientras, te invito a tomar nuestros cursos en línea aquí: www.rusaenmexico.com ✨"
+      "Te dejo en nuestra lista por si algún día cambia algo.",
+      "Mientras, te invito a tomar nuestros cursos en línea aquí: [course_link] ✨"
     ],
     "note": "",
     "trigger_es": "no me interesa / no gracias / paso / no es para mi"
@@ -379,7 +381,8 @@
     "messages": [
       "Te agradezco la honestidad guapo 🤍",
       "Pero nosotros trabajamos solo con personas que buscan relación seria. Las chicas en nuestra base buscan matrimonio, familia, pareja a largo plazo",
-      "Si cambias tu enfoque, aquí estaremos ✨ Mientras, te invito a tomar nuestros cursos en línea aquí: www.rusaenmexico.com"
+      "Si cambias tu enfoque, aquí estaremos ✨",
+      "Mientras, te invito a tomar nuestros cursos en línea aquí: [course_link]"
     ],
     "note": "",
     "trigger_es": "algo casual / sin compromiso / no busco nada serio / solo diversion"
@@ -653,8 +656,9 @@
     "mode": "bot_auto",
     "blocks_lead": false,
     "messages": [
-      "Hola guapo! 🤍 hoy es el día del evento, qué emoción! Te espero a las 8:30 PM",
-      "Te paso la ubicación y los detalles aquí: [dirección, lugar, parking]. Cualquier cosa me avisas ✨"
+      "Hola guapo! 🤍 hoy es el día del evento, qué emoción! Te espero a las [hora]",
+      "Te paso la ubicación y los detalles aquí: [dirección, lugar, parking]. Cualquier cosa me avisas ✨",
+      "💳 Reserva tu lugar aquí: [event_link]"
     ],
     "note": "Точный текст с адресом и временем подставляется под конкретный ивент.",
     "trigger_es": "dia del evento recordatorio (mensaje del bot)"
