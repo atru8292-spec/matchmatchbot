@@ -253,6 +253,19 @@ async def lifespan(app: FastAPI):
     if not settings.manager_admin_ids:
         logger.warning("TG_MANAGER_ADMIN_IDS пуст — менеджер-бот никому не доступен")
     debouncer = Debouncer(_process_burst, delay=4.0, max_wait=15.0)
+    # Startup-sweep: debounce-таймеры теряются при рестарте — прогоняем лидов с
+    # непроцессенными inbound заново, чтобы их сообщения не зависли (blocks 12).
+    if db.is_ready():
+        try:
+            phones = await db.phones_with_unprocessed_inbound()
+            for p in phones:
+                await debouncer.trigger(p)
+            if phones:
+                logger.info("startup-sweep: %d лид(ов) с непроцессенными inbound → в debounce", len(phones))
+        except Exception as e:
+            # Не роняем старт, но алертим: иначе залипшие inbound молча ждут след. рестарта.
+            logger.exception("startup-sweep упал (не критично для старта)")
+            await escalation.notify_error("startup_sweep", repr(e))
     yield
     if debouncer is not None:
         await debouncer.shutdown()

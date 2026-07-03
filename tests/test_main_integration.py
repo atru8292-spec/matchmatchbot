@@ -1512,3 +1512,61 @@ class TestProcessBurstPhotoRouting:
         photo_mock.side_effect = RuntimeError("save_photo down")
         await main._process_burst(self.PHONE)  # не должно бросить
         notify_err_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Startup-sweep в lifespan (блок 12)
+# ---------------------------------------------------------------------------
+
+
+class TestStartupSweep:
+    async def test_sweep_triggers_debounce_for_unprocessed(self, monkeypatch):
+        """На старте лиды с непроцессенными inbound прогоняются через debounce.trigger."""
+        monkeypatch.setattr(main.settings, "supabase_db_dsn", "")  # пропустить init_pool
+        monkeypatch.setattr(main.db, "is_ready", lambda: True)
+        monkeypatch.setattr(main.db, "phones_with_unprocessed_inbound",
+                            AsyncMock(return_value=["wa_1", "wa_2", "wa_3"]))
+        monkeypatch.setattr(main.db, "close_pool", AsyncMock())
+
+        fake_deb = MagicMock()
+        fake_deb.trigger = AsyncMock()
+        fake_deb.shutdown = AsyncMock()
+        monkeypatch.setattr(main, "Debouncer", lambda *a, **k: fake_deb)
+
+        async with main.lifespan(main.app):
+            pass
+
+        assert fake_deb.trigger.await_count == 3
+
+    async def test_sweep_skipped_when_db_not_ready(self, monkeypatch):
+        """БД не готова → sweep не дёргает phones_with_unprocessed_inbound."""
+        monkeypatch.setattr(main.settings, "supabase_db_dsn", "")
+        monkeypatch.setattr(main.db, "is_ready", lambda: False)
+        phones_mock = AsyncMock(return_value=[])
+        monkeypatch.setattr(main.db, "phones_with_unprocessed_inbound", phones_mock)
+        monkeypatch.setattr(main.db, "close_pool", AsyncMock())
+        fake_deb = MagicMock(); fake_deb.trigger = AsyncMock(); fake_deb.shutdown = AsyncMock()
+        monkeypatch.setattr(main, "Debouncer", lambda *a, **k: fake_deb)
+
+        async with main.lifespan(main.app):
+            pass
+
+        phones_mock.assert_not_awaited()
+        fake_deb.trigger.assert_not_awaited()
+
+    async def test_sweep_failure_alerts_and_starts(self, monkeypatch):
+        """Сбой sweep → notify_error, но старт не падает."""
+        monkeypatch.setattr(main.settings, "supabase_db_dsn", "")
+        monkeypatch.setattr(main.db, "is_ready", lambda: True)
+        monkeypatch.setattr(main.db, "phones_with_unprocessed_inbound",
+                            AsyncMock(side_effect=RuntimeError("db down")))
+        monkeypatch.setattr(main.db, "close_pool", AsyncMock())
+        err_mock = AsyncMock()
+        monkeypatch.setattr(main.escalation, "notify_error", err_mock)
+        fake_deb = MagicMock(); fake_deb.trigger = AsyncMock(); fake_deb.shutdown = AsyncMock()
+        monkeypatch.setattr(main, "Debouncer", lambda *a, **k: fake_deb)
+
+        async with main.lifespan(main.app):
+            pass
+
+        err_mock.assert_awaited_once()

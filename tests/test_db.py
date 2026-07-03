@@ -1277,3 +1277,28 @@ class TestGetLeadPhotos:
         pool.fetch.side_effect = RuntimeError("db")
         with pytest.raises(RuntimeError):
             await db.get_lead_photos("wa_1")
+
+
+# ---------------------------------------------------------------------------
+# phones_with_unprocessed_inbound (блок 12 — startup-sweep)
+# ---------------------------------------------------------------------------
+
+
+class TestPhonesWithUnprocessedInbound:
+    async def test_returns_phone_list(self, pool):
+        pool.fetch.return_value = [{"lead_phone": "wa_1"}, {"lead_phone": "wa_2"}]
+        out = await db.phones_with_unprocessed_inbound()
+        assert out == ["wa_1", "wa_2"]
+
+    async def test_sql_filters_unprocessed_inbound(self, pool):
+        pool.fetch.return_value = []
+        await db.phones_with_unprocessed_inbound()
+        sql = pool.fetch.call_args.args[0]
+        assert "DISTINCT lead_phone" in sql
+        assert "processed = false" in sql
+        assert "inbound" in sql
+
+    async def test_error_raises(self, pool):
+        pool.fetch.side_effect = RuntimeError("db")
+        with pytest.raises(RuntimeError):
+            await db.phones_with_unprocessed_inbound()

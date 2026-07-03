@@ -274,6 +274,23 @@ async def get_unprocessed_inbound(phone: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def phones_with_unprocessed_inbound() -> list[str]:
+    """Уникальные номера с непроцессенными входящими (для startup-sweep после рестарта).
+
+    debounce-таймеры живут в памяти и теряются при рестарте — эти лиды иначе зависнут
+    с processed=false навсегда. На старте прогоняем их через debounce заново.
+    """
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT DISTINCT lead_phone FROM messages "
+            "WHERE direction = 'inbound' AND processed = false"
+        )
+    except Exception:
+        logger.exception("phones_with_unprocessed_inbound failed")
+        raise
+    return [r["lead_phone"] for r in rows]
+
+
 async def mark_messages_processed(ids: list) -> int:
     """Пометить сообщения processed=true, processed_at=now(). Вернуть число обновлённых."""
     if not ids:

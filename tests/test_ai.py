@@ -632,3 +632,115 @@ class TestDualThreshold:
         monkeypatch.setattr(ai, "_call_openai", call)
         await ai.generate_reply({}, [], "algo")
         call.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _openai_post — ретраи на 429/5xx/сеть (блок 12, надёжность)
+# ---------------------------------------------------------------------------
+
+import httpx
+
+
+def _resp(status=200, json_data=None, headers=None):
+    """Заглушка httpx.Response: status_code, headers, json(), raise_for_status()."""
+    r = MagicMock()
+    r.status_code = status
+    r.headers = headers or {}
+    r.json.return_value = json_data if json_data is not None else {}
+    if status >= 400:
+        r.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "err", request=MagicMock(), response=r)
+    else:
+        r.raise_for_status.return_value = None
+    return r
+
+
+def _client_factory(seq):
+    """Фабрика AsyncClient-заглушки: post() отдаёт элементы seq по порядку через
+    все переинстансы клиента (у _openai_post новый клиент на каждую попытку)."""
+    shared = {"i": 0, "seq": list(seq)}
+
+    class _C:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            item = shared["seq"][shared["i"]]
+            shared["i"] += 1
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    _C.shared = shared
+    return _C
+
+
+class TestOpenAIRetry:
+    async def test_success_first_try_no_sleep(self):
+        cls = _client_factory([_resp(200, {"ok": 1})])
+        sleep = AsyncMock()
+        with patch("ai.httpx.AsyncClient", cls), patch("ai.asyncio.sleep", sleep):
+            r = await ai._openai_post("u", {}, 5)
+        assert r.json() == {"ok": 1}
+        sleep.assert_not_awaited()
+
+    async def test_retries_on_429_then_succeeds(self):
+        cls = _client_factory([_resp(429), _resp(200, {"ok": 2})])
+        sleep = AsyncMock()
+        with patch("ai.httpx.AsyncClient", cls), patch("ai.asyncio.sleep", sleep):
+            r = await ai._openai_post("u", {}, 5)
+        assert r.json() == {"ok": 2}
+        sleep.assert_awaited_once()
+
+    async def test_gives_up_after_max_retries(self):
+        # MAX_RETRIES+1 попыток → все 429 → пробрасывает HTTPStatusError
+        cls = _client_factory([_resp(429)] * (ai.OPENAI_MAX_RETRIES + 1))
+        sleep = AsyncMock()
+        with patch("ai.httpx.AsyncClient", cls), patch("ai.asyncio.sleep", sleep):
+            with pytest.raises(httpx.HTTPStatusError):
+                await ai._openai_post("u", {}, 5)
+        assert sleep.await_count == ai.OPENAI_MAX_RETRIES
+
+    async def test_retry_after_header_respected(self):
+        cls = _client_factory([_resp(429, headers={"retry-after": "2"}), _resp(200)])
+        sleep = AsyncMock()
+        with patch("ai.httpx.AsyncClient", cls), patch("ai.asyncio.sleep", sleep):
+            await ai._openai_post("u", {}, 5)
+        assert sleep.await_args.args[0] == 2.0
+
+    async def test_network_error_retried(self):
+        cls = _client_factory([httpx.ConnectError("boom"), _resp(200, {"ok": 3})])
+        sleep = AsyncMock()
+        with patch("ai.httpx.AsyncClient", cls), patch("ai.asyncio.sleep", sleep):
+            r = await ai._openai_post("u", {}, 5)
+        assert r.json() == {"ok": 3}
+        sleep.assert_awaited_once()
+
+    async def test_5xx_retried(self):
+        cls = _client_factory([_resp(503), _resp(200, {"ok": 4})])
+        sleep = AsyncMock()
+        with patch("ai.httpx.AsyncClient", cls), patch("ai.asyncio.sleep", sleep):
+            r = await ai._openai_post("u", {}, 5)
+        assert r.json() == {"ok": 4}
+
+    async def test_retry_after_capped(self):
+        """Огромный Retry-After обрезается до OPENAI_MAX_RETRY_AFTER (не sleep(3600))."""
+        cls = _client_factory([_resp(429, headers={"retry-after": "3600"}), _resp(200)])
+        sleep = AsyncMock()
+        with patch("ai.httpx.AsyncClient", cls), patch("ai.asyncio.sleep", sleep):
+            await ai._openai_post("u", {}, 5)
+        assert sleep.await_args.args[0] == ai.OPENAI_MAX_RETRY_AFTER
+
+    async def test_retry_after_negative_ignored(self):
+        """Отрицательный/нулевой Retry-After игнорируется → обычный backoff."""
+        cls = _client_factory([_resp(429, headers={"retry-after": "-5"}), _resp(200)])
+        sleep = AsyncMock()
+        with patch("ai.httpx.AsyncClient", cls), patch("ai.asyncio.sleep", sleep):
+            await ai._openai_post("u", {}, 5)
+        assert sleep.await_args.args[0] == ai._backoff(0)

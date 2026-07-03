@@ -15,8 +15,10 @@
       оба Telegram-токена, WAZZUP_WEBHOOK_SECRET (длинный случайный).
 
 ## Вебхук / деплой
-- [ ] **Wazzup вебхук на постоянный публичный URL** (не localtunnel!) — домен сервера +
-      `/webhook/wazzup/<secret>`, `PATCH /v3/webhooks` с `messagesAndStatuses=true`.
+> Артефакты и пошаговый runbook: **`deploy/`** (DEPLOY.md, matchmatch-bot.service, nginx-matchmatch.conf).
+> Хостнейм: **64-188-119-94.sslip.io** (валидный Let's Encrypt cert, без покупки домена). localtunnel не используется.
+- [ ] **Wazzup вебхук на постоянный публичный URL** (не localtunnel!) —
+      `https://64-188-119-94.sslip.io/webhook/wazzup/<secret>`, `PATCH /v3/webhooks` с `messagesAndStatuses=true`.
 - [ ] **Telegram вебхук менеджер-бота** (блок 11): `setWebhook` на `<домен>/webhook/telegram/<TG_WEBHOOK_SECRET>`
       для бота «Лиды» (`TG_MANAGER_BOT_TOKEN`). Проверить `getWebhookInfo`. Локально — тот же localtunnel.
 - [ ] **TG_WEBHOOK_SECRET** — длинный случайный (как WAZZUP_WEBHOOK_SECRET). Пустой → эндпоинт 403.
@@ -26,10 +28,10 @@
 - [ ] systemd: автоперезапуск, `journalctl` логи (блок 12).
 
 ## Надёжность (доработки под нагрузку)
-- [ ] **OpenAI rate-limit handling**: retry + exponential backoff на 429 в `ai._call_openai`
-      и эмбеддингах (сейчас 429 → fallback; для потока лидов нужен ретрай). Из анализа токенов.
-- [ ] **Startup-sweep** непроцессенных inbound (`messages.processed=false`) после рестарта —
-      debounce-таймеры в памяти теряются при рестарте (debounce.py бэклог).
+- [x] **OpenAI rate-limit handling**: retry + exponential backoff на 429/5xx/сеть — `ai._openai_post`
+      (обёртка chat и эмбеддингов), уважает Retry-After. Блок 12.
+- [x] **Startup-sweep** непроцессенных inbound после рестарта — `db.phones_with_unprocessed_inbound`
+      + прогон через debounce в lifespan (main.py). Блок 12.
 - [ ] Мониторинг `cached_tokens` в логах OpenAI (prompt caching работает авто, следить за %).
 
 ## Бизнес-данные / контент

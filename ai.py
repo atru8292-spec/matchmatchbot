@@ -13,6 +13,7 @@ RAG: текст лида → эмбеддинг (text-embedding-3-small) → cos
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -59,18 +60,73 @@ def load_system_prompt() -> str:
     return _system_prompt_cache
 
 
+# ===== OpenAI с ретраями (429/5xx/сеть) =====
+
+# Поток лидов: временный 429 (rate limit) или 5xx не должен сразу уводить в fallback.
+# Ретраим с экспоненциальным backoff; после исчерпания — пробрасываем (уйдёт в fallback/эскалацию).
+OPENAI_MAX_RETRIES = 3
+OPENAI_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+OPENAI_BACKOFF_BASE = 1.0  # сек; задержка attempt = base * 2**attempt (1, 2, 4)
+OPENAI_MAX_RETRY_AFTER = 60.0  # верхний предел Retry-After (защита от sleep(3600))
+
+
+def _backoff(attempt: int) -> float:
+    return OPENAI_BACKOFF_BASE * (2 ** attempt)
+
+
+def _retry_after(r: httpx.Response) -> float | None:
+    """Retry-After (секунды) из ответа, если валидный и положительный. Кап 60с —
+    иначе кривой/огромный заголовок подвесил бы _process_burst и graceful shutdown."""
+    v = r.headers.get("retry-after")
+    if not v:
+        return None
+    try:
+        val = float(v)
+    except ValueError:
+        return None
+    if val <= 0:
+        return None
+    return min(val, OPENAI_MAX_RETRY_AFTER)
+
+
+async def _openai_post(url: str, payload: dict, timeout: float) -> httpx.Response:
+    """POST к OpenAI с ретраями на 429/5xx и сетевые сбои. Возвращает успешный Response.
+
+    После OPENAI_MAX_RETRIES безуспешных попыток пробрасывает исключение — вызывающий
+    (generate_reply) уводит в fallback, фото-ветка в manual.
+    """
+    headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+    for attempt in range(OPENAI_MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                r = await client.post(url, headers=headers, json=payload)
+        except (httpx.TimeoutException, httpx.TransportError) as e:
+            if attempt >= OPENAI_MAX_RETRIES:
+                raise
+            logger.warning("OpenAI сеть %r — ретрай %d/%d", e, attempt + 1, OPENAI_MAX_RETRIES)
+            await asyncio.sleep(_backoff(attempt))
+            continue
+        if r.status_code in OPENAI_RETRY_STATUSES and attempt < OPENAI_MAX_RETRIES:
+            delay = _retry_after(r) or _backoff(attempt)
+            logger.warning("OpenAI %d — ретрай %d/%d через %.1fs",
+                           r.status_code, attempt + 1, OPENAI_MAX_RETRIES, delay)
+            await asyncio.sleep(delay)
+            continue
+        r.raise_for_status()
+        return r
+    raise RuntimeError("OpenAI: ретраи исчерпаны")  # недостижимо (loop выходит return/raise)
+
+
 # ===== RAG =====
 
 async def _embed(text: str) -> list[float]:
     """Эмбеддинг текста (для поиска сценария). Испанский текст лида."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(
-            "https://api.openai.com/v1/embeddings",
-            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-            json={"model": settings.openai_embedding_model, "input": text},
-        )
-        r.raise_for_status()
-        return r.json()["data"][0]["embedding"]
+    r = await _openai_post(
+        "https://api.openai.com/v1/embeddings",
+        {"model": settings.openai_embedding_model, "input": text},
+        timeout=30,
+    )
+    return r.json()["data"][0]["embedding"]
 
 
 async def search_scenarios(text: str, top_k: int = 3) -> list[dict]:
@@ -201,25 +257,23 @@ def _build_user_context(lead: dict, history: list[dict], user_text: str,
 
 
 async def _call_openai(user_context: str) -> dict:
-    """Вызвать OpenAI chat (JSON-режим). Бросает при сетевой/HTTP ошибке."""
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-            json={
-                "model": settings.openai_chat_model,
-                "temperature": settings.openai_temperature,
-                "max_tokens": 600,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": load_system_prompt()},
-                    {"role": "user", "content": user_context},
-                ],
-            },
-        )
-        r.raise_for_status()
-        data = r.json()
-        content = data["choices"][0]["message"]["content"]
+    """Вызвать OpenAI chat (JSON-режим). Ретраи на 429/5xx; бросает после исчерпания."""
+    r = await _openai_post(
+        "https://api.openai.com/v1/chat/completions",
+        {
+            "model": settings.openai_chat_model,
+            "temperature": settings.openai_temperature,
+            "max_tokens": 600,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": load_system_prompt()},
+                {"role": "user", "content": user_context},
+            ],
+        },
+        timeout=60,
+    )
+    data = r.json()
+    content = data["choices"][0]["message"]["content"]
     # Расход токенов — для мониторинга стоимости. cached_tokens: часть prompt,
     # покрытая prompt-кэшем OpenAI (дешевле в 4 раза) — почти весь system prompt.
     usage = data.get("usage") or {}
