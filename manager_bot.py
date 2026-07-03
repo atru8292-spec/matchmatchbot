@@ -2,14 +2,14 @@
 
 Аня и разработка управляют ботом прямо из Telegram, не заходя в БД:
   /leads, /lead, /takeover, /release, /block, /whitelist_add/remove/list
-плюс inline-кнопки под алертами эскалации (взять себе / прекратить диалог / решение по фото).
+плюс inline-кнопки под алертами эскалации (общаться лично / больше не отвечать / решение по фото).
 
 Транспорт — Telegram webhook: эндпоинт в main.py принимает update и зовёт handle_update.
 Команды доступны только authorized user_id (config.manager_admin_ids). Модуль НИКОГДА
 не роняет вебхук: любой сбой ловим, логируем, по возможности отвечаем текстом об ошибке.
 
 Импортирует db и escalation (одностороннее — escalation про manager_bot не знает).
-Фото-действия (одобрить/другое/прекратить диалог) переиспользуют main._run_ai/_send_scenario
+Фото-действия (одобрить/другое/больше не отвечать) переиспользуют main._run_ai/_send_scenario
 через ленивый импорт внутри функции (main грузит manager_bot для эндпоинта — избегаем цикла).
 """
 from __future__ import annotations
@@ -26,15 +26,19 @@ from config import settings
 logger = logging.getLogger("matchmatch.manager_bot")
 
 HELP_TEXT = (
-    "🤖 Управление ботом Anna\n\n"
-    "/leads [стадия] — активные лиды (опц. фильтр по стадии)\n"
-    "/lead <phone> — карточка лида (история, стадия, статус)\n"
-    "/takeover <phone> — забрать лида себе (бот молчит)\n"
-    "/release <phone> — вернуть лида боту\n"
-    "/block <phone> [причина] — прекратить диалог\n"
-    "/whitelist_add <phone> <причина> — добавить в whitelist\n"
-    "/whitelist_remove <phone> — убрать из whitelist\n"
-    "/whitelist_list — показать whitelist\n"
+    "👋 Привет! Я помогаю вести переписку с новыми людьми.\n\n"
+    "Кого я сейчас веду:\n"
+    "📋 /leads — список активных\n"
+    "👤 /lead и номер — всё про одного: переписка и статус\n\n"
+    "Переписка:\n"
+    "✋ /takeover и номер — забрать переписку себе (бот замолкает)\n"
+    "🤖 /release и номер — вернуть боту (бот снова отвечает)\n"
+    "🔕 /stop и номер — перестать отвечать человеку\n\n"
+    "Твои личные клиенты (им я не пишу — общаешься сама):\n"
+    "⭐ /client_add и номер — отметить своего клиента\n"
+    "➖ /client_remove и номер — убрать из своих\n"
+    "📃 /clients — список твоих клиентов\n\n"
+    "💡 Проще всего — жать кнопки под моими сообщениями."
 )
 
 
@@ -97,23 +101,50 @@ async def _answer_callback(callback_id: str, text: str = "") -> None:
         logger.exception("не смог ответить на callback")
 
 
+async def _send_photo(chat_id, photo_url: str, caption: str | None = None,
+                      reply_markup: dict | None = None) -> None:
+    """Показать фото в чате (sendPhoto по public URL из Storage). Сбой — лог, не бросает.
+
+    caption — подпись под фото (для карточки-обложки, лимит Telegram 1024 симв.).
+    reply_markup — inline-кнопки под фото.
+    """
+    token = settings.tg_manager_bot_token
+    if not token or not photo_url:
+        return
+    payload: dict = {"chat_id": str(chat_id), "photo": photo_url}
+    if caption:
+        payload["caption"] = caption
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                f"https://api.telegram.org/bot{token}/sendPhoto", json=payload
+            )
+            r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.error("sendPhoto вернул %s", e.response.status_code)
+    except Exception:
+        logger.exception("не смог отправить фото")
+
+
 # ===== Форматтеры =====
 
 def format_leads_list(leads: list[dict], stage: str | None) -> str:
-    """Текст /leads: имя, номер, стадия, режим."""
-    head = "📋 Активные лиды"
+    """Текст /leads: имя, номер, стадия, режим — по-человечески."""
+    head = "📋 Кого я сейчас веду"
     if stage:
         head += f" · {funnel.stage_label(stage)}"
     if not leads:
-        return head + "\n\nПусто."
+        return head + "\n\nПока никого."
     lines = [head, ""]
     for ld in leads:
-        name = ld.get("whatsapp_name") or ld.get("name") or "лид"
+        name = ld.get("whatsapp_name") or ld.get("name") or "без имени"
         mode = ld.get("mode") or "auto"
-        mode_mark = " 🖐 manual" if mode == "manual" else ""
+        mode_mark = " ✋ ведёшь сама" if mode == "manual" else ""
         lines.append(f"• {name} — {funnel.stage_label(ld.get('funnel_stage'))}{mode_mark}")
         lines.append(f"    {_digits(ld.get('phone', ''))}")
-    lines.append("\nКарточка: /lead <phone>")
+    lines.append("\n👉 Подробнее: /lead и номер")
     return "\n".join(lines)
 
 
@@ -125,8 +156,8 @@ def format_lead_card(lead: dict, history: list[dict], whitelisted: bool) -> tupl
     lines = [
         f"📇 {name}",
         f"📱 {_digits(phone)}",
-        f"Стадия: {funnel.stage_label(lead.get('funnel_stage'))}",
-        f"Режим: {'🖐 ручной (бот молчит)' if mode == 'manual' else '🤖 авто'}",
+        f"Этап: {funnel.stage_label(lead.get('funnel_stage'))}",
+        f"Отвечает: {'ты (бот молчит)' if mode == 'manual' else 'бот 🤖'}",
     ]
     # Необязательные поля — показываем только заполненные.
     extras = []
@@ -139,22 +170,25 @@ def format_lead_card(lead: dict, history: list[dict], whitelisted: bool) -> tupl
     if lead.get("profession"):
         extras.append(str(lead["profession"]))
     if extras:
-        lines.append("Инфо: " + ", ".join(extras))
+        lines.append("О нём: " + ", ".join(extras))
     if whitelisted:
-        lines.append("⭐ В whitelist (VIP/клиент — бот молчит)")
+        lines.append("⭐ Твой клиент — я не пишу, общаешься сама")
     if lead.get("do_not_contact"):
-        lines.append("🔕 Диалог прекращён")
+        lines.append("🔕 Я больше не пишу этому человеку")
 
-    lines.append("\n💬 Последние сообщения:")
+    lines.append("\n💬 Последняя переписка:")
     if not history:
         lines.append("  (пусто)")
     else:
         for m in history:
-            arrow = "→" if m.get("direction") == "outbound" else "←"
+            # Кто написал: клиент / бот (авто-ответ) / ты (вручную).
+            who = {"lead": "Клиент", "manager": "Ты", "anna": "Бот"}.get(m.get("sender"))
+            if who is None:
+                who = "Клиент" if m.get("direction") == "inbound" else "Бот"
             body = (m.get("text") or "[медиа]").replace("\n", " ")
             if len(body) > 80:
                 body = body[:77] + "…"
-            lines.append(f"  {arrow} {body}")
+            lines.append(f"  {who}: {body}")
 
     kb = escalation.card_action_kb(phone, is_manual=(mode == "manual"))
     return "\n".join(lines), kb
@@ -184,7 +218,7 @@ async def _handle_message(message: dict) -> None:
 
     if not is_admin(from_id):
         logger.warning("manager_bot: команда от неавторизованного id=%s", from_id)
-        await _reply(chat_id, "⛔ Нет доступа.")
+        await _reply(chat_id, "Извини, этот бот только для своих 🙈")
         return
 
     if not text.startswith("/"):
@@ -194,6 +228,7 @@ async def _handle_message(message: dict) -> None:
     parts = text.split()
     cmd = parts[0].lower().split("@", 1)[0]  # /cmd@bot в группах → /cmd
     args = parts[1:]
+    logger.info("manager_bot: команда %r от id=%s", text, from_id)
 
     handlers = {
         "/start": _cmd_help,
@@ -202,20 +237,20 @@ async def _handle_message(message: dict) -> None:
         "/lead": _cmd_lead,
         "/takeover": _cmd_takeover,
         "/release": _cmd_release,
-        "/block": _cmd_block,
-        "/whitelist_add": _cmd_wl_add,
-        "/whitelist_remove": _cmd_wl_remove,
-        "/whitelist_list": _cmd_wl_list,
+        "/stop": _cmd_block,
+        "/client_add": _cmd_wl_add,
+        "/client_remove": _cmd_wl_remove,
+        "/clients": _cmd_wl_list,
     }
     handler = handlers.get(cmd)
     if not handler:
-        await _reply(chat_id, "Неизвестная команда.\n\n" + HELP_TEXT)
+        await _reply(chat_id, "Не знаю такой команды 🤔\n\n" + HELP_TEXT)
         return
     try:
         await handler(chat_id, args, message.get("from") or {})
     except Exception:
         logger.exception("manager_bot: команда %s упала", cmd)
-        await _reply(chat_id, "⚠️ Ошибка при выполнении команды (детали в логах).")
+        await _reply(chat_id, "⚠️ Что-то пошло не так, попробуй ещё раз.")
 
 
 async def _cmd_help(chat_id, args, frm) -> None:
@@ -223,98 +258,111 @@ async def _cmd_help(chat_id, args, frm) -> None:
 
 
 async def _cmd_leads(chat_id, args, frm) -> None:
-    stage = args[0] if args else None
-    if stage and stage not in funnel.FUNNEL_STAGES:
-        await _reply(chat_id, f"Неизвестная стадия: {stage}\nДоступные: "
-                              + ", ".join(funnel.FUNNEL_STAGES.keys()))
-        return
+    # Фильтр по этапу — необязательный; если непонятный, просто показываем всех.
+    stage = args[0] if (args and args[0] in funnel.FUNNEL_STAGES) else None
     leads = await db.list_active_leads(15, stage)
     await _reply(chat_id, format_leads_list(leads, stage))
 
 
-async def _cmd_lead(chat_id, args, frm) -> None:
-    if not args:
-        await _reply(chat_id, "Использование: /lead <phone>")
-        return
-    phone = _norm_phone(args[0])
-    if not phone:
-        await _reply(chat_id, f"Некорректный номер: {args[0]}")
-        return
+async def _show_card(chat_id, phone: str) -> None:
+    """Отправить карточку лида + его фото (если присылал). Общее для /lead и кнопки 'Карточка'."""
     lead = await db.get_lead_by_phone(phone)
     if not lead:
-        await _reply(chat_id, f"Лид не найден: {_digits(phone)}")
+        await _reply(chat_id, f"Не нашла такого человека: {_digits(phone)}")
         return
     history = await db.get_conversation_history(phone, 10)
     whitelisted = await db.is_whitelisted(phone)
     text, kb = format_lead_card(lead, history, whitelisted)
-    await _reply(chat_id, text, kb)
+    photos = await db.get_lead_photos(phone)
+    urls = [p.get("storage_url") for p in photos if p.get("storage_url")]
+    # Есть фото → карточка идёт ПОДПИСЬЮ к первому фото (кнопки там же), остальные — следом.
+    # Лимит подписи Telegram 1024 симв.: если карточка длиннее — шлём текстом, фото отдельно.
+    if urls and len(text) <= 1024:
+        await _send_photo(chat_id, urls[0], caption=text, reply_markup=kb)
+        for u in urls[1:]:
+            await _send_photo(chat_id, u, caption="📸 ещё фото")
+    else:
+        await _reply(chat_id, text, kb)
+        for u in urls:
+            await _send_photo(chat_id, u, caption="📸 Фото")
+
+
+async def _cmd_lead(chat_id, args, frm) -> None:
+    if not args:
+        await _reply(chat_id, "Напиши: /lead и номер")
+        return
+    phone = _norm_phone(args[0])
+    if not phone:
+        await _reply(chat_id, f"Не похоже на номер: {args[0]}")
+        return
+    await _show_card(chat_id, phone)
 
 
 async def _cmd_takeover(chat_id, args, frm) -> None:
     phone = _norm_phone(args[0]) if args else None
     if not phone:
-        await _reply(chat_id, "Использование: /takeover <phone>")
+        await _reply(chat_id, "Напиши: /takeover и номер")
         return
     found = await db.set_manual(phone)
-    await _reply(chat_id, f"🤝 Взял(а) себе {_digits(phone)} — бот молчит."
-                 if found else f"Лид не найден: {_digits(phone)}")
+    await _reply(chat_id, f"✋ Забрала переписку с {_digits(phone)} — бот молчит, пишешь сама."
+                 if found else f"Не нашла такого человека: {_digits(phone)}")
 
 
 async def _cmd_release(chat_id, args, frm) -> None:
     phone = _norm_phone(args[0]) if args else None
     if not phone:
-        await _reply(chat_id, "Использование: /release <phone>")
+        await _reply(chat_id, "Напиши: /release и номер")
         return
     found = await db.set_auto(phone)
-    await _reply(chat_id, f"↩️ Вернул(а) {_digits(phone)} боту — снова отвечает."
-                 if found else f"Лид не найден: {_digits(phone)}")
+    await _reply(chat_id, f"🤖 Бот снова отвечает {_digits(phone)}."
+                 if found else f"Не нашла такого человека: {_digits(phone)}")
 
 
 async def _cmd_block(chat_id, args, frm) -> None:
     phone = _norm_phone(args[0]) if args else None
     if not phone:
-        await _reply(chat_id, "Использование: /block <phone> [причина]")
+        await _reply(chat_id, "Напиши: /stop и номер")
         return
     lead = await db.get_lead_by_phone(phone)
     if not lead:
-        await _reply(chat_id, f"Лид не найден: {_digits(phone)}")
+        await _reply(chat_id, f"Не нашла такого человека: {_digits(phone)}")
         return
-    reason = " ".join(args[1:]) or "прекращено вручную (менеджер)"
+    reason = " ".join(args[1:]) or "прекращено вручную"
     await db.block_lead(phone, reason)
-    await _reply(chat_id, f"🔕 Бот прекратил диалог с {_digits(phone)}: {reason}")
+    await _reply(chat_id, f"🔕 Бот больше не пишет {_digits(phone)}.")
 
 
 async def _cmd_wl_add(chat_id, args, frm) -> None:
     if len(args) < 2:
-        await _reply(chat_id, "Использование: /whitelist_add <phone> <причина>")
+        await _reply(chat_id, "Напиши: /client_add, номер и кто это (например: /client_add 5215512345678 клиент с прошлого месяца)")
         return
     reason = " ".join(args[1:])
     try:
         await db.add_to_whitelist(args[0], reason, _actor(frm))
     except ValueError:
-        await _reply(chat_id, f"Некорректный номер: {args[0]}")
+        await _reply(chat_id, f"Не похоже на номер: {args[0]}")
         return
-    await _reply(chat_id, f"⭐ Добавлен в whitelist {_digits(_norm_phone(args[0]))}: {reason}")
+    await _reply(chat_id, f"⭐ {_digits(_norm_phone(args[0]))} — теперь твой клиент. Бот ему не пишет, общаешься сама.")
 
 
 async def _cmd_wl_remove(chat_id, args, frm) -> None:
     phone = _norm_phone(args[0]) if args else None
     if not phone:
-        await _reply(chat_id, "Использование: /whitelist_remove <phone>")
+        await _reply(chat_id, "Напиши: /client_remove и номер")
         return
     await db.remove_from_whitelist(phone)
-    await _reply(chat_id, f"Убран из whitelist: {_digits(phone)}")
+    await _reply(chat_id, f"{_digits(phone)} больше не в твоих клиентах — бот снова отвечает ему.")
 
 
 async def _cmd_wl_list(chat_id, args, frm) -> None:
     rows = await db.list_whitelist()
     if not rows:
-        await _reply(chat_id, "Whitelist пуст.")
+        await _reply(chat_id, "Пока нет ни одного твоего клиента.")
         return
-    lines = ["⭐ Whitelist:", ""]
+    lines = ["⭐ Твои клиенты:", ""]
     for r in rows:
-        lines.append(f"• {_digits(r.get('phone', ''))} — {r.get('reason') or '—'} "
-                     f"(by {r.get('added_by') or '?'})")
+        note = r.get("reason")
+        lines.append(f"• {_digits(r.get('phone', ''))}" + (f" — {note}" if note else ""))
     await _reply(chat_id, "\n".join(lines))
 
 
@@ -336,6 +384,7 @@ async def _handle_callback(cq: dict) -> None:
         return
 
     data = cq.get("data") or ""
+    logger.info("manager_bot: callback %r от id=%s", data, from_id)
     parts = data.split(":", 2)
     if len(parts) != 3 or parts[0] != escalation.CB:
         await _answer_callback(cb_id, "Не понял действие")
@@ -360,58 +409,51 @@ async def _handle_callback(cq: dict) -> None:
     except Exception:
         logger.exception("manager_bot: callback %s упал", action)
         await _answer_callback(cb_id, "Ошибка")
-        await _reply(chat_id, "⚠️ Ошибка при выполнении действия (детали в логах).")
+        await _reply(chat_id, "⚠️ Что-то пошло не так.")
 
 
 async def _cb_takeover(chat_id, cb_id, phone) -> None:
     found = await db.set_manual(phone)
-    await _answer_callback(cb_id, "Взято" if found else "Не найден")
-    await _reply(chat_id, f"🤝 Взял(а) себе {_digits(phone)} — бот молчит."
-                 if found else f"Лид не найден: {_digits(phone)}")
+    await _answer_callback(cb_id, "Забрала" if found else "Не нашла")
+    await _reply(chat_id, f"✋ Забрала переписку с {_digits(phone)} — бот молчит, пишешь сама."
+                 if found else f"Не нашла такого человека: {_digits(phone)}")
 
 
 async def _cb_release(chat_id, cb_id, phone) -> None:
     found = await db.set_auto(phone)
-    await _answer_callback(cb_id, "Возвращён" if found else "Не найден")
-    await _reply(chat_id, f"↩️ Вернул(а) {_digits(phone)} боту."
-                 if found else f"Лид не найден: {_digits(phone)}")
+    await _answer_callback(cb_id, "Готово" if found else "Не нашла")
+    await _reply(chat_id, f"🤖 Бот снова отвечает {_digits(phone)}."
+                 if found else f"Не нашла такого человека: {_digits(phone)}")
 
 
 async def _cb_block(chat_id, cb_id, phone) -> None:
     lead = await db.get_lead_by_phone(phone)
     if not lead:
-        await _answer_callback(cb_id, "Не найден")
-        await _reply(chat_id, f"Лид не найден: {_digits(phone)}")
+        await _answer_callback(cb_id, "Не нашла")
+        await _reply(chat_id, f"Не нашла такого человека: {_digits(phone)}")
         return
     await db.block_lead(phone, "прекращено кнопкой (менеджер)")
-    await _answer_callback(cb_id, "Диалог прекращён")
-    await _reply(chat_id, f"🔕 Бот прекратил диалог с {_digits(phone)}.")
+    await _answer_callback(cb_id, "Готово")
+    await _reply(chat_id, f"🔕 Бот больше не пишет {_digits(phone)}.")
 
 
 async def _cb_card(chat_id, cb_id, phone) -> None:
     await _answer_callback(cb_id)
-    lead = await db.get_lead_by_phone(phone)
-    if not lead:
-        await _reply(chat_id, f"Лид не найден: {_digits(phone)}")
-        return
-    history = await db.get_conversation_history(phone, 10)
-    whitelisted = await db.is_whitelisted(phone)
-    text, kb = format_lead_card(lead, history, whitelisted)
-    await _reply(chat_id, text, kb)
+    await _show_card(chat_id, phone)
 
 
 async def _cb_photo_ok(chat_id, cb_id, phone) -> None:
     """Одобрить фото вручную = путь вердикта 'ok': вернуть бота, квалифицировать, питч."""
     lead = await db.get_lead_by_phone(phone)
     if not lead:
-        await _answer_callback(cb_id, "Лид не найден")
-        await _reply(chat_id, f"Лид не найден: {_digits(phone)}")
+        await _answer_callback(cb_id, "Не нашла")
+        await _reply(chat_id, f"Не нашла такого человека: {_digits(phone)}")
         return
-    # Лида могли заблокировать, пока фото ждало решения — не пишем в do_not_contact
-    # (иначе бот отправит сообщение заблокированному, т.к. _run_ai минует filters.decide).
+    # Диалог могли уже прекратить, пока фото ждало решения — не пишем в do_not_contact
+    # (иначе бот отправит сообщение, т.к. _run_ai минует filters.decide).
     if lead.get("do_not_contact"):
-        await _answer_callback(cb_id, "Диалог уже прекращён")
-        await _reply(chat_id, f"⚠️ с {_digits(phone)} диалог уже прекращён — одобрение отменено.")
+        await _answer_callback(cb_id, "Уже не общаюсь")
+        await _reply(chat_id, f"⚠️ Бот уже не пишет {_digits(phone)} — одобрение отменено.")
         return
 
     await db.set_auto(phone)                       # бот снова ведёт диалог
@@ -420,7 +462,7 @@ async def _cb_photo_ok(chat_id, cb_id, phone) -> None:
     # дабл-клик) стадия уже 'qualified' → changed=False → питч НЕ шлём второй раз.
     changed = await db.set_funnel_stage(phone, "qualified", meta={"photo": "manual_ok"})
     await _answer_callback(cb_id, "Одобрено")
-    await _reply(chat_id, f"✅ Фото одобрено, {_digits(phone)} → Прошёл проверку. Бот продолжит.")
+    await _reply(chat_id, f"✅ Фото ок! Бот продолжает переписку с {_digits(phone)}.")
     if changed:
         # Свежий лид: стадия/поля изменились выше, AI должен видеть 'qualified' для RAG.
         lead = await db.get_lead_by_phone(phone) or lead
@@ -432,7 +474,7 @@ async def _cb_photo_retry(chat_id, cb_id, phone) -> None:
     """Просить другое фото: вернуть бота (следующее фото снова через Vision) + сценарий 5."""
     await db.set_auto(phone)
     await _answer_callback(cb_id, "Просим другое")
-    await _reply(chat_id, f"🔄 {_digits(phone)}: попросили другое фото.")
+    await _reply(chat_id, f"🔄 Бот попросил у {_digits(phone)} другое фото.")
     import main
     await main._send_scenario(phone, 5)
 
@@ -442,6 +484,6 @@ async def _cb_photo_reject(chat_id, cb_id, phone) -> None:
     title = await db.get_scenario_title(12)
     await db.block_lead(phone, f"Vision (ручной отказ): {title or 'фото неприемлемо'}")
     await _answer_callback(cb_id, "Отклонено")
-    await _reply(chat_id, f"🔕 Фото отклонено, бот прекратил диалог с {_digits(phone)}.")
+    await _reply(chat_id, f"🔕 Фото не подошло, бот больше не пишет {_digits(phone)}.")
     import main
     await main._send_scenario(phone, 12)

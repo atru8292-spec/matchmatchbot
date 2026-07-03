@@ -57,7 +57,7 @@ class TestStageLabel:
         assert stage_label("new") == "Новый"
 
     def test_qualifying(self):
-        assert stage_label("qualifying") == "Знакомлюсь"
+        assert stage_label("qualifying") == "Первичное общение"
 
     def test_photo_pending(self):
         assert stage_label("photo_pending") == "Жду фото"

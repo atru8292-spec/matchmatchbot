@@ -586,6 +586,25 @@ async def list_active_leads(limit: int = 15, stage: str | None = None) -> list[d
     return [dict(r) for r in rows]
 
 
+async def get_lead_photos(phone: str, limit: int = 10) -> list[dict]:
+    """Фото лида (public URL) для карточки менеджер-бота, старые → новые.
+
+    Только строки с непустым storage_url (есть что показать). vision_verdict —
+    для подписи под фото (ok/reject/manual).
+    """
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT storage_url, vision_verdict, received_at FROM lead_photos "
+            "WHERE lead_phone = $1 AND storage_url IS NOT NULL "
+            "ORDER BY received_at ASC LIMIT $2",
+            phone, limit,
+        )
+    except Exception:
+        logger.exception("get_lead_photos failed: phone=%s", phone)
+        raise
+    return [dict(r) for r in rows]
+
+
 async def touch_last_inbound(phone: str) -> None:
     """Обновить last_inbound_at=now() (метка для фоллоу-апов)."""
     try:

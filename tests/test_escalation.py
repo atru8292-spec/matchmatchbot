@@ -407,13 +407,19 @@ class TestKeyboards:
 
     def test_card_action_kb_auto_shows_takeover(self):
         kb = escalation.card_action_kb("wa_1", is_manual=False)
-        data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        data = [b.get("callback_data") for row in kb["inline_keyboard"] for b in row]
         assert "mb:takeover:wa_1" in data
 
     def test_card_action_kb_manual_shows_release(self):
         kb = escalation.card_action_kb("wa_1", is_manual=True)
-        data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        data = [b.get("callback_data") for row in kb["inline_keyboard"] for b in row]
         assert "mb:release:wa_1" in data
+
+    def test_card_action_kb_has_whatsapp_url_button(self):
+        """Под карточкой — кнопка-ссылка «Открыть переписку в WhatsApp» (wa.me)."""
+        kb = escalation.card_action_kb("wa_79635378880", is_manual=False)
+        urls = [b.get("url") for row in kb["inline_keyboard"] for b in row if b.get("url")]
+        assert any(u == "https://wa.me/79635378880" for u in urls)
 
     def test_callback_data_within_64_bytes(self):
         """Telegram лимит callback_data — 64 байта."""

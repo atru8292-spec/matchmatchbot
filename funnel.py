@@ -9,7 +9,7 @@ from __future__ import annotations
 FUNNEL_STAGES: dict[str, str] = {
     # активные
     "new": "Новый",
-    "qualifying": "Знакомлюсь",
+    "qualifying": "Первичное общение",
     "photo_pending": "Жду фото",
     "qualified": "Прошёл проверку",
     "pitched": "Показала цену",

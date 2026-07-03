@@ -1252,3 +1252,28 @@ class TestListWhitelist:
         pool.fetch.return_value = [{"phone": "wa_1", "reason": "VIP"}]
         out = await db.list_whitelist()
         assert out[0]["reason"] == "VIP"
+
+
+# ---------------------------------------------------------------------------
+# get_lead_photos (блок 11 — фото в карточке)
+# ---------------------------------------------------------------------------
+
+
+class TestGetLeadPhotos:
+    async def test_queries_lead_photos_with_url_filter(self, pool):
+        pool.fetch.return_value = []
+        await db.get_lead_photos("wa_1")
+        sql, *params = pool.fetch.call_args.args
+        assert "FROM lead_photos" in sql
+        assert "storage_url IS NOT NULL" in sql
+        assert params[0] == "wa_1"
+
+    async def test_returns_dicts(self, pool):
+        pool.fetch.return_value = [{"storage_url": "https://x/1.jpg", "vision_verdict": "ok"}]
+        out = await db.get_lead_photos("wa_1")
+        assert out[0]["storage_url"] == "https://x/1.jpg"
+
+    async def test_error_raises(self, pool):
+        pool.fetch.side_effect = RuntimeError("db")
+        with pytest.raises(RuntimeError):
+            await db.get_lead_photos("wa_1")

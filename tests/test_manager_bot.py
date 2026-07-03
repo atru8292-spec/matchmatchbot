@@ -80,7 +80,7 @@ class TestAuth:
         monkeypatch.setattr(db, "list_active_leads", list_mock)
         await mb.handle_update(_msg("/leads", uid=STRANGER_ID))
         list_mock.assert_not_awaited()
-        assert "доступ" in _patch_io["reply"].call_args.args[1].lower()
+        assert "для своих" in _patch_io["reply"].call_args.args[1].lower()
 
     async def test_non_admin_callback_denied(self, _patch_io, monkeypatch):
         set_mock = AsyncMock()
@@ -95,7 +95,7 @@ class TestAuth:
 class TestCommands:
     async def test_help(self, _patch_io):
         await mb.handle_update(_msg("/help"))
-        assert "Управление" in _patch_io["reply"].call_args.args[1]
+        assert "/leads" in _patch_io["reply"].call_args.args[1]
 
     async def test_non_command_text_shows_help(self, _patch_io):
         await mb.handle_update(_msg("привет"))
@@ -103,7 +103,7 @@ class TestCommands:
 
     async def test_unknown_command(self, _patch_io):
         await mb.handle_update(_msg("/foobar"))
-        assert "Неизвестная команда" in _patch_io["reply"].call_args.args[1]
+        assert "Не знаю такой команды" in _patch_io["reply"].call_args.args[1]
 
     async def test_leads_calls_db(self, _patch_io, monkeypatch):
         list_mock = AsyncMock(return_value=[])
@@ -117,31 +117,32 @@ class TestCommands:
         await mb.handle_update(_msg("/leads qualifying"))
         list_mock.assert_awaited_once_with(15, "qualifying")
 
-    async def test_leads_invalid_stage(self, _patch_io, monkeypatch):
-        list_mock = AsyncMock()
+    async def test_leads_invalid_stage_shows_all(self, _patch_io, monkeypatch):
+        """Непонятный фильтр не ошибка — просто показываем всех (stage=None)."""
+        list_mock = AsyncMock(return_value=[])
         monkeypatch.setattr(db, "list_active_leads", list_mock)
         await mb.handle_update(_msg("/leads nonsense"))
-        list_mock.assert_not_awaited()
-        assert "стадия" in _patch_io["reply"].call_args.args[1].lower()
+        list_mock.assert_awaited_once_with(15, None)
 
     async def test_lead_no_args(self, _patch_io):
         await mb.handle_update(_msg("/lead"))
-        assert "Использование" in _patch_io["reply"].call_args.args[1]
+        assert "Напиши" in _patch_io["reply"].call_args.args[1]
 
     async def test_lead_bad_phone(self, _patch_io):
         await mb.handle_update(_msg("/lead abc"))
-        assert "Некорректный" in _patch_io["reply"].call_args.args[1]
+        assert "Не похоже" in _patch_io["reply"].call_args.args[1]
 
     async def test_lead_not_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=None))
         await mb.handle_update(_msg("/lead wa_521234567890"))
-        assert "не найден" in _patch_io["reply"].call_args.args[1].lower()
+        assert "не нашла" in _patch_io["reply"].call_args.args[1].lower()
 
     async def test_lead_found_sends_card_with_keyboard(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone",
                             AsyncMock(return_value={"phone": "wa_1", "funnel_stage": "new", "mode": "auto"}))
         monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
         monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_lead_photos", AsyncMock(return_value=[]))
         await mb.handle_update(_msg("/lead wa_1"))
         # reply_markup (3-й позиционный) — клавиатура карточки
         call = _patch_io["reply"].call_args
@@ -150,84 +151,87 @@ class TestCommands:
     async def test_takeover_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "set_manual", AsyncMock(return_value=True))
         await mb.handle_update(_msg("/takeover wa_1"))
-        assert "Взял" in _patch_io["reply"].call_args.args[1]
+        assert "Забрала" in _patch_io["reply"].call_args.args[1]
 
     async def test_takeover_not_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "set_manual", AsyncMock(return_value=False))
         await mb.handle_update(_msg("/takeover wa_1"))
-        assert "не найден" in _patch_io["reply"].call_args.args[1].lower()
+        assert "не нашла" in _patch_io["reply"].call_args.args[1].lower()
 
     async def test_release_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "set_auto", AsyncMock(return_value=True))
         await mb.handle_update(_msg("/release wa_1"))
-        assert "Вернул" in _patch_io["reply"].call_args.args[1]
+        assert "снова отвечает" in _patch_io["reply"].call_args.args[1].lower()
 
-    async def test_block_no_args(self, _patch_io):
-        await mb.handle_update(_msg("/block"))
-        assert "Использование" in _patch_io["reply"].call_args.args[1]
+    async def test_stop_no_args(self, _patch_io):
+        await mb.handle_update(_msg("/stop"))
+        assert "Напиши" in _patch_io["reply"].call_args.args[1]
 
-    async def test_block_found_uses_reason(self, _patch_io, monkeypatch):
+    async def test_stop_found_uses_reason(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"phone": "wa_1"}))
         block_mock = AsyncMock()
         monkeypatch.setattr(db, "block_lead", block_mock)
-        await mb.handle_update(_msg("/block wa_521234567890 спам и грубость"))
+        await mb.handle_update(_msg("/stop wa_521234567890 спам и грубость"))
         block_mock.assert_awaited_once()
         assert block_mock.call_args.args[1] == "спам и грубость"
-        # Терминология: Аня не видит слова «заблокир», только про прекращение диалога.
+        # Терминология: Аня не видит слова «заблокир».
         reply = _patch_io["reply"].call_args.args[1]
-        assert "прекратил диалог" in reply
+        assert "больше не пишет" in reply.lower()
         assert "заблокир" not in reply.lower()
 
-    async def test_block_not_found(self, _patch_io, monkeypatch):
+    async def test_stop_not_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=None))
         block_mock = AsyncMock()
         monkeypatch.setattr(db, "block_lead", block_mock)
-        await mb.handle_update(_msg("/block wa_1"))
+        await mb.handle_update(_msg("/stop wa_1"))
         block_mock.assert_not_awaited()
 
-    async def test_whitelist_add_missing_reason(self, _patch_io, monkeypatch):
+    async def test_client_add_missing_reason(self, _patch_io, monkeypatch):
         add_mock = AsyncMock()
         monkeypatch.setattr(db, "add_to_whitelist", add_mock)
-        await mb.handle_update(_msg("/whitelist_add wa_1"))
+        await mb.handle_update(_msg("/client_add wa_1"))
         add_mock.assert_not_awaited()
-        assert "Использование" in _patch_io["reply"].call_args.args[1]
+        assert "Напиши" in _patch_io["reply"].call_args.args[1]
 
-    async def test_whitelist_add_ok_passes_actor(self, _patch_io, monkeypatch):
+    async def test_client_add_ok_passes_actor(self, _patch_io, monkeypatch):
         add_mock = AsyncMock()
         monkeypatch.setattr(db, "add_to_whitelist", add_mock)
-        await mb.handle_update(_msg("/whitelist_add wa_521234567890 VIP клиент"))
+        await mb.handle_update(_msg("/client_add wa_521234567890 VIP клиент"))
         add_mock.assert_awaited_once()
         assert add_mock.call_args.args[1] == "VIP клиент"
         # added_by — actor (по first_name Anna)
         assert "Anna" in add_mock.call_args.args[2]
+        # Аня видит «клиент», не «whitelist».
+        reply = _patch_io["reply"].call_args.args[1].lower()
+        assert "клиент" in reply and "whitelist" not in reply
 
-    async def test_whitelist_add_bad_phone(self, _patch_io, monkeypatch):
+    async def test_client_add_bad_phone(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "add_to_whitelist", AsyncMock(side_effect=ValueError("bad")))
-        await mb.handle_update(_msg("/whitelist_add abc причина"))
-        assert "Некорректный" in _patch_io["reply"].call_args.args[1]
+        await mb.handle_update(_msg("/client_add abc причина"))
+        assert "Не похоже" in _patch_io["reply"].call_args.args[1]
 
-    async def test_whitelist_remove(self, _patch_io, monkeypatch):
+    async def test_client_remove(self, _patch_io, monkeypatch):
         rm_mock = AsyncMock()
         monkeypatch.setattr(db, "remove_from_whitelist", rm_mock)
-        await mb.handle_update(_msg("/whitelist_remove wa_521234567890"))
+        await mb.handle_update(_msg("/client_remove wa_521234567890"))
         rm_mock.assert_awaited_once_with("wa_521234567890")
 
-    async def test_whitelist_list_empty(self, _patch_io, monkeypatch):
+    async def test_clients_empty(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "list_whitelist", AsyncMock(return_value=[]))
-        await mb.handle_update(_msg("/whitelist_list"))
-        assert "пуст" in _patch_io["reply"].call_args.args[1].lower()
+        await mb.handle_update(_msg("/clients"))
+        assert "клиент" in _patch_io["reply"].call_args.args[1].lower()
 
-    async def test_whitelist_list_rows(self, _patch_io, monkeypatch):
+    async def test_clients_rows(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "list_whitelist", AsyncMock(return_value=[
             {"phone": "wa_521234567890", "reason": "VIP", "added_by": "@anna"}]))
-        await mb.handle_update(_msg("/whitelist_list"))
+        await mb.handle_update(_msg("/clients"))
         assert "521234567890" in _patch_io["reply"].call_args.args[1]
 
     async def test_command_exception_replies_gracefully(self, _patch_io, monkeypatch):
-        """Падение хендлера → ловим, отвечаем об ошибке, не роняем вебхук."""
+        """Падение хендлера → ловим, отвечаем по-человечески, не роняем вебхук."""
         monkeypatch.setattr(db, "list_active_leads", AsyncMock(side_effect=RuntimeError("db")))
         await mb.handle_update(_msg("/leads"))
-        assert "Ошибка" in _patch_io["reply"].call_args.args[1]
+        assert "не так" in _patch_io["reply"].call_args.args[1].lower()
 
 
 # ===== Callback-кнопки =====
@@ -275,8 +279,27 @@ class TestCallbacks:
                             AsyncMock(return_value={"phone": "wa_1", "mode": "manual", "funnel_stage": "new"}))
         monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
         monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_lead_photos", AsyncMock(return_value=[]))
         await mb.handle_update(_cb("mb:card:wa_1"))
         assert _patch_io["reply"].call_args.args[2]["inline_keyboard"]
+
+    async def test_card_with_photos_sends_them(self, _patch_io, monkeypatch):
+        """Есть фото → карточка ПОДПИСЬЮ к первому фото (текст+кнопки там), остальные следом."""
+        monkeypatch.setattr(db, "get_lead_by_phone",
+                            AsyncMock(return_value={"phone": "wa_1", "mode": "auto", "funnel_stage": "new"}))
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_lead_photos", AsyncMock(return_value=[
+            {"storage_url": "https://x/1.jpg"}, {"storage_url": "https://x/2.jpg"}]))
+        photo_mock = AsyncMock(); monkeypatch.setattr(mb, "_send_photo", photo_mock)
+        await mb.handle_update(_cb("mb:card:wa_1"))
+        assert photo_mock.await_count == 2
+        # первое фото — обложка карточки: несёт подпись (текст) и кнопки
+        first = photo_mock.call_args_list[0]
+        assert first.args[1] == "https://x/1.jpg"
+        assert first.kwargs.get("caption") and first.kwargs.get("reply_markup")
+        # карточка НЕ дублируется отдельным текстом
+        _patch_io["reply"].assert_not_awaited()
 
     async def test_photo_ok_full_path(self, _patch_io, monkeypatch):
         """photo_ok = путь ok: set_auto + mark_photo_received + qualified + _run_ai (стадия сменилась)."""
@@ -300,7 +323,7 @@ class TestCallbacks:
         await mb.handle_update(_cb("mb:photo_ok:wa_1"))
         set_auto.assert_not_awaited()
         run_ai.assert_not_awaited()
-        assert "прекращён" in _patch_io["reply"].call_args.args[1].lower()
+        assert "не пишет" in _patch_io["reply"].call_args.args[1].lower()
 
     async def test_photo_ok_not_found_aborts(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=None))
@@ -354,38 +377,42 @@ class TestCallbacks:
 
 class TestFormatters:
     def test_leads_list_empty(self):
-        assert "Пусто" in mb.format_leads_list([], None)
+        assert "никого" in mb.format_leads_list([], None).lower()
 
     def test_leads_list_with_stage_header(self):
         out = mb.format_leads_list([], "qualifying")
-        assert "Знакомлюсь" in out
+        assert "Первичное общение" in out
 
     def test_leads_list_rows(self):
         out = mb.format_leads_list(
             [{"whatsapp_name": "Juan", "phone": "wa_521234567890",
               "funnel_stage": "new", "mode": "manual"}], None)
-        assert "Juan" in out and "521234567890" in out and "manual" in out
+        assert "Juan" in out and "521234567890" in out and "ведёшь сама" in out
 
     def test_lead_card_fields_and_kb(self):
         lead = {"phone": "wa_1", "whatsapp_name": "Juan", "funnel_stage": "qualified",
                 "mode": "auto", "age": 40, "is_single": True, "city": "CDMX"}
         text, kb = mb.format_lead_card(lead, [], whitelisted=True)
         assert "Juan" in text and "40" in text and "CDMX" in text
-        assert "whitelist" in text.lower()
+        # Понятная формулировка: «клиент», не «whitelist».
+        assert "клиент" in text.lower() and "whitelist" not in text.lower()
         assert kb["inline_keyboard"]
 
     def test_lead_card_history_arrows(self):
         lead = {"phone": "wa_1", "mode": "auto", "funnel_stage": "new"}
-        hist = [{"direction": "inbound", "text": "hola"},
-                {"direction": "outbound", "text": "buenos dias"}]
+        hist = [{"direction": "inbound", "sender": "lead", "text": "hola"},
+                {"direction": "outbound", "sender": "anna", "text": "buenos dias"},
+                {"direction": "outbound", "sender": "manager", "text": "te llamo"}]
         text, _ = mb.format_lead_card(lead, hist, whitelisted=False)
-        assert "← hola" in text and "→ buenos dias" in text
+        assert "Клиент: hola" in text
+        assert "Бот: buenos dias" in text
+        assert "Ты: te llamo" in text
 
     def test_lead_card_manual_shows_release_button(self):
         """mode=manual → кнопка 'Вернуть боту' (release), не 'Взять себе'."""
         lead = {"phone": "wa_1", "mode": "manual", "funnel_stage": "new"}
         _, kb = mb.format_lead_card(lead, [], whitelisted=False)
-        actions = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        actions = [b.get("callback_data", "") for row in kb["inline_keyboard"] for b in row]
         assert any("release" in a for a in actions)
 
 

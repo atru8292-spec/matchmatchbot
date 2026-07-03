@@ -78,17 +78,18 @@ def _btn(text: str, action: str, phone: str) -> dict:
 
 
 def lead_action_kb(phone: str) -> dict:
-    """Кнопки под эскалацией 'клиент готов': взять себе / прекратить диалог / карточка."""
+    """Кнопки под эскалацией 'клиент готов': общаться лично / больше не отвечать / карточка."""
     return {"inline_keyboard": [
-        [_btn("🤝 Взять себе", "takeover", phone), _btn("🔕 Прекратить диалог", "block", phone)],
+        [_btn("✋ Общаться лично", "takeover", phone)],
+        [_btn("🚫 Бот больше не пишет", "block", phone)],
         [_btn("📇 Карточка", "card", phone)],
     ]}
 
 
 def vip_action_kb(phone: str) -> dict:
-    """Кнопки под VIP-алертом: взять себе / карточка (бот и так молчит)."""
+    """Кнопки под VIP-алертом: общаться лично / карточка (бот и так молчит)."""
     return {"inline_keyboard": [
-        [_btn("🤝 Взять себе", "takeover", phone)],
+        [_btn("✋ Общаться лично", "takeover", phone)],
         [_btn("📇 Карточка", "card", phone)],
     ]}
 
@@ -102,20 +103,24 @@ def block_action_kb(phone: str) -> dict:
 
 
 def photo_action_kb(phone: str) -> dict:
-    """Кнопки под фото на ручной проверке: одобрить / просить другое / прекратить диалог."""
+    """Кнопки под фото на ручной проверке: одобрить / просить другое / больше не отвечать."""
     return {"inline_keyboard": [
         [_btn("✅ Одобрить фото", "photo_ok", phone)],
-        [_btn("🔄 Просить другое", "photo_retry", phone),
-         _btn("🔕 Прекратить диалог", "photo_reject", phone)],
+        [_btn("🔄 Просить другое", "photo_retry", phone)],
+        [_btn("🚫 Бот больше не пишет", "photo_reject", phone)],
         [_btn("📇 Карточка", "card", phone)],
     ]}
 
 
 def card_action_kb(phone: str, is_manual: bool) -> dict:
-    """Кнопки под карточкой лида: тумблер takeover/release по текущему режиму + блок."""
+    """Кнопки под карточкой лида: открыть переписку в WhatsApp + тумблер режима + стоп."""
     toggle = (_btn("↩️ Вернуть боту", "release", phone) if is_manual
-              else _btn("🤝 Взять себе", "takeover", phone))
-    return {"inline_keyboard": [[toggle, _btn("🔕 Прекратить диалог", "block", phone)]]}
+              else _btn("✋ Общаться лично", "takeover", phone))
+    return {"inline_keyboard": [
+        [{"text": "💬 Открыть переписку в WhatsApp", "url": _wa_link(phone)}],
+        [toggle],
+        [_btn("🚫 Бот больше не пишет", "block", phone)],
+    ]}
 
 
 def _throttled(key: tuple, window_sec: int) -> bool:
@@ -181,7 +186,7 @@ async def notify_block(lead: dict, reason: str) -> None:
 
 
 async def notify_photo_review(lead: dict, reason: str) -> None:
-    """Фото на ручной проверке — Аня решает кнопками (одобрить/другое/прекратить диалог)."""
+    """Фото на ручной проверке — Аня решает кнопками (одобрить/другое/больше не отвечать)."""
     text = (
         "📸 Фото на ручной проверке\n"
         f"Лид: {_lead_name(lead)}\n"
