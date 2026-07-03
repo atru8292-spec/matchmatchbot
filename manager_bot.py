@@ -83,6 +83,16 @@ async def _reply(chat_id, text: str, reply_markup: dict | None = None) -> None:
     )
 
 
+def _access_request_kb() -> dict | None:
+    """Кнопка «Написать для доступа» → t.me/<support_contact>. None если контакт не задан."""
+    handle = (settings.support_contact or "").lstrip("@").strip()
+    if not handle:
+        return None
+    return {"inline_keyboard": [
+        [{"text": "✍️ Написать для доступа", "url": f"https://t.me/{handle}"}],
+    ]}
+
+
 async def _answer_callback(callback_id: str, text: str = "") -> None:
     """Погасить «часики» на нажатой кнопке (answerCallbackQuery). Токен в логи не пишем."""
     token = settings.tg_manager_bot_token
@@ -243,7 +253,13 @@ async def _handle_message(message: dict) -> None:
 
     if not is_admin(from_id):
         logger.warning("manager_bot: команда от неавторизованного id=%s", from_id)
-        await _reply(chat_id, "Доступ только для своих 🙈")
+        contact = settings.support_contact or "администратору"
+        await _reply(
+            chat_id,
+            "🔒 Это закрытый личный бот — доступ только у своих.\n\n"
+            f"Если нужен доступ, напиши {contact}.",
+            _access_request_kb(),
+        )
         return
 
     if not text.startswith("/"):

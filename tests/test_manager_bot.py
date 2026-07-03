@@ -80,7 +80,15 @@ class TestAuth:
         monkeypatch.setattr(db, "list_active_leads", list_mock)
         await mb.handle_update(_msg("/leads", uid=STRANGER_ID))
         list_mock.assert_not_awaited()
-        assert "для своих" in _patch_io["reply"].call_args.args[1].lower()
+        call = _patch_io["reply"].call_args
+        reply = call.args[1].lower()
+        assert "закрытый" in reply and "доступ" in reply
+        # контакт для запроса доступа присутствует в тексте
+        assert "@arinashrr" in call.args[1]
+        # и кнопкой на t.me
+        kb = call.args[2]
+        urls = [b.get("url") for row in kb["inline_keyboard"] for b in row]
+        assert "https://t.me/arinashrr" in urls
 
     async def test_non_admin_callback_denied(self, _patch_io, monkeypatch):
         set_mock = AsyncMock()

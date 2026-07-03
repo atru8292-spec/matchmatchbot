@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # дефолт {tg_manager_chat_id, tg_alerts_chat_id} (Аня + разработка). В личке
     # user_id == chat_id, поэтому chat_id админов подходят напрямую.
     tg_manager_admin_ids: str = ""
+    # Контакт для запроса доступа (показывается чужим в ответе «закрытый бот»).
+    # Telegram-хендл с @; кнопка ведёт на t.me/<хендл>.
+    support_contact: str = "@arinashrr"
 
     @property
     def manager_admin_ids(self) -> frozenset[int]:
