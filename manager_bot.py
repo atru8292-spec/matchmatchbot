@@ -128,6 +128,29 @@ async def _send_photo(chat_id, photo_url: str, caption: str | None = None,
         logger.exception("не смог отправить фото")
 
 
+async def _edit_reply_markup(chat_id, message_id, reply_markup: dict) -> None:
+    """Обновить кнопки на уже отправленном сообщении (editMessageReplyMarkup).
+
+    Нужно, чтобы после takeover/release кнопка на карточке сразу менялась
+    (Общаться лично ↔ Вернуть боту), без повторного /lead. Сбой — лог, не бросает.
+    """
+    token = settings.tg_manager_bot_token
+    if not token or not message_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"https://api.telegram.org/bot{token}/editMessageReplyMarkup",
+                json={"chat_id": str(chat_id), "message_id": message_id,
+                      "reply_markup": reply_markup},
+            )
+            r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.error("editMessageReplyMarkup вернул %s", e.response.status_code)
+    except Exception:
+        logger.exception("не смог обновить кнопки")
+
+
 # ===== Форматтеры =====
 
 def format_leads_list(leads: list[dict], stage: str | None) -> str:
@@ -304,7 +327,7 @@ async def _cmd_takeover(chat_id, args, frm) -> None:
         await _reply(chat_id, "Напиши: /takeover и номер")
         return
     found = await db.set_manual(phone)
-    await _reply(chat_id, f"✋ Забрала переписку с {_digits(phone)} — бот молчит, пишешь сама."
+    await _reply(chat_id, f"✋ Бот молчит в чате с {_digits(phone)}."
                  if found else f"Не нашла такого человека: {_digits(phone)}")
 
 
@@ -371,7 +394,9 @@ async def _cmd_wl_list(chat_id, args, frm) -> None:
 async def _handle_callback(cq: dict) -> None:
     from_id = (cq.get("from") or {}).get("id")
     cb_id = cq.get("id", "")
-    chat_id = ((cq.get("message") or {}).get("chat") or {}).get("id")
+    msg = cq.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    message_id = msg.get("message_id")
 
     if not is_admin(from_id):
         logger.warning("manager_bot: callback от неавторизованного id=%s", from_id)
@@ -405,28 +430,36 @@ async def _handle_callback(cq: dict) -> None:
         await _answer_callback(cb_id, "Неизвестное действие")
         return
     try:
-        await handler(chat_id, cb_id, phone)
+        await handler(chat_id, cb_id, phone, message_id)
     except Exception:
         logger.exception("manager_bot: callback %s упал", action)
         await _answer_callback(cb_id, "Ошибка")
         await _reply(chat_id, "⚠️ Что-то пошло не так.")
 
 
-async def _cb_takeover(chat_id, cb_id, phone) -> None:
+async def _cb_takeover(chat_id, cb_id, phone, message_id=None) -> None:
     found = await db.set_manual(phone)
-    await _answer_callback(cb_id, "Забрала" if found else "Не нашла")
-    await _reply(chat_id, f"✋ Забрала переписку с {_digits(phone)} — бот молчит, пишешь сама."
-                 if found else f"Не нашла такого человека: {_digits(phone)}")
+    await _answer_callback(cb_id, "Готово" if found else "Не нашла")
+    if not found:
+        await _reply(chat_id, f"Не нашла такого человека: {_digits(phone)}")
+        return
+    await _reply(chat_id, f"✋ Бот молчит в чате с {_digits(phone)}.")
+    # Кнопка на этом же сообщении сразу становится «Вернуть боту».
+    await _edit_reply_markup(chat_id, message_id, escalation.card_action_kb(phone, is_manual=True))
 
 
-async def _cb_release(chat_id, cb_id, phone) -> None:
+async def _cb_release(chat_id, cb_id, phone, message_id=None) -> None:
     found = await db.set_auto(phone)
     await _answer_callback(cb_id, "Готово" if found else "Не нашла")
-    await _reply(chat_id, f"🤖 Бот снова отвечает {_digits(phone)}."
-                 if found else f"Не нашла такого человека: {_digits(phone)}")
+    if not found:
+        await _reply(chat_id, f"Не нашла такого человека: {_digits(phone)}")
+        return
+    await _reply(chat_id, f"🤖 Бот снова отвечает в чате с {_digits(phone)}.")
+    # Кнопка возвращается к «Общаться лично».
+    await _edit_reply_markup(chat_id, message_id, escalation.card_action_kb(phone, is_manual=False))
 
 
-async def _cb_block(chat_id, cb_id, phone) -> None:
+async def _cb_block(chat_id, cb_id, phone, message_id=None) -> None:
     lead = await db.get_lead_by_phone(phone)
     if not lead:
         await _answer_callback(cb_id, "Не нашла")
@@ -437,12 +470,12 @@ async def _cb_block(chat_id, cb_id, phone) -> None:
     await _reply(chat_id, f"🔕 Бот больше не пишет {_digits(phone)}.")
 
 
-async def _cb_card(chat_id, cb_id, phone) -> None:
+async def _cb_card(chat_id, cb_id, phone, message_id=None) -> None:
     await _answer_callback(cb_id)
     await _show_card(chat_id, phone)
 
 
-async def _cb_photo_ok(chat_id, cb_id, phone) -> None:
+async def _cb_photo_ok(chat_id, cb_id, phone, message_id=None) -> None:
     """Одобрить фото вручную = путь вердикта 'ok': вернуть бота, квалифицировать, питч."""
     lead = await db.get_lead_by_phone(phone)
     if not lead:
@@ -470,7 +503,7 @@ async def _cb_photo_ok(chat_id, cb_id, phone) -> None:
         await main._run_ai(phone, lead, "[фото одобрено вручную]")
 
 
-async def _cb_photo_retry(chat_id, cb_id, phone) -> None:
+async def _cb_photo_retry(chat_id, cb_id, phone, message_id=None) -> None:
     """Просить другое фото: вернуть бота (следующее фото снова через Vision) + сценарий 5."""
     await db.set_auto(phone)
     await _answer_callback(cb_id, "Просим другое")
@@ -479,7 +512,7 @@ async def _cb_photo_retry(chat_id, cb_id, phone) -> None:
     await main._send_scenario(phone, 5)
 
 
-async def _cb_photo_reject(chat_id, cb_id, phone) -> None:
+async def _cb_photo_reject(chat_id, cb_id, phone, message_id=None) -> None:
     """Отклонить фото = путь вердикта 'reject': блок навсегда + прощание (сценарий 12)."""
     title = await db.get_scenario_title(12)
     await db.block_lead(phone, f"Vision (ручной отказ): {title or 'фото неприемлемо'}")

@@ -38,7 +38,7 @@ def _msg(text: str, uid: int = ADMIN_ID) -> dict:
 
 def _cb(data: str, uid: int = ADMIN_ID) -> dict:
     return {"callback_query": {"id": "cbid", "data": data, "from": {"id": uid},
-                               "message": {"chat": {"id": uid}}}}
+                               "message": {"message_id": 555, "chat": {"id": uid}}}}
 
 
 # ===== Утилиты =====
@@ -151,7 +151,9 @@ class TestCommands:
     async def test_takeover_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "set_manual", AsyncMock(return_value=True))
         await mb.handle_update(_msg("/takeover wa_1"))
-        assert "Забрала" in _patch_io["reply"].call_args.args[1]
+        reply = _patch_io["reply"].call_args.args[1]
+        assert "бот молчит" in reply.lower()
+        assert "сама" not in reply.lower()  # без личного обращения
 
     async def test_takeover_not_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "set_manual", AsyncMock(return_value=False))
@@ -252,10 +254,38 @@ class TestCallbacks:
         set_mock.assert_awaited_once_with("wa_521234567890")
         _patch_io["answer"].assert_awaited()
 
+    async def test_takeover_flips_button_to_release(self, _patch_io, monkeypatch):
+        """После takeover кнопка на том же сообщении сразу → «Вернуть боту» (release)."""
+        monkeypatch.setattr(db, "set_manual", AsyncMock(return_value=True))
+        edit_mock = AsyncMock(); monkeypatch.setattr(mb, "_edit_reply_markup", edit_mock)
+        await mb.handle_update(_cb("mb:takeover:wa_1"))
+        edit_mock.assert_awaited_once()
+        new_kb = edit_mock.call_args.args[2]
+        actions = [b.get("callback_data", "") for row in new_kb["inline_keyboard"] for b in row]
+        assert any("release" in a for a in actions)
+        assert not any("takeover" in a for a in actions)
+
+    async def test_takeover_not_found_no_edit(self, _patch_io, monkeypatch):
+        """Лид не найден → кнопку не трогаем."""
+        monkeypatch.setattr(db, "set_manual", AsyncMock(return_value=False))
+        edit_mock = AsyncMock(); monkeypatch.setattr(mb, "_edit_reply_markup", edit_mock)
+        await mb.handle_update(_cb("mb:takeover:wa_1"))
+        edit_mock.assert_not_awaited()
+
     async def test_release(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "set_auto", AsyncMock(return_value=True))
         await mb.handle_update(_cb("mb:release:wa_1"))
         _patch_io["reply"].assert_awaited()
+
+    async def test_release_flips_button_to_takeover(self, _patch_io, monkeypatch):
+        """После release кнопка на том же сообщении → «Общаться лично» (takeover)."""
+        monkeypatch.setattr(db, "set_auto", AsyncMock(return_value=True))
+        edit_mock = AsyncMock(); monkeypatch.setattr(mb, "_edit_reply_markup", edit_mock)
+        await mb.handle_update(_cb("mb:release:wa_1"))
+        edit_mock.assert_awaited_once()
+        new_kb = edit_mock.call_args.args[2]
+        actions = [b.get("callback_data", "") for row in new_kb["inline_keyboard"] for b in row]
+        assert any("takeover" in a for a in actions)
 
     async def test_block_found(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"phone": "wa_1"}))
