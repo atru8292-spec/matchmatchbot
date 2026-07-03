@@ -50,12 +50,97 @@ async def _process_burst(phone: str) -> None:
     )
     await db.mark_messages_processed([m["id"] for m in msgs])
 
-    # Детерминированное решение по залпу (whitelist/блок/отказ/AI).
     lead = await db.get_lead_by_phone(phone) or {}
     whitelisted = await db.is_whitelisted(phone)
     decision = filters.decide(lead, whitelisted, combined, phone,
                               settings.silent_bypass_set)
+
+    # 1) Дисквалификация/тишина текущего залпа приоритетнее фото: whitelist/silent
+    #    (молчим) и blocked (escort/агрессия в тексте — блок, даже если в залпе есть фото).
+    if decision.action in ("silent_whitelist", "silent", "blocked"):
+        await _apply_decision(phone, decision, lead, combined)
+        return
+
+    # 2) фото в залпе → фото-ветка (Vision). Берём ПОСЛЕДНЕЕ фото С content_uri
+    #    (у последнего медиа может не быть URI, а у раннего быть — не теряем валидное).
+    photo_msgs = [m for m in msgs if (m.get("meta") or {}).get("content_type") == "photo"]
+    if photo_msgs:
+        content_uri = next(
+            (m["meta"]["content_uri"] for m in reversed(photo_msgs)
+             if (m.get("meta") or {}).get("content_uri")),
+            None,
+        )
+        if not content_uri:
+            logger.warning("фото без content_uri [%s]", phone)
+            await escalation.notify_error("photo", "нет content_uri в meta", phone)
+            return
+        # Обёртка: сообщения уже processed — сбой фото-обработки не должен быть тихим.
+        try:
+            await _process_photo(phone, lead, content_uri)
+        except Exception as e:
+            logger.exception("_process_photo упал [%s] — фото уже processed", phone)
+            await escalation.notify_error("main._process_photo", repr(e), phone)
+        return
+
+    # 3) текст → детерминированное решение (needs_ai/rejected).
     await _apply_decision(phone, decision, lead, combined)
+
+
+async def _process_photo(phone: str, lead: dict, content_uri: str) -> None:
+    """Фото-ветка: флуд → скачать → Vision → сохранить → действие по вердикту."""
+    # Флуд-защита: >5 фото/час → ручная проверка, без Vision (экономия токенов).
+    try:
+        if await db.count_recent_photos(phone) > 5:
+            logger.warning("photo flood [%s] — mode=manual, без Vision", phone)
+            await db.update_lead_fields(phone, mode="manual")
+            await escalation.notify_escalation(lead, "Много фото подряд — проверь вручную", "[фото]")
+            return
+    except Exception:
+        logger.exception("count_recent_photos упал [%s], продолжаю", phone)
+
+    # Скачивание медиа. Сбой → technical-алерт, выходим (лид ответа не получит).
+    try:
+        img = await vision.download_media(content_uri)
+    except Exception as e:
+        logger.exception("download_media упал [%s]", phone)
+        await escalation.notify_error("vision.download_media", repr(e), phone)
+        return
+
+    res = await vision.analyze_photo(img)         # ошибка внутри → manual-фолбэк
+    verdict = res["verdict"]
+    url, path = await vision.upload_to_storage(phone, img)  # сбой → (None, None)
+    await db.save_photo(phone, url, path, verdict, analysis=res,
+                        reasons=[res.get("reason", "")] if res.get("reason") else [])
+    logger.info("фото [%s]: verdict=%s (%s)", phone, verdict, res.get("reason", ""))
+
+    if verdict == "ok":
+        # Фото одобрено → лид квалифицирован, AI переходит к питчу (сценарий 6).
+        await db.mark_photo_received(phone, True)
+        await db.set_funnel_stage(phone, "qualified", meta={"photo": "ok"})
+        await _run_ai(phone, lead, "[фото одобрено]")
+    elif verdict == "retry":
+        # Непригодное (размытое/группа/скрин) → просим другое фото (сценарий 5).
+        await _send_scenario(phone, 5)
+    elif verdict == "reject":
+        # Неприемлемое (обнажёнка) → блок навсегда + прощание (сценарий 12) + алерт.
+        title = await db.get_scenario_title(12)
+        await db.block_lead(phone, f"Vision: {title or 'фото неприемлемо'}")
+        await _send_scenario(phone, 12)
+        await escalation.notify_block(lead, "неприемлемое фото")
+    else:  # manual
+        # Пограничное → бот молчит, Аня решает по фото.
+        await db.update_lead_fields(phone, mode="manual")
+        await escalation.notify_escalation(lead, "Фото на ручной проверке", res.get("reason", "[фото]"))
+
+
+async def _send_scenario(phone: str, scenario_id: int) -> None:
+    """Отправить лиду текст сценария (детерминированно, бабблами по \\n\\n)."""
+    tmpl = await db.get_scenario_template(scenario_id)
+    if not tmpl:
+        logger.warning("нет template сценария %s для %s", scenario_id, phone)
+        return
+    bubbles = [p.strip() for p in tmpl.split("\n\n") if p.strip()]
+    await sender.send(phone, bubbles)
 
 
 async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
@@ -249,13 +334,18 @@ async def _handle_incoming(msg) -> None:
         # Метка времени входящего — для планировщика фоллоу-апов (блок позже).
         await db.touch_last_inbound(nm.phone)
 
+        # content_uri в meta — чтобы фото-ветка на флаше могла скачать медиа.
+        meta = {"content_type": nm.content_type}
+        if nm.media_info and nm.media_info.get("content_uri"):
+            meta["content_uri"] = nm.media_info["content_uri"]
+
         inserted = await db.insert_message(
             nm.phone,
             "inbound",
             "lead",
             nm.user_text,
             external_message_id=nm.external_message_id,
-            meta={"content_type": nm.content_type},
+            meta=meta,
         )
         logger.info(
             "inbound %s: phone=%s type=%s inserted=%s",

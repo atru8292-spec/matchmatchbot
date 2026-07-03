@@ -1020,3 +1020,52 @@ class TestCountRecentPhotos:
 
         _, *params = pool.fetchval.call_args.args
         assert params[1] == 6, f"Ожидали hours=6, получили {params[1]}"
+
+
+# ---------------------------------------------------------------------------
+# get_scenario_template
+# ---------------------------------------------------------------------------
+
+
+class TestGetScenarioTemplate:
+    """get_scenario_template: int id → SELECT template_es; не-int → None без запроса; ошибка → None."""
+
+    async def test_int_id_returns_fetchval_result(self, pool):
+        """int id → fetchval вызван, возвращает значение template_es (строку)."""
+        pool.fetchval.return_value = "Hola, por favor envía otra foto"
+
+        result = await db.get_scenario_template(5)
+
+        assert result == "Hola, por favor envía otra foto"
+        pool.fetchval.assert_awaited_once()
+
+    async def test_sql_contains_template_es(self, pool):
+        """SQL содержит 'template_es' — правильная колонка (не title, не template_en)."""
+        pool.fetchval.return_value = "template text"
+
+        await db.get_scenario_template(5)
+
+        sql = pool.fetchval.call_args.args[0]
+        assert "template_es" in sql, f"'template_es' не найден в SQL: {sql!r}"
+
+    async def test_none_id_returns_none_without_query(self, pool):
+        """id=None (не int) → немедленно None, fetchval НЕ вызван."""
+        result = await db.get_scenario_template(None)
+
+        assert result is None
+        pool.fetchval.assert_not_called()
+
+    async def test_string_id_returns_none_without_query(self, pool):
+        """Строковый id → немедленно None, fetchval НЕ вызван."""
+        result = await db.get_scenario_template("5")
+
+        assert result is None
+        pool.fetchval.assert_not_called()
+
+    async def test_db_error_returns_none_no_raise(self, pool):
+        """Ошибка БД → возвращает None (не пробрасывает), соответствуя поведению get_scenario_title."""
+        pool.fetchval.side_effect = RuntimeError("db error")
+
+        result = await db.get_scenario_template(5)
+
+        assert result is None

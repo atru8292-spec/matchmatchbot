@@ -435,6 +435,17 @@ async def get_scenario_title(scenario_id) -> str | None:
         return None
 
 
+async def get_scenario_template(scenario_id) -> str | None:
+    """template_es сценария по id (для фото retry/reject — детерминированный текст)."""
+    if not isinstance(scenario_id, int):
+        return None
+    try:
+        return await _get_pool().fetchval("SELECT template_es FROM scenarios WHERE id = $1", scenario_id)
+    except Exception:
+        logger.exception("get_scenario_template failed: id=%s", scenario_id)
+        return None
+
+
 async def is_whitelisted(phone: str) -> bool:
     """Есть ли номер в bot_whitelist (бот для него молчит)."""
     try:
