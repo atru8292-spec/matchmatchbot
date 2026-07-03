@@ -27,18 +27,18 @@ logger = logging.getLogger("matchmatch.manager_bot")
 
 HELP_TEXT = (
     "👋 Привет! Я помогаю вести переписку с новыми людьми.\n\n"
-    "Кого я сейчас веду:\n"
+    "Активные лиды:\n"
     "📋 /leads — список активных\n"
-    "👤 /lead и номер — всё про одного: переписка и статус\n\n"
+    "📇 /lead и номер — карточка лида (переписка, статус)\n\n"
     "Переписка:\n"
-    "✋ /takeover и номер — забрать переписку себе (бот замолкает)\n"
+    "✋ /takeover и номер — вести переписку вручную (бот замолкает)\n"
     "🤖 /release и номер — вернуть боту (бот снова отвечает)\n"
     "🔕 /stop и номер — перестать отвечать человеку\n\n"
-    "Твои личные клиенты (им я не пишу — общаешься сама):\n"
-    "⭐ /client_add и номер — отметить своего клиента\n"
-    "➖ /client_remove и номер — убрать из своих\n"
-    "📃 /clients — список твоих клиентов\n\n"
-    "💡 Проще всего — жать кнопки под моими сообщениями."
+    "Личные клиенты (бот им не пишет):\n"
+    "⭐ /client_add и номер — отметить клиента\n"
+    "➖ /client_remove и номер — убрать из клиентов\n"
+    "📃 /clients — список клиентов\n\n"
+    "💡 Проще всего — жать кнопки под сообщениями."
 )
 
 
@@ -155,7 +155,7 @@ async def _edit_reply_markup(chat_id, message_id, reply_markup: dict) -> None:
 
 def format_leads_list(leads: list[dict], stage: str | None) -> str:
     """Текст /leads: имя, номер, стадия, режим — по-человечески."""
-    head = "📋 Кого я сейчас веду"
+    head = "📋 Активные лиды"
     if stage:
         head += f" · {funnel.stage_label(stage)}"
     if not leads:
@@ -164,7 +164,7 @@ def format_leads_list(leads: list[dict], stage: str | None) -> str:
     for ld in leads:
         name = ld.get("whatsapp_name") or ld.get("name") or "без имени"
         mode = ld.get("mode") or "auto"
-        mode_mark = " ✋ ведёшь сама" if mode == "manual" else ""
+        mode_mark = " ✋ вручную" if mode == "manual" else ""
         lines.append(f"• {name} — {funnel.stage_label(ld.get('funnel_stage'))}{mode_mark}")
         lines.append(f"    {_digits(ld.get('phone', ''))}")
     lines.append("\n👉 Подробнее: /lead и номер")
@@ -180,8 +180,14 @@ def format_lead_card(lead: dict, history: list[dict], whitelisted: bool) -> tupl
         f"📇 {name}",
         f"📱 {_digits(phone)}",
         f"Этап: {funnel.stage_label(lead.get('funnel_stage'))}",
-        f"Отвечает: {'ты (бот молчит)' if mode == 'manual' else 'бот 🤖'}",
     ]
+    # Состояние переписки: один текст для всех случаев «бот не пишет» (ручной режим/клиент).
+    if lead.get("do_not_contact"):
+        lines.append("🔕 Бот больше не пишет")
+    elif mode == "manual" or whitelisted:
+        lines.append("Переписка ведётся вручную")
+    else:
+        lines.append("Отвечает бот 🤖")
     # Необязательные поля — показываем только заполненные.
     extras = []
     if lead.get("age"):
@@ -194,18 +200,14 @@ def format_lead_card(lead: dict, history: list[dict], whitelisted: bool) -> tupl
         extras.append(str(lead["profession"]))
     if extras:
         lines.append("О нём: " + ", ".join(extras))
-    if whitelisted:
-        lines.append("⭐ Твой клиент — я не пишу, общаешься сама")
-    if lead.get("do_not_contact"):
-        lines.append("🔕 Я больше не пишу этому человеку")
 
     lines.append("\n💬 Последняя переписка:")
     if not history:
         lines.append("  (пусто)")
     else:
         for m in history:
-            # Кто написал: клиент / бот (авто-ответ) / ты (вручную).
-            who = {"lead": "Клиент", "manager": "Ты", "anna": "Бот"}.get(m.get("sender"))
+            # Кто написал: клиент / бот (авто-ответ) / оператор (вручную).
+            who = {"lead": "Клиент", "manager": "Оператор", "anna": "Бот"}.get(m.get("sender"))
             if who is None:
                 who = "Клиент" if m.get("direction") == "inbound" else "Бот"
             body = (m.get("text") or "[медиа]").replace("\n", " ")
@@ -241,7 +243,7 @@ async def _handle_message(message: dict) -> None:
 
     if not is_admin(from_id):
         logger.warning("manager_bot: команда от неавторизованного id=%s", from_id)
-        await _reply(chat_id, "Извини, этот бот только для своих 🙈")
+        await _reply(chat_id, "Доступ только для своих 🙈")
         return
 
     if not text.startswith("/"):
@@ -273,7 +275,7 @@ async def _handle_message(message: dict) -> None:
         await handler(chat_id, args, message.get("from") or {})
     except Exception:
         logger.exception("manager_bot: команда %s упала", cmd)
-        await _reply(chat_id, "⚠️ Что-то пошло не так, попробуй ещё раз.")
+        await _reply(chat_id, "⚠️ Что-то пошло не так.")
 
 
 async def _cmd_help(chat_id, args, frm) -> None:
@@ -312,7 +314,7 @@ async def _show_card(chat_id, phone: str) -> None:
 
 async def _cmd_lead(chat_id, args, frm) -> None:
     if not args:
-        await _reply(chat_id, "Напиши: /lead и номер")
+        await _reply(chat_id, "Формат: /lead и номер")
         return
     phone = _norm_phone(args[0])
     if not phone:
@@ -324,7 +326,7 @@ async def _cmd_lead(chat_id, args, frm) -> None:
 async def _cmd_takeover(chat_id, args, frm) -> None:
     phone = _norm_phone(args[0]) if args else None
     if not phone:
-        await _reply(chat_id, "Напиши: /takeover и номер")
+        await _reply(chat_id, "Формат: /takeover и номер")
         return
     found = await db.set_manual(phone)
     await _reply(chat_id, f"✋ Бот молчит в чате с {_digits(phone)}."
@@ -334,7 +336,7 @@ async def _cmd_takeover(chat_id, args, frm) -> None:
 async def _cmd_release(chat_id, args, frm) -> None:
     phone = _norm_phone(args[0]) if args else None
     if not phone:
-        await _reply(chat_id, "Напиши: /release и номер")
+        await _reply(chat_id, "Формат: /release и номер")
         return
     found = await db.set_auto(phone)
     await _reply(chat_id, f"🤖 Бот снова отвечает {_digits(phone)}."
@@ -344,7 +346,7 @@ async def _cmd_release(chat_id, args, frm) -> None:
 async def _cmd_block(chat_id, args, frm) -> None:
     phone = _norm_phone(args[0]) if args else None
     if not phone:
-        await _reply(chat_id, "Напиши: /stop и номер")
+        await _reply(chat_id, "Формат: /stop и номер")
         return
     lead = await db.get_lead_by_phone(phone)
     if not lead:
@@ -357,7 +359,7 @@ async def _cmd_block(chat_id, args, frm) -> None:
 
 async def _cmd_wl_add(chat_id, args, frm) -> None:
     if len(args) < 2:
-        await _reply(chat_id, "Напиши: /client_add, номер и кто это (например: /client_add 5215512345678 клиент с прошлого месяца)")
+        await _reply(chat_id, "Формат: /client_add, номер и кто это (например: /client_add 5215512345678 клиент с прошлого месяца)")
         return
     reason = " ".join(args[1:])
     try:
@@ -365,24 +367,24 @@ async def _cmd_wl_add(chat_id, args, frm) -> None:
     except ValueError:
         await _reply(chat_id, f"Не похоже на номер: {args[0]}")
         return
-    await _reply(chat_id, f"⭐ {_digits(_norm_phone(args[0]))} — теперь твой клиент. Бот ему не пишет, общаешься сама.")
+    await _reply(chat_id, f"⭐ {_digits(_norm_phone(args[0]))} — добавлен в клиенты. Бот ему не пишет.")
 
 
 async def _cmd_wl_remove(chat_id, args, frm) -> None:
     phone = _norm_phone(args[0]) if args else None
     if not phone:
-        await _reply(chat_id, "Напиши: /client_remove и номер")
+        await _reply(chat_id, "Формат: /client_remove и номер")
         return
     await db.remove_from_whitelist(phone)
-    await _reply(chat_id, f"{_digits(phone)} больше не в твоих клиентах — бот снова отвечает ему.")
+    await _reply(chat_id, f"{_digits(phone)} — убран из клиентов. Бот снова отвечает.")
 
 
 async def _cmd_wl_list(chat_id, args, frm) -> None:
     rows = await db.list_whitelist()
     if not rows:
-        await _reply(chat_id, "Пока нет ни одного твоего клиента.")
+        await _reply(chat_id, "Пока нет клиентов.")
         return
-    lines = ["⭐ Твои клиенты:", ""]
+    lines = ["⭐ Клиенты:", ""]
     for r in rows:
         note = r.get("reason")
         lines.append(f"• {_digits(r.get('phone', ''))}" + (f" — {note}" if note else ""))

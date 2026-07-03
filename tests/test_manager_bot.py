@@ -126,7 +126,7 @@ class TestCommands:
 
     async def test_lead_no_args(self, _patch_io):
         await mb.handle_update(_msg("/lead"))
-        assert "Напиши" in _patch_io["reply"].call_args.args[1]
+        assert "Формат" in _patch_io["reply"].call_args.args[1]
 
     async def test_lead_bad_phone(self, _patch_io):
         await mb.handle_update(_msg("/lead abc"))
@@ -167,7 +167,7 @@ class TestCommands:
 
     async def test_stop_no_args(self, _patch_io):
         await mb.handle_update(_msg("/stop"))
-        assert "Напиши" in _patch_io["reply"].call_args.args[1]
+        assert "Формат" in _patch_io["reply"].call_args.args[1]
 
     async def test_stop_found_uses_reason(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"phone": "wa_1"}))
@@ -193,7 +193,7 @@ class TestCommands:
         monkeypatch.setattr(db, "add_to_whitelist", add_mock)
         await mb.handle_update(_msg("/client_add wa_1"))
         add_mock.assert_not_awaited()
-        assert "Напиши" in _patch_io["reply"].call_args.args[1]
+        assert "Формат" in _patch_io["reply"].call_args.args[1]
 
     async def test_client_add_ok_passes_actor(self, _patch_io, monkeypatch):
         add_mock = AsyncMock()
@@ -417,16 +417,29 @@ class TestFormatters:
         out = mb.format_leads_list(
             [{"whatsapp_name": "Juan", "phone": "wa_521234567890",
               "funnel_stage": "new", "mode": "manual"}], None)
-        assert "Juan" in out and "521234567890" in out and "ведёшь сама" in out
+        assert "Juan" in out and "521234567890" in out and "вручную" in out
 
     def test_lead_card_fields_and_kb(self):
         lead = {"phone": "wa_1", "whatsapp_name": "Juan", "funnel_stage": "qualified",
                 "mode": "auto", "age": 40, "is_single": True, "city": "CDMX"}
         text, kb = mb.format_lead_card(lead, [], whitelisted=True)
         assert "Juan" in text and "40" in text and "CDMX" in text
-        # Понятная формулировка: «клиент», не «whitelist».
-        assert "клиент" in text.lower() and "whitelist" not in text.lower()
+        # Клиент из списка → единая формулировка «Переписка ведётся вручную», без личного обращения.
+        assert "переписка ведётся вручную" in text.lower()
+        assert "whitelist" not in text.lower()
+        assert "твой" not in text.lower() and "сама" not in text.lower()
         assert kb["inline_keyboard"]
+
+    def test_lead_card_auto_shows_bot_answers(self):
+        lead = {"phone": "wa_1", "whatsapp_name": "Juan", "funnel_stage": "new", "mode": "auto"}
+        text, _ = mb.format_lead_card(lead, [], whitelisted=False)
+        assert "Отвечает бот" in text
+
+    def test_lead_card_manual_shows_manual_state(self):
+        lead = {"phone": "wa_1", "mode": "manual", "funnel_stage": "new"}
+        text, _ = mb.format_lead_card(lead, [], whitelisted=False)
+        assert "Переписка ведётся вручную" in text
+        assert "ты" not in text.lower()
 
     def test_lead_card_history_arrows(self):
         lead = {"phone": "wa_1", "mode": "auto", "funnel_stage": "new"}
@@ -436,7 +449,7 @@ class TestFormatters:
         text, _ = mb.format_lead_card(lead, hist, whitelisted=False)
         assert "Клиент: hola" in text
         assert "Бот: buenos dias" in text
-        assert "Ты: te llamo" in text
+        assert "Оператор: te llamo" in text
 
     def test_lead_card_manual_shows_release_button(self):
         """mode=manual → кнопка 'Вернуть боту' (release), не 'Взять себе'."""
