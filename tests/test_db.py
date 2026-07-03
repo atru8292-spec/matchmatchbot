@@ -1069,3 +1069,101 @@ class TestGetScenarioTemplate:
         result = await db.get_scenario_template(5)
 
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# add_to_whitelist / remove_from_whitelist (блок 10)
+# ---------------------------------------------------------------------------
+
+
+class TestAddToWhitelist:
+    async def test_inserts_into_bot_whitelist(self, pool):
+        """SQL — INSERT в bot_whitelist с ON CONFLICT (повторное добавление не падает)."""
+        await db.add_to_whitelist("wa_521234567890", "VIP-клиент", "anna")
+
+        sql = pool.execute.call_args.args[0]
+        assert "INSERT INTO bot_whitelist" in sql
+        assert "ON CONFLICT" in sql
+
+    async def test_phone_normalized_to_wa_digits(self, pool):
+        """Любой формат телефона → 'wa_<digits>' (как ищет is_whitelisted)."""
+        await db.add_to_whitelist("+52 123 456-7890", "VIP", "anna")
+
+        params = pool.execute.call_args.args[1:]
+        assert params[0] == "wa_521234567890"
+
+    async def test_already_wa_prefixed_stays_same(self, pool):
+        """Вход уже 'wa_...' → не задваивается префикс."""
+        await db.add_to_whitelist("wa_521234567890", "VIP", "anna")
+
+        params = pool.execute.call_args.args[1:]
+        assert params[0] == "wa_521234567890"
+
+    async def test_reason_and_added_by_passed_as_params(self, pool):
+        """reason/added_by идут параметрами $2/$3, не в SQL."""
+        await db.add_to_whitelist("wa_1", "клиент агентства", "anna")
+
+        params = pool.execute.call_args.args[1:]
+        assert params == ("wa_1", "клиент агентства", "anna")
+
+    async def test_db_error_raises(self, pool):
+        """Ошибка БД пробрасывается (в отличие от get_scenario_*)."""
+        pool.execute.side_effect = RuntimeError("db down")
+
+        with pytest.raises(RuntimeError):
+            await db.add_to_whitelist("wa_1", "VIP", "anna")
+
+    async def test_empty_phone_raises_no_sql(self, pool):
+        """Пустой/бесцифровой телефон → ValueError, SQL не выполняется."""
+        with pytest.raises(ValueError):
+            await db.add_to_whitelist("", "VIP", "anna")
+        pool.execute.assert_not_called()
+
+    async def test_none_phone_raises_no_sql(self, pool):
+        with pytest.raises(ValueError):
+            await db.add_to_whitelist(None, "VIP", "anna")  # type: ignore[arg-type]
+        pool.execute.assert_not_called()
+
+
+class TestRemoveFromWhitelist:
+    async def test_deletes_from_bot_whitelist(self, pool):
+        """SQL — DELETE из bot_whitelist по phone."""
+        await db.remove_from_whitelist("wa_521234567890")
+
+        sql = pool.execute.call_args.args[0]
+        assert "DELETE FROM bot_whitelist" in sql
+
+    async def test_phone_normalized(self, pool):
+        """Телефон нормализуется в 'wa_<digits>' перед DELETE."""
+        await db.remove_from_whitelist("+52 123 456-7890")
+
+        params = pool.execute.call_args.args[1:]
+        assert params[0] == "wa_521234567890"
+
+    async def test_phone_passed_as_param(self, pool):
+        """phone параметром $1, не в SQL."""
+        await db.remove_from_whitelist("wa_1")
+
+        sql, *params = pool.execute.call_args.args
+        assert "wa_1" not in sql
+        assert params[0] == "wa_1"
+
+    async def test_db_error_raises(self, pool):
+        pool.execute.side_effect = RuntimeError("db down")
+
+        with pytest.raises(RuntimeError):
+            await db.remove_from_whitelist("wa_1")
+
+    async def test_empty_phone_raises_no_sql(self, pool):
+        """Пустой телефон → ValueError, DELETE не выполняется."""
+        with pytest.raises(ValueError):
+            await db.remove_from_whitelist("")
+        pool.execute.assert_not_called()
+
+    async def test_delete_zero_logs_warning(self, pool, caplog):
+        """execute вернул 'DELETE 0' (не было записи) → предупреждение, не 'удалён'."""
+        import logging
+        pool.execute.return_value = "DELETE 0"
+        with caplog.at_level(logging.WARNING, logger="matchmatch.db"):
+            await db.remove_from_whitelist("wa_1")
+        assert any("не найден при удалении" in r.message for r in caplog.records)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 import asyncpg
 from asyncpg.exceptions import UniqueViolationError
@@ -454,6 +455,56 @@ async def is_whitelisted(phone: str) -> bool:
         logger.exception("is_whitelisted failed: phone=%s", phone)
         raise
     return row is not None
+
+
+def _wa_phone(phone: str) -> str:
+    """Нормализовать телефон в бизнес-ключ 'wa_<digits>' (как в normalize.py).
+
+    Принимает любой формат: '+7 963 537-88-80', '79635378880', 'wa_79635378880'.
+    Убираем все нецифры (буквы 'wa' тоже) → префикс 'wa_'. Так add/remove пишут
+    ровно тот ключ, по которому ищет is_whitelisted. Пустой/бесцифровой вход →
+    ValueError (иначе в whitelist попадёт мусорный ключ 'wa_', который ни с чем
+    не совпадёт — вызывающий код должен узнать об ошибке).
+    """
+    digits = re.sub(r"\D", "", phone or "")
+    if not digits:
+        raise ValueError(f"Невозможно нормализовать телефон: {phone!r}")
+    return "wa_" + digits
+
+
+async def add_to_whitelist(phone: str, reason: str, added_by: str) -> None:
+    """Добавить номер в bot_whitelist (бот замолчит, VIP ведёт Аня лично).
+
+    Повторное добавление того же номера не падает — обновляет reason/added_by
+    (ON CONFLICT). Телефон нормализуется в 'wa_<digits>'.
+    """
+    key = _wa_phone(phone)
+    try:
+        await _get_pool().execute(
+            "INSERT INTO bot_whitelist (phone, reason, added_by) VALUES ($1, $2, $3) "
+            "ON CONFLICT (phone) DO UPDATE SET reason = EXCLUDED.reason, "
+            "added_by = EXCLUDED.added_by, added_at = now()",
+            key, reason, added_by,
+        )
+    except Exception:
+        logger.exception("add_to_whitelist failed: phone=%s", key)
+        raise
+    logger.info("whitelist: добавлен %s (by=%s, reason=%s)", key, added_by, reason)
+
+
+async def remove_from_whitelist(phone: str) -> None:
+    """Убрать номер из bot_whitelist (бот снова отвечает). Телефон нормализуется."""
+    key = _wa_phone(phone)
+    try:
+        result = await _get_pool().execute("DELETE FROM bot_whitelist WHERE phone = $1", key)
+    except Exception:
+        logger.exception("remove_from_whitelist failed: phone=%s", key)
+        raise
+    # execute() возвращает 'DELETE <n>' — не врём в лог, если удалять было нечего.
+    if result == "DELETE 0":
+        logger.warning("whitelist: телефон не найден при удалении: %s", key)
+    else:
+        logger.info("whitelist: удалён %s", key)
 
 
 async def touch_last_inbound(phone: str) -> None:

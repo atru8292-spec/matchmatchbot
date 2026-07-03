@@ -129,6 +129,14 @@ class TestDecideWhitelist:
         d = decide({}, True, "eres un idiota")
         assert d.action == "silent_whitelist"
 
+    def test_whitelist_escort_not_blocked(self):
+        """VIP с escort-паттерном: молчим и эскалируем, НЕ блокируем (Аня разберётся)."""
+        d = decide({}, True, "quiero sexo")
+        assert d.action == "silent_whitelist"
+        assert d.block_permanent is False
+        assert d.is_escort is False
+        assert d.alert_manager is True
+
     def test_do_not_contact_returns_silent_whitelist(self):
         d = decide({"do_not_contact": True}, False, "hola")
         assert d.action == "silent_whitelist"
