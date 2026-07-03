@@ -20,20 +20,33 @@ from config import settings as real_settings
 # Вспомогательные фабрики фейк-клиентов
 # ---------------------------------------------------------------------------
 
-def _make_get_client(*, content: bytes = b"fake_image_bytes", raise_status_exc=None):
-    """Фейк AsyncClient с методом get — для download_media."""
+def _make_get_client(*, content: bytes = b"fake_image_bytes", raise_status_exc=None,
+                     headers=None):
+    """Фейк AsyncClient со stream('GET', ...) — для download_media (стриминг с cap)."""
     mock_resp = MagicMock()
-    mock_resp.content = content
+    mock_resp.headers = headers or {}
     if raise_status_exc is not None:
         mock_resp.raise_for_status = MagicMock(side_effect=raise_status_exc)
     else:
         mock_resp.raise_for_status = MagicMock()
 
-    _get = AsyncMock(return_value=mock_resp)
+    async def _aiter():
+        yield content
+    mock_resp.aiter_bytes = lambda: _aiter()
+
+    class _StreamCtx:
+        async def __aenter__(self):
+            return mock_resp
+
+        async def __aexit__(self, *exc_info):
+            return False
 
     class FakeGetClient:
         def __init__(self, **kwargs):
-            self.get = _get
+            pass
+
+        def stream(self, method, url):
+            return _StreamCtx()
 
         async def __aenter__(self):
             return self
@@ -41,7 +54,6 @@ def _make_get_client(*, content: bytes = b"fake_image_bytes", raise_status_exc=N
         async def __aexit__(self, *exc_info):
             return False
 
-    FakeGetClient._get = _get
     FakeGetClient._response = mock_resp
     return FakeGetClient
 

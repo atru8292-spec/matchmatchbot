@@ -18,6 +18,7 @@ import logging
 
 import httpx
 
+import actions
 import db
 import escalation
 import funnel
@@ -38,6 +39,10 @@ HELP_TEXT = (
     "⭐ /client_add и номер — отметить клиента\n"
     "➖ /client_remove и номер — убрать из клиентов\n"
     "📃 /clients — список клиентов\n\n"
+    "Ивент:\n"
+    "🎟 /event — настройки ивента и приглашения\n"
+    "📅 /set_event дата время | адрес — задать ивент\n"
+    "🖼 /set_invitation url — картинка-приглашение (+ /invitation_on)\n\n"
     "💡 Проще всего — жать кнопки под сообщениями."
 )
 
@@ -282,6 +287,12 @@ async def _handle_message(message: dict) -> None:
         "/client_add": _cmd_wl_add,
         "/client_remove": _cmd_wl_remove,
         "/clients": _cmd_wl_list,
+        "/event": _cmd_event,
+        "/set_event": _cmd_set_event,
+        "/event_off": _cmd_event_off,
+        "/set_invitation": _cmd_set_invitation,
+        "/invitation_on": _cmd_invitation_on,
+        "/invitation_off": _cmd_invitation_off,
     }
     handler = handlers.get(cmd)
     if not handler:
@@ -407,6 +418,97 @@ async def _cmd_wl_list(chat_id, args, frm) -> None:
     await _reply(chat_id, "\n".join(lines))
 
 
+# ===== Настройки ивента (блок 13) =====
+
+async def _cmd_event(chat_id, args, frm) -> None:
+    """Показать текущие настройки ивента и приглашения."""
+    s = await db.get_settings(["event_active", "event_date", "event_time",
+                               "event_address", "invitation_url", "invitation_ready"])
+    active = s.get("event_active") == "1"
+    inv_ready = s.get("invitation_ready") == "1"
+    lines = [
+        "🎟 Ивент",
+        f"Статус: {'включён ✅' if active else 'выключен ⛔'}",
+        f"Дата: {s.get('event_date') or '—'}",
+        f"Время: {s.get('event_time') or '—'}",
+        f"Адрес: {s.get('event_address') or '—'}",
+        "",
+        f"Картинка-приглашение: {'готова ✅' if inv_ready else 'не готова ⛔'}",
+        f"URL: {s.get('invitation_url') or '—'}",
+        "",
+        "Изменить: /set_event 2026-08-15 20:30 | Av. Reforma 123, CDMX",
+        "Картинка: /set_invitation <url>, потом /invitation_on",
+    ]
+    await _reply(chat_id, "\n".join(lines))
+
+
+async def _cmd_set_event(chat_id, args, frm) -> None:
+    """Задать дату/время/адрес: /set_event 2026-08-15 20:30 | Адрес. Включает ивент."""
+    raw = " ".join(args)
+    if "|" not in raw:
+        await _reply(chat_id, "Формат: /set_event ГГГГ-ММ-ДД ЧЧ:ММ | Адрес\n"
+                              "Например: /set_event 2026-08-15 20:30 | Av. Reforma 123, CDMX")
+        return
+    left, address = raw.split("|", 1)
+    address = address.strip()
+    parts = left.split()
+    date = parts[0] if parts else ""
+    time = " ".join(parts[1:]).strip()
+    # Валидация даты (иначе планировщик не распознает и просто пропустит).
+    import datetime as _dt
+    try:
+        _dt.datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        await _reply(chat_id, f"Дата должна быть ГГГГ-ММ-ДД, а не {date!r}")
+        return
+    if not address:
+        await _reply(chat_id, "Не хватает адреса после «|».")
+        return
+    if not time:
+        await _reply(chat_id, "Не хватает времени. Формат: /set_event 2026-08-15 20:30 | Адрес")
+        return
+    await db.set_setting("event_date", date)
+    await db.set_setting("event_time", time)
+    await db.set_setting("event_address", address)
+    await db.set_setting("event_active", "1")
+    await _reply(chat_id, f"🎟 Ивент включён.\nДата: {date}  Время: {time or '—'}\n"
+                          f"Адрес: {address}\n\nНапоминания уйдут за день и в день ивента.")
+
+
+async def _cmd_event_off(chat_id, args, frm) -> None:
+    await db.set_setting("event_active", "0")
+    await _reply(chat_id, "⛔ Ивент выключен — напоминания слаться не будут.")
+
+
+async def _cmd_set_invitation(chat_id, args, frm) -> None:
+    """Задать URL картинки-приглашения. Готовность включается отдельно /invitation_on."""
+    if not args:
+        await _reply(chat_id, "Формат: /set_invitation <url картинки>")
+        return
+    url = args[0].strip()
+    if not url.lower().startswith("http"):
+        await _reply(chat_id, f"Нужен URL (http…), а не {url!r}")
+        return
+    await db.set_setting("invitation_url", url)
+    await db.set_setting("invitation_ready", "0")  # после смены URL — заново подтвердить
+    await _reply(chat_id, "🖼 URL картинки сохранён. Пока НЕ отправляется — включи /invitation_on, "
+                          "когда убедишься что картинка та.")
+
+
+async def _cmd_invitation_on(chat_id, args, frm) -> None:
+    url = await db.get_setting("invitation_url")
+    if not url:
+        await _reply(chat_id, "Сначала задай картинку: /set_invitation <url>")
+        return
+    await db.set_setting("invitation_ready", "1")
+    await _reply(chat_id, "✅ Картинка-приглашение готова — бот будет её отправлять.")
+
+
+async def _cmd_invitation_off(chat_id, args, frm) -> None:
+    await db.set_setting("invitation_ready", "0")
+    await _reply(chat_id, "⛔ Отправка картинки-приглашения выключена.")
+
+
 # ===== Callback-кнопки =====
 
 async def _handle_callback(cq: dict) -> None:
@@ -442,6 +544,9 @@ async def _handle_callback(cq: dict) -> None:
         "photo_ok": _cb_photo_ok,
         "photo_retry": _cb_photo_retry,
         "photo_reject": _cb_photo_reject,
+        "payment_ok": _cb_payment_ok,
+        "payment_event": _cb_payment_event,
+        "payment_sub": _cb_payment_sub,
     }
     handler = dispatch.get(action)
     if not handler:
@@ -523,6 +628,12 @@ async def _cb_photo_ok(chat_id, cb_id, phone, message_id=None) -> None:
 
 async def _cb_photo_retry(chat_id, cb_id, phone, message_id=None) -> None:
     """Просить другое фото: вернуть бота (следующее фото снова через Vision) + сценарий 5."""
+    lead = await db.get_lead_by_phone(phone)
+    if lead and lead.get("do_not_contact"):
+        # Лида уже прекратили вести (напр. вторым действием) — не пишем заблокированному.
+        await _answer_callback(cb_id, "Уже не общаюсь")
+        await _reply(chat_id, f"⚠️ Бот уже не пишет {_digits(phone)} — действие отменено.")
+        return
     await db.set_auto(phone)
     await _answer_callback(cb_id, "Просим другое")
     await _reply(chat_id, f"🔄 Бот попросил у {_digits(phone)} другое фото.")
@@ -538,3 +649,36 @@ async def _cb_photo_reject(chat_id, cb_id, phone, message_id=None) -> None:
     await _reply(chat_id, f"🔕 Фото не подошло, бот больше не пишет {_digits(phone)}.")
     import main
     await main._send_scenario(phone, 12)
+
+
+# ===== Подтверждение оплаты (блок 13) =====
+
+async def _cb_payment_ok(chat_id, cb_id, phone, message_id=None) -> None:
+    """Подтвердить оплату. Стадия по selected_service; если неоднозначно — спросить кнопками."""
+    lead = await db.get_lead_by_phone(phone)
+    if not lead:
+        await _answer_callback(cb_id, "Не нашла")
+        await _reply(chat_id, f"Не нашла такого человека: {_digits(phone)}")
+        return
+    target = actions.stage_for_service(lead.get("selected_service"))
+    if target is None:
+        # Непонятно за что оплата → уточняющие кнопки (ивент / подписка).
+        await _answer_callback(cb_id, "За что оплата?")
+        await _reply(chat_id, f"За что оплата у {_digits(phone)}?",
+                     escalation.payment_target_kb(phone))
+        return
+    await actions.confirm_payment(phone, target, source="manual")
+    await _answer_callback(cb_id, "Оплата подтверждена")
+    await _reply(chat_id, f"✅ Оплата подтверждена, {_digits(phone)} → {funnel.stage_label(target)}.")
+
+
+async def _cb_payment_event(chat_id, cb_id, phone, message_id=None) -> None:
+    await actions.confirm_payment(phone, "event_attended", source="manual")
+    await _answer_callback(cb_id, "Подтверждено")
+    await _reply(chat_id, f"✅ Оплата за ивент подтверждена, {_digits(phone)} → {funnel.stage_label('event_attended')}.")
+
+
+async def _cb_payment_sub(chat_id, cb_id, phone, message_id=None) -> None:
+    await actions.confirm_payment(phone, "client_starter", source="manual")
+    await _answer_callback(cb_id, "Подтверждено")
+    await _reply(chat_id, f"✅ Оплата подписки подтверждена, {_digits(phone)} → {funnel.stage_label('client_starter')}.")

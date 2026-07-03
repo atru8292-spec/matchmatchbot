@@ -1302,3 +1302,80 @@ class TestPhonesWithUnprocessedInbound:
         pool.fetch.side_effect = RuntimeError("db")
         with pytest.raises(RuntimeError):
             await db.phones_with_unprocessed_inbound()
+
+
+# ---------------------------------------------------------------------------
+# Блок 13: app_settings / due_followups / event-функции
+# ---------------------------------------------------------------------------
+
+
+class TestSettings:
+    async def test_get_setting(self, pool):
+        pool.fetchval.return_value = "2026-08-15"
+        assert await db.get_setting("event_date") == "2026-08-15"
+
+    async def test_get_settings_bulk(self, pool):
+        pool.fetch.return_value = [{"key": "event_active", "value": "1"},
+                                   {"key": "event_date", "value": "2026-08-15"}]
+        out = await db.get_settings(["event_active", "event_date"])
+        assert out == {"event_active": "1", "event_date": "2026-08-15"}
+
+    async def test_set_setting_upsert(self, pool):
+        await db.set_setting("event_active", "1")
+        sql = pool.execute.call_args.args[0]
+        assert "INSERT INTO app_settings" in sql and "ON CONFLICT" in sql
+        assert pool.execute.call_args.args[1:] == ("event_active", "1")
+
+
+class TestDueFollowups:
+    async def test_filters_in_sql(self, pool):
+        pool.fetch.return_value = []
+        await db.due_followups(["lost", "rejected"], 3, limit=50)
+        sql, *params = pool.fetch.call_args.args
+        assert "next_followup_at <= now()" in sql
+        assert "mode = 'auto'" in sql
+        assert "do_not_contact" in sql
+        assert "w.phone IS NULL" in sql          # исключение whitelist
+        assert params == [["lost", "rejected"], 3, 50]
+
+    async def test_returns_dicts(self, pool):
+        pool.fetch.return_value = [{"phone": "wa_1", "funnel_stage": "qualified",
+                                    "followup_sent_count": 0, "whatsapp_name": "X", "name": None}]
+        out = await db.due_followups(["lost"], 3)
+        assert out[0]["phone"] == "wa_1"
+
+
+class TestMarkFollowupSent:
+    async def test_increments_and_sets_next(self, pool):
+        await db.mark_followup_sent("wa_1", None)
+        sql, *params = pool.execute.call_args.args
+        assert "followup_sent_count = COALESCE(followup_sent_count, 0) + 1" in sql
+        assert params == ["wa_1", None]
+
+
+class TestEventRecipients:
+    async def test_sql_filters(self, pool):
+        pool.fetch.return_value = []
+        await db.event_recipients(["lost", "rejected"], limit=30)
+        sql, *params = pool.fetch.call_args.args
+        assert "selected_service = 'event'" in sql
+        assert "l.mode = 'auto'" in sql       # не пишем тем, кого ведут вручную
+        assert "w.phone IS NULL" in sql
+        assert "LIMIT" in sql
+        assert params == [["lost", "rejected"], 30]
+
+
+class TestEventReminderIdempotency:
+    async def test_sent_true(self, pool):
+        pool.fetchrow.return_value = {"?column?": 1}
+        assert await db.event_reminder_sent("wa_1", "remind_1d", "2026-08-15") is True
+
+    async def test_sent_false(self, pool):
+        pool.fetchrow.return_value = None
+        assert await db.event_reminder_sent("wa_1", "remind_1d", "2026-08-15") is False
+
+    async def test_log_inserts_marker(self, pool):
+        await db.log_event_reminder("wa_1", "remind_day", "2026-08-15")
+        sql, *params = pool.execute.call_args.args
+        assert "INSERT INTO events" in sql
+        assert params == ["wa_1", "remind_day", "2026-08-15"]

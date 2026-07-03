@@ -38,14 +38,29 @@ ACTIVE_STAGES: tuple[str, ...] = (
     "new", "qualifying", "photo_pending", "qualified", "pitched", "videocall_set",
 )
 
-# Задел под фоллоу-апы (планировщик — отдельный блок позже).
-# stage → задержка первого догона в ЧАСАХ от смены стадии. Растущие интервалы и
-# лимит попыток планировщик применит сам; здесь — момент первого next_followup_at.
+# Первый догон: stage → задержка первого next_followup_at в ЧАСАХ от смены стадии.
+# Дальше интервалы задаёт FOLLOWUP_LADDER (планировщик — scheduler.py, блок 13).
 FOLLOWUP_FIRST_DELAY_HOURS: dict[str, int] = {
     "qualified": 48,       # замолчал после проверки: +2 дня
     "pitched": 48,         # думает над ценой: +2 дня
     "videocall_set": 24,   # записан, но не пришёл: +1 день
 }
+
+
+# Лестница фоллоу-апов (блок 13). Индекс = followup_sent_count (сколько уже слали):
+# 0 → 1-я попытка и т.д. Кортеж (scenario_id, next_delay_days) — какой сценарий слать
+# и через сколько дней ставить следующий next_followup_at (None → больше не догоняем).
+# Первый догон (+2 дня) ставится при смене стадии из FOLLOWUP_FIRST_DELAY_HOURS,
+# дальше интервалы 5 и 10 дней → эффективное расписание 2→5→10, максимум 3 попытки.
+FOLLOWUP_LADDER: tuple[tuple[int, int | None], ...] = (
+    (36, 5),      # 1-я: «ещё интересно?»
+    (33, 10),     # 2-я: напоминание + ссылка на форму
+    (38, None),   # 3-я (последняя): новый пакет — реактивация
+)
+MAX_FOLLOWUPS = len(FOLLOWUP_LADDER)
+
+# Напоминания об ивенте НЕ шлём тем, кто уже в этих стадиях (отказ/не подошёл).
+EVENT_REMINDER_EXCLUDE_STAGES: tuple[str, ...] = ("lost", "rejected")
 
 
 def stage_label(code: str | None) -> str:

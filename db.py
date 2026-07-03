@@ -291,6 +291,128 @@ async def phones_with_unprocessed_inbound() -> list[str]:
     return [r["lead_phone"] for r in rows]
 
 
+# ===== Планировщик и настройки ивента (блок 13) =====
+
+async def get_setting(key: str) -> str | None:
+    """Значение из app_settings по ключу (или None)."""
+    try:
+        return await _get_pool().fetchval("SELECT value FROM app_settings WHERE key = $1", key)
+    except Exception:
+        logger.exception("get_setting failed: key=%s", key)
+        raise
+
+
+async def get_settings(keys: list[str]) -> dict:
+    """Bulk: {key: value} для набора ключей (отсутствующие — не в словаре)."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT key, value FROM app_settings WHERE key = ANY($1::text[])", keys)
+    except Exception:
+        logger.exception("get_settings failed: keys=%s", keys)
+        raise
+    return {r["key"]: r["value"] for r in rows}
+
+
+async def set_setting(key: str, value: str) -> None:
+    """Записать app_settings (upsert)."""
+    try:
+        await _get_pool().execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, now()) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+            key, value,
+        )
+    except Exception:
+        logger.exception("set_setting failed: key=%s", key)
+        raise
+    logger.info("app_settings: %s = %r", key, value)
+
+
+async def due_followups(no_followup_stages: list[str], max_followups: int,
+                        limit: int = 50) -> list[dict]:
+    """Лиды, которым пора фоллоу-ап: next_followup_at<=now, auto, не do_not_contact,
+    стадия не в no_followup_stages, попыток < max, НЕ в whitelist. Свежие сверху по сроку."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT l.phone, l.funnel_stage, COALESCE(l.followup_sent_count, 0) AS followup_sent_count, "
+            "       l.whatsapp_name, l.name "
+            "FROM leads l LEFT JOIN bot_whitelist w ON w.phone = l.phone "
+            "WHERE l.next_followup_at IS NOT NULL AND l.next_followup_at <= now() "
+            "  AND l.mode = 'auto' AND COALESCE(l.do_not_contact, false) = false "
+            "  AND l.funnel_stage <> ALL($1::text[]) "
+            "  AND COALESCE(l.followup_sent_count, 0) < $2 "
+            "  AND w.phone IS NULL "
+            "ORDER BY l.next_followup_at ASC LIMIT $3",
+            no_followup_stages, max_followups, limit,
+        )
+    except Exception:
+        logger.exception("due_followups failed")
+        raise
+    return [dict(r) for r in rows]
+
+
+async def mark_followup_sent(phone: str, next_followup_at) -> None:
+    """Инкремент followup_sent_count + новый next_followup_at (или None → NULL, финиш)."""
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET followup_sent_count = COALESCE(followup_sent_count, 0) + 1, "
+            "next_followup_at = $2, updated_at = now() WHERE phone = $1",
+            phone, next_followup_at,
+        )
+    except Exception:
+        logger.exception("mark_followup_sent failed: phone=%s", phone)
+        raise
+
+
+async def event_recipients(exclude_stages: list[str], limit: int = 30) -> list[dict]:
+    """Кому слать напоминания об ивенте: selected_service='event', mode='auto',
+    не do_not_contact, стадия не в exclude_stages, НЕ в whitelist. LIMIT — антибан-порция
+    (остаток догонит след. тик; идемпотентность не даст дублей). mode='auto' — не пишем
+    тем, кого Аня ведёт вручную (/takeover)."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT l.phone, l.whatsapp_name, l.name "
+            "FROM leads l LEFT JOIN bot_whitelist w ON w.phone = l.phone "
+            "WHERE l.selected_service = 'event' "
+            "  AND l.mode = 'auto' "
+            "  AND COALESCE(l.do_not_contact, false) = false "
+            "  AND l.funnel_stage <> ALL($1::text[]) "
+            "  AND w.phone IS NULL "
+            "LIMIT $2",
+            exclude_stages, limit,
+        )
+    except Exception:
+        logger.exception("event_recipients failed")
+        raise
+    return [dict(r) for r in rows]
+
+
+async def event_reminder_sent(phone: str, kind: str, event_date: str) -> bool:
+    """Уже слали это напоминание (kind) на эту дату ивента? Идемпотентность через events."""
+    try:
+        row = await _get_pool().fetchrow(
+            "SELECT 1 FROM events WHERE lead_phone = $1 AND event_type = $2 "
+            "AND meta->>'event_date' = $3",
+            phone, kind, event_date,
+        )
+    except Exception:
+        logger.exception("event_reminder_sent failed: phone=%s kind=%s", phone, kind)
+        raise
+    return row is not None
+
+
+async def log_event_reminder(phone: str, kind: str, event_date: str) -> None:
+    """Отметить отправку напоминания (kind) на дату ивента — маркер идемпотентности."""
+    try:
+        await _get_pool().execute(
+            "INSERT INTO events (lead_phone, event_type, meta) "
+            "VALUES ($1, $2, jsonb_build_object('event_date', $3::text))",
+            phone, kind, event_date,
+        )
+    except Exception:
+        logger.exception("log_event_reminder failed: phone=%s kind=%s", phone, kind)
+        raise
+
+
 async def mark_messages_processed(ids: list) -> int:
     """Пометить сообщения processed=true, processed_at=now(). Вернуть число обновлённых."""
     if not ids:

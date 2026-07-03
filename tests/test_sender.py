@@ -382,3 +382,44 @@ class TestSendContinuesOnSaveFailure:
         monkeypatch.setattr(db, "save_outbound", AsyncMock(return_value=None))
         sent = await sender.send("wa_79635378880", ["a", "b"])
         assert sent == 2  # отправка засчитана несмотря на проблемы с записью
+
+
+# ---------------------------------------------------------------------------
+# send_image (блок 13) — отправка картинки через contentUri
+# ---------------------------------------------------------------------------
+
+
+class TestSendImage:
+    async def test_success_returns_true(self, monkeypatch, db_pool):
+        cls = _make_http_client_cls()
+        monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
+        monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
+        ok = await sender.send_image("wa_521234567890", "https://x/inv.jpg")
+        assert ok is True
+
+    async def test_body_uses_contentUri_not_text(self, monkeypatch, db_pool):
+        cls = _make_http_client_cls()
+        monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
+        monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
+        await sender.send_image("wa_521234567890", "https://x/inv.jpg")
+        body = cls._post_mock.call_args.kwargs["json"]
+        assert body["contentUri"] == "https://x/inv.jpg"
+        assert body["chatId"] == "521234567890"  # без префикса wa_
+        assert "text" not in body
+
+    async def test_empty_url_returns_false_no_post(self, monkeypatch, db_pool):
+        cls = _make_http_client_cls()
+        monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
+        monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
+        ok = await sender.send_image("wa_1", "")
+        assert ok is False
+        cls._post_mock.assert_not_called()
+
+    async def test_error_returns_false_and_alerts(self, monkeypatch, db_pool):
+        cls = _make_http_client_cls(post_exc=Exception("net"))
+        monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
+        monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
+        err = AsyncMock(); monkeypatch.setattr(sender.escalation, "notify_error", err)
+        ok = await sender.send_image("wa_1", "https://x/inv.jpg")
+        assert ok is False
+        err.assert_awaited_once()

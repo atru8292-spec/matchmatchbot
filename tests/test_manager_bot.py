@@ -391,10 +391,21 @@ class TestCallbacks:
         _patch_io["answer"].assert_awaited()
 
     async def test_photo_retry(self, _patch_io, monkeypatch):
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"phone": "wa_1"}))
         monkeypatch.setattr(db, "set_auto", AsyncMock())
         send_scen = AsyncMock(); monkeypatch.setattr(main, "_send_scenario", send_scen)
         await mb.handle_update(_cb("mb:photo_retry:wa_1"))
         send_scen.assert_awaited_once_with("wa_1", 5)
+
+    async def test_photo_retry_blocked_lead_aborts(self, _patch_io, monkeypatch):
+        """do_not_contact=True → не пишем заблокированному даже по кнопке «Просить другое»."""
+        monkeypatch.setattr(db, "get_lead_by_phone",
+                            AsyncMock(return_value={"phone": "wa_1", "do_not_contact": True}))
+        set_auto = AsyncMock(); monkeypatch.setattr(db, "set_auto", set_auto)
+        send_scen = AsyncMock(); monkeypatch.setattr(main, "_send_scenario", send_scen)
+        await mb.handle_update(_cb("mb:photo_retry:wa_1"))
+        set_auto.assert_not_awaited()
+        send_scen.assert_not_awaited()
 
     async def test_photo_reject_blocks_and_goodbye(self, _patch_io, monkeypatch):
         monkeypatch.setattr(db, "get_scenario_title", AsyncMock(return_value="Прощание"))
@@ -483,3 +494,113 @@ class TestAdminIdsConfig:
     def test_non_numeric_ignored(self, monkeypatch):
         monkeypatch.setattr(mb.settings, "tg_manager_admin_ids", "100,abc,200")
         assert mb.settings.manager_admin_ids == frozenset({100, 200})
+
+
+# ===== Команды ивента (блок 13) =====
+
+class TestEventCommands:
+    async def test_event_shows_settings(self, _patch_io, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "event_active": "1", "event_date": "2026-08-15", "event_time": "20:30",
+            "event_address": "Av X", "invitation_ready": "0"}))
+        await mb.handle_update(_msg("/event"))
+        reply = _patch_io["reply"].call_args.args[1]
+        assert "2026-08-15" in reply and "Av X" in reply
+
+    async def test_set_event_stores_and_activates(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/set_event 2026-08-15 20:30 | Av. Reforma 123, CDMX"))
+        stored = {c.args[0]: c.args[1] for c in setm.call_args_list}
+        assert stored["event_date"] == "2026-08-15"
+        assert stored["event_time"] == "20:30"
+        assert stored["event_address"] == "Av. Reforma 123, CDMX"
+        assert stored["event_active"] == "1"
+
+    async def test_set_event_bad_date(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/set_event 15-08-2026 20:30 | Av X"))
+        setm.assert_not_awaited()
+        assert "ГГГГ-ММ-ДД" in _patch_io["reply"].call_args.args[1]
+
+    async def test_set_event_missing_pipe(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/set_event 2026-08-15 20:30 Av X"))
+        setm.assert_not_awaited()
+        assert "Формат" in _patch_io["reply"].call_args.args[1]
+
+    async def test_event_off(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/event_off"))
+        setm.assert_awaited_once_with("event_active", "0")
+
+    async def test_set_invitation_stores_url_not_ready(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/set_invitation https://x/inv.jpg"))
+        stored = {c.args[0]: c.args[1] for c in setm.call_args_list}
+        assert stored["invitation_url"] == "https://x/inv.jpg"
+        assert stored["invitation_ready"] == "0"
+
+    async def test_set_invitation_rejects_non_url(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/set_invitation notaurl"))
+        setm.assert_not_awaited()
+
+    async def test_invitation_on_requires_url(self, _patch_io, monkeypatch):
+        monkeypatch.setattr(db, "get_setting", AsyncMock(return_value=None))
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/invitation_on"))
+        setm.assert_not_awaited()
+
+    async def test_invitation_on_sets_ready(self, _patch_io, monkeypatch):
+        monkeypatch.setattr(db, "get_setting", AsyncMock(return_value="https://x/inv.jpg"))
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/invitation_on"))
+        setm.assert_awaited_once_with("invitation_ready", "1")
+
+
+# ===== Callback подтверждения оплаты (блок 13) =====
+
+class TestPaymentCallbacks:
+    async def test_payment_ok_auto_by_service(self, _patch_io, monkeypatch):
+        """selected_service='event' → сразу confirm_payment(event_attended)."""
+        monkeypatch.setattr(db, "get_lead_by_phone",
+                            AsyncMock(return_value={"phone": "wa_1", "selected_service": "event"}))
+        conf = AsyncMock(); monkeypatch.setattr(mb.actions, "confirm_payment", conf)
+        await mb.handle_update(_cb("mb:payment_ok:wa_1"))
+        conf.assert_awaited_once()
+        assert conf.call_args.args[1] == "event_attended"
+
+    async def test_payment_ok_ambiguous_asks(self, _patch_io, monkeypatch):
+        """selected_service пуст → уточняющие кнопки, confirm_payment НЕ зовём."""
+        monkeypatch.setattr(db, "get_lead_by_phone",
+                            AsyncMock(return_value={"phone": "wa_1", "selected_service": None}))
+        conf = AsyncMock(); monkeypatch.setattr(mb.actions, "confirm_payment", conf)
+        await mb.handle_update(_cb("mb:payment_ok:wa_1"))
+        conf.assert_not_awaited()
+        kb = _patch_io["reply"].call_args.args[2]
+        data = [b.get("callback_data", "") for row in kb["inline_keyboard"] for b in row]
+        assert any("payment_event" in a for a in data)
+
+    async def test_payment_ok_not_found(self, _patch_io, monkeypatch):
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=None))
+        conf = AsyncMock(); monkeypatch.setattr(mb.actions, "confirm_payment", conf)
+        await mb.handle_update(_cb("mb:payment_ok:wa_1"))
+        conf.assert_not_awaited()
+
+    async def test_payment_event(self, _patch_io, monkeypatch):
+        conf = AsyncMock(); monkeypatch.setattr(mb.actions, "confirm_payment", conf)
+        await mb.handle_update(_cb("mb:payment_event:wa_1"))
+        assert conf.call_args.args[1] == "event_attended"
+
+    async def test_payment_sub(self, _patch_io, monkeypatch):
+        conf = AsyncMock(); monkeypatch.setattr(mb.actions, "confirm_payment", conf)
+        await mb.handle_update(_cb("mb:payment_sub:wa_1"))
+        assert conf.call_args.args[1] == "client_starter"
+
+
+class TestSetEventValidation:
+    async def test_set_event_missing_time(self, _patch_io, monkeypatch):
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        await mb.handle_update(_msg("/set_event 2026-08-15 | Av X"))
+        setm.assert_not_awaited()
+        assert "времени" in _patch_io["reply"].call_args.args[1].lower()

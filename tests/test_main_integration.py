@@ -1570,3 +1570,56 @@ class TestStartupSweep:
             pass
 
         err_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Блок 13: payment_claim ветка + send_invitation
+# ---------------------------------------------------------------------------
+
+import filters as _filters
+
+
+class TestPaymentClaimBranch:
+    async def test_acks_and_escalates_no_block(self, monkeypatch):
+        dec = _filters.Decision("payment_claim", "оплата", alert_manager=True)
+        send = AsyncMock(); monkeypatch.setattr(main.sender, "send", send)
+        npay = AsyncMock(); monkeypatch.setattr(main.escalation, "notify_payment", npay)
+        block = AsyncMock(); monkeypatch.setattr(main.db, "block_lead", block)
+        await main._apply_decision("wa_1", dec, {"phone": "wa_1"}, "ya pagué")
+        send.assert_awaited_once()          # ack лиду
+        npay.assert_awaited_once()          # эскалация Ане
+        block.assert_not_awaited()          # стадию НЕ трогаем сами
+
+
+class TestRunAiSendInvitation:
+    async def test_send_invitation_triggers_maybe_send(self, monkeypatch):
+        monkeypatch.setattr(main.ai, "generate_reply", AsyncMock(return_value={
+            "messages": ["aquí está"], "action": "respond", "funnel_stage": None,
+            "extracted": {}, "used_scenario_id": None, "needs_escalation": False,
+            "send_invitation": True}))
+        monkeypatch.setattr(main.db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        inv = AsyncMock(); monkeypatch.setattr(main.actions, "maybe_send_invitation", inv)
+        await main._run_ai("wa_1", {"phone": "wa_1"}, "dónde es el evento?")
+        inv.assert_awaited_once_with("wa_1")
+
+    async def test_no_invitation_when_flag_absent(self, monkeypatch):
+        monkeypatch.setattr(main.ai, "generate_reply", AsyncMock(return_value={
+            "messages": ["hola"], "action": "respond", "funnel_stage": None,
+            "extracted": {}, "used_scenario_id": None, "needs_escalation": False,
+            "send_invitation": False}))
+        monkeypatch.setattr(main.db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        inv = AsyncMock(); monkeypatch.setattr(main.actions, "maybe_send_invitation", inv)
+        await main._run_ai("wa_1", {"phone": "wa_1"}, "hola")
+        inv.assert_not_awaited()
+
+
+class TestProcessBurstWrapper:
+    async def test_impl_exception_alerts_not_raises(self, monkeypatch):
+        """Непойманный сбой в _process_burst_impl → notify_error, наружу не пробрасывается."""
+        monkeypatch.setattr(main, "_process_burst_impl",
+                            AsyncMock(side_effect=RuntimeError("boom")))
+        err = AsyncMock(); monkeypatch.setattr(main.escalation, "notify_error", err)
+        await main._process_burst("wa_1")   # не должно бросить
+        err.assert_awaited_once()

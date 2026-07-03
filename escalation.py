@@ -112,6 +112,22 @@ def photo_action_kb(phone: str) -> dict:
     ]}
 
 
+def payment_action_kb(phone: str) -> dict:
+    """Кнопки под алертом об оплате: подтвердить оплату / карточка."""
+    return {"inline_keyboard": [
+        [_btn("✅ Подтвердить оплату", "payment_ok", phone)],
+        [_btn("📇 Карточка", "card", phone)],
+    ]}
+
+
+def payment_target_kb(phone: str) -> dict:
+    """Уточнение за что оплата (если selected_service неоднозначен): ивент / подписка."""
+    return {"inline_keyboard": [
+        [_btn("🎟 Оплата за ивент", "payment_event", phone)],
+        [_btn("⭐ Оплата подписки", "payment_sub", phone)],
+    ]}
+
+
 def card_action_kb(phone: str, is_manual: bool) -> dict:
     """Кнопки под карточкой лида: открыть переписку в WhatsApp + тумблер режима + стоп."""
     toggle = (_btn("↩️ Вернуть боту", "release", phone) if is_manual
@@ -196,6 +212,18 @@ async def notify_photo_review(lead: dict, reason: str) -> None:
     phone = (lead or {}).get("phone", "")
     await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
                          text, photo_action_kb(phone) if phone else None)
+
+
+async def notify_payment(lead: dict) -> None:
+    """Лид сообщил об оплате — Аня подтверждает вручную кнопкой (блок 13)."""
+    text = (
+        "💰 Лид сообщил об оплате\n"
+        f"{_lead_name(lead)}\n"
+        f"👉 Проверь и подтверди: {_wa_link((lead or {}).get('phone', ''))}"
+    )
+    phone = (lead or {}).get("phone", "")
+    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
+                         text, payment_action_kb(phone) if phone else None)
 
 
 # ===== Technical (бот «Ошибки») =====

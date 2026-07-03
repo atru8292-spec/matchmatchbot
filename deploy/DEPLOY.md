@@ -42,6 +42,17 @@ chmod 600 /opt/matchmatch-bot/.env
 - `SUPPORT_CONTACT=@arinashrr`
 - Supabase DSN / OpenAI / Wazzup / оба TG-токена — прод
 
+## 3.5. Миграции БД
+Применить SQL-миграции к боевой БД по порядку (idempotent, `IF NOT EXISTS`/`ON CONFLICT`):
+```bash
+for f in migrations/0*.sql; do
+  echo ">> $f"; psql "$SUPABASE_DB_DSN" -f "$f"   # или через Supabase SQL editor
+done
+```
+`004_block13` создаёт `app_settings` и системный сценарий 50. ВНИМАНИЕ: если будешь
+пере-заливать сценарии из JSON (`scripts.load_scenarios` делает DELETE) — после этого
+повторно применить `004` (вернёт сценарий 50 и его trigger_type='scheduled').
+
 ## 4. systemd
 ```bash
 cp deploy/matchmatch-bot.service /etc/systemd/system/matchmatch-bot.service

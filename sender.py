@@ -64,6 +64,41 @@ async def send_one(chat_id: str, text: str) -> bool:
         return False
 
 
+async def send_image(phone: str, image_url: str) -> bool:
+    """Отправить картинку в WhatsApp через Wazzup (contentUri = публичный URL). Не бросает.
+
+    Медиа-сообщение: тот же POST /v3/message, но поле contentUri вместо text
+    (подтверждено докой Wazzup v3). Успех пишем в messages как исходящее.
+    """
+    if not image_url:
+        return False
+    chat_id = phone.replace("wa_", "", 1)
+    await asyncio.sleep(compute_delay(""))  # антибан-пауза (минимальная для медиа)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                WAZZUP_SEND_URL,
+                headers={
+                    "Authorization": f"Bearer {settings.wazzup_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "channelId": settings.wazzup_channel_id,
+                    "chatType": "whatsapp",
+                    "chatId": chat_id,
+                    "contentUri": image_url,
+                },
+            )
+            r.raise_for_status()
+    except Exception as e:
+        logger.exception("Wazzup send_image failed: chat_id=%s", chat_id)
+        await escalation.notify_error("sender.send_image", repr(e), phone)
+        return False
+    await db.save_outbound(phone, "[изображение отправлено]")
+    logger.info("картинка отправлена лиду %s", phone)
+    return True
+
+
 async def send(phone: str, messages: list) -> int:
     """Отправить бабблы лиду последовательно с задержками. Вернуть число отправленных.
 

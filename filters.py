@@ -30,6 +30,14 @@ _AGGRESSION_RE = re.compile(
 # Кириллица — признак нецелевого лида (агентство работает с мексиканцами по-испански).
 _CYRILLIC_RE = re.compile(r"[а-яёА-ЯЁ]")
 
+# Заявление об оплате (блок 13). Только claim-формы («я оплатил»), НЕ вопрос про оплату
+# ("cómo es el pago?"): 'pago'/'pagar' без claim-контекста намеренно не ловим.
+_PAYMENT_RE = re.compile(
+    r"\b(pagu[eé]|ya\s+pagu[eé]|pagad[oa]s?|deposit[eé]|transfer[ií]|"
+    r"hice\s+el\s+pago|оплати\w*)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -49,6 +57,11 @@ def is_escort_mention(text: str) -> bool:
 def is_aggression(text: str) -> bool:
     """Явная агрессия/оскорбление."""
     return bool(_AGGRESSION_RE.search(text or ""))
+
+
+def is_payment_claim(text: str) -> bool:
+    """Лид заявляет, что оплатил (claim-форма, не вопрос про оплату)."""
+    return bool(_PAYMENT_RE.search(text or ""))
 
 
 def is_russian_number(phone: str) -> bool:
@@ -96,13 +109,15 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     text = user_text or ""
     name = lead.get("whatsapp_name") or lead.get("name") or "лид"
 
-    # 1) Whitelist / manual / DNC → бот молчит, но уведомляем Аню.
+    # 1) Whitelist → бот молчит + алерт «написал клиент из списка» (Аня ведёт лично).
     if is_whitelisted:
         return Decision("silent_whitelist", f"whitelist: написал {name}", alert_manager=True)
+    # do_not_contact / manual → бот молчит БЕЗ алерта: заблокированный нарушитель не должен
+    # спамить Аню VIP-уведомлением на каждое сообщение; в manual Аня и так в чате WhatsApp.
     if lead.get("do_not_contact"):
-        return Decision("silent_whitelist", f"do_not_contact: {name}", alert_manager=True)
+        return Decision("silent", f"do_not_contact — молчу: {name}")
     if _manual_active(lead):
-        return Decision("silent_whitelist", f"manual mode: менеджер ведёт {name}", alert_manager=True)
+        return Decision("silent", f"manual mode — менеджер ведёт: {name}")
 
     # 1.5) Не целевой регион/язык (русский номер +7 или кириллица) → тихо молчим.
     #      НЕ блокируем (не дисквалификация, вдруг ошибка) — просто не тратим AI-вызов.
@@ -121,6 +136,11 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     # 3) Явная агрессия → блок.
     if is_aggression(text):
         return Decision("blocked", "Агрессивное поведение", alert_manager=True, block_permanent=True)
+
+    # 3.5) Заявление об оплате → ручное подтверждение Аней (блок 13). Бот НЕ меняет
+    #      стадию сам: шлёт ack + эскалация с кнопкой «Подтвердить оплату».
+    if is_payment_claim(text):
+        return Decision("payment_claim", "лид сообщил об оплате", alert_manager=True)
 
     # 4) Жёсткая дисквалификация по УЖЕ известным полям (заполнит AI в блоке 6).
     age = lead.get("age")

@@ -137,10 +137,11 @@ class TestDecideWhitelist:
         assert d.is_escort is False
         assert d.alert_manager is True
 
-    def test_do_not_contact_returns_silent_whitelist(self):
+    def test_do_not_contact_returns_silent_no_alert(self):
+        """do_not_contact → silent БЕЗ VIP-алерта (заблокированный не спамит Аню)."""
         d = decide({"do_not_contact": True}, False, "hola")
-        assert d.action == "silent_whitelist"
-        assert d.alert_manager is True
+        assert d.action == "silent"
+        assert d.alert_manager is False
 
     def test_do_not_contact_false_no_effect(self):
         """do_not_contact=False (явно) → не тормозим, продолжаем."""
@@ -156,16 +157,16 @@ class TestDecideWhitelist:
 class TestDecideManualMode:
 
     def test_manual_without_until_is_silent(self):
-        """mode='manual', manual_until=None → считаем активным → silent_whitelist."""
+        """mode='manual', manual_until=None → активный manual → silent (без алерта)."""
         d = decide({"mode": "manual", "manual_until": None}, False, "hola")
-        assert d.action == "silent_whitelist"
-        assert d.alert_manager is True
+        assert d.action == "silent"
+        assert d.alert_manager is False
 
     def test_manual_with_future_until_is_silent(self):
-        """manual_until в будущем → менеджер ведёт → бот молчит."""
+        """manual_until в будущем → менеджер ведёт → бот молчит (silent)."""
         future = datetime.now(timezone.utc) + timedelta(days=30)
         d = decide({"mode": "manual", "manual_until": future}, False, "hola")
-        assert d.action == "silent_whitelist"
+        assert d.action == "silent"
 
     def test_manual_with_past_until_continues(self):
         """manual_until в прошлом → срок истёк → бот продолжает обработку."""
@@ -638,9 +639,11 @@ class TestDecideSilentPriority:
         assert d.alert_manager is True
 
     def test_do_not_contact_before_silent(self):
-        """do_not_contact=True + русский номер + кириллица → silent_whitelist, НЕ silent."""
+        """do_not_contact проверяется РАНЬШЕ региона/кириллицы (обе ветки → silent,
+        но причина должна быть do_not_contact, не «кириллица»)."""
         d = decide({"do_not_contact": True}, False, "привет", "wa_79991234567")
-        assert d.action == "silent_whitelist"
+        assert d.action == "silent"
+        assert "do_not_contact" in d.reason
 
     def test_whitelist_before_silent_cyrillic_only(self):
         """Whitelist + кириллица (нейтральный номер) → silent_whitelist."""
@@ -725,3 +728,52 @@ class TestSilentBypass:
         # bypass снимает только silent; escort по-прежнему блокирует
         r = decide({}, False, "busco sexo", "wa_79635378880", self.BYPASS)
         assert r.action == "blocked"
+
+
+# ===========================================================================
+# Заявление об оплате (блок 13)
+# ===========================================================================
+
+from filters import is_payment_claim
+
+
+class TestIsPaymentClaim:
+    def test_pague(self):
+        assert is_payment_claim("ya pagué el evento") is True
+
+    def test_pagado(self):
+        assert is_payment_claim("listo, pagado") is True
+
+    def test_deposite(self):
+        assert is_payment_claim("deposité ayer") is True
+
+    def test_transferi(self):
+        assert is_payment_claim("te transferí el monto") is True
+
+    def test_russian(self):
+        assert is_payment_claim("оплатила уже") is True
+
+    def test_question_about_payment_not_claim(self):
+        """Вопрос про оплату — НЕ claim (ложное срабатывание не нужно)."""
+        assert is_payment_claim("cómo es el pago?") is False
+        assert is_payment_claim("dónde puedo pagar?") is False
+
+    def test_empty(self):
+        assert is_payment_claim("") is False
+
+
+class TestDecidePaymentClaim:
+    def test_payment_claim_action(self):
+        d = decide({"age": 40, "is_single": True}, False, "ya pagué", "wa_52")
+        assert d.action == "payment_claim"
+        assert d.alert_manager is True
+
+    def test_whitelist_beats_payment(self):
+        """Whitelist приоритетнее — клиент из списка идёт к Ане, не в payment-флоу."""
+        d = decide({}, True, "ya pagué", "wa_52")
+        assert d.action == "silent_whitelist"
+
+    def test_escort_beats_payment(self):
+        """Escort-паттерн важнее (блок), даже если в тексте есть 'pagué'."""
+        d = decide({}, False, "pagué por sexo", "wa_52")
+        assert d.action == "blocked"

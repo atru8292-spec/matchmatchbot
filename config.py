@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # старте (fail-fast), чтобы не принимать вебхуки с общеизвестным секретом.
     wazzup_webhook_secret: str
 
-    # ===== Wazzup — отправка (блок 7, пока не используется) =====
+    # ===== Wazzup — отправка (sender.py: текст и картинки) =====
     wazzup_token: str = ""
     wazzup_channel_id: str = ""
 

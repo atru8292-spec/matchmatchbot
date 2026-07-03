@@ -744,3 +744,14 @@ class TestOpenAIRetry:
         with patch("ai.httpx.AsyncClient", cls), patch("ai.asyncio.sleep", sleep):
             await ai._openai_post("u", {}, 5)
         assert sleep.await_args.args[0] == ai._backoff(0)
+
+
+class TestSendInvitationFlag:
+    def test_passthrough_true(self):
+        out = ai._validate_output({"messages": ["hola"], "action": "respond",
+                                   "send_invitation": True})
+        assert out["send_invitation"] is True
+
+    def test_default_false(self):
+        out = ai._validate_output({"messages": ["hola"], "action": "respond"})
+        assert out["send_invitation"] is False

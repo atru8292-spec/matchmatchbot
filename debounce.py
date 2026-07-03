@@ -112,8 +112,8 @@ class Debouncer:
         try:
             await self._on_flush(phone)
         except Exception:
-            # ошибку не проглатываем молча — лог. TODO (блок 8/9 эскалация):
-            # добавить сюда алерт в Telegram о падении обработки залпа.
+            # Последний рубеж: on_flush (main._process_burst) сам ловит и шлёт Telegram-алерт,
+            # поэтому здесь только лог — не тянем escalation в чистый debounce-модуль.
             logger.exception("debounce: on_flush упал для phone=%s", phone)
         finally:
             self._active_flushes.discard(task)

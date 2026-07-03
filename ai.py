@@ -223,8 +223,8 @@ def _validate_output(data: dict) -> dict:
             logger.warning("AI вернул неизвестную funnel_stage %r → None", raw_stage)
         funnel_stage = None
 
-    # used_scenario_id — отладочное поле, доверяем AI как есть. TODO (интеграция):
-    # если начнём делать lookup по нему — обрабатывать несуществующий id (AI может соврать).
+    # used_scenario_id — доверяем AI как есть. Lookup по нему (main._run_ai через
+    # db.get_scenario_title) None-безопасен: несуществующий/невалидный id → None → фолбэк.
     return {
         "messages": messages,
         "funnel_stage": funnel_stage,
@@ -232,6 +232,9 @@ def _validate_output(data: dict) -> dict:
         "extracted": extracted,
         "needs_escalation": bool(data.get("needs_escalation")),
         "used_scenario_id": data.get("used_scenario_id"),
+        # Блок 13: AI ставит true, когда лид спрашивает детали/локацию ивента —
+        # main тогда шлёт картинку-приглашение (если она готова в app_settings).
+        "send_invitation": bool(data.get("send_invitation")),
     }
 
 

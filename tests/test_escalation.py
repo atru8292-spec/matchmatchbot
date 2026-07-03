@@ -469,3 +469,24 @@ class TestReplyMarkupPassthrough:
         await escalation._send_telegram("TOK", "CHAT", "text", kb)
         payload = cls._post_mock.call_args.kwargs["json"]
         assert payload["reply_markup"] == kb
+
+
+class TestNotifyPayment:
+    async def test_uses_manager_token_and_kb(self, monkeypatch):
+        monkeypatch.setattr(escalation.settings, "tg_manager_bot_token", "MGR")
+        monkeypatch.setattr(escalation.settings, "tg_manager_chat_id", "C1")
+        send_mock = AsyncMock()
+        monkeypatch.setattr(escalation, "_send_telegram", send_mock)
+        await escalation.notify_payment(_lead(phone="wa_79635378880", whatsapp_name="Carlos"))
+        assert send_mock.call_args.args[0] == "MGR"
+        text = send_mock.call_args.args[2]
+        kb = send_mock.call_args.args[3]
+        assert "оплат" in text.lower()
+        data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        assert "mb:payment_ok:wa_79635378880" in data
+
+    def test_payment_target_kb_has_event_and_sub(self):
+        kb = escalation.payment_target_kb("wa_1")
+        data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
+        assert "mb:payment_event:wa_1" in data
+        assert "mb:payment_sub:wa_1" in data

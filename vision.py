@@ -49,16 +49,24 @@ def load_vision_prompt() -> str:
 async def download_media(content_uri: str) -> bytes:
     """Скачать медиа по URL из вебхука Wazzup. Бросает при ошибке (вызывающий ловит).
 
-    Лимит размера (Content-Length) — защита от OOM: Wazzup отдаёт content_uri для
-    любого медиа, лид может прислать видео на сотни МБ.
+    Защита от OOM: качаем СТРИМОМ с накопительным счётчиком байт и обрываем при
+    превышении MAX_MEDIA_BYTES — не грузим в память видео на сотни МБ (Content-Length
+    может отсутствовать/врать). follow_redirects=True: CDN Wazzup может отдать 30x.
     """
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.get(content_uri)
-        r.raise_for_status()
-        cl = r.headers.get("content-length")
-        if cl and int(cl) > MAX_MEDIA_BYTES:
-            raise ValueError(f"медиа слишком большое: {cl} байт (лимит {MAX_MEDIA_BYTES})")
-        return r.content
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        async with client.stream("GET", content_uri) as r:
+            r.raise_for_status()
+            cl = r.headers.get("content-length")
+            if cl and cl.isdigit() and int(cl) > MAX_MEDIA_BYTES:
+                raise ValueError(f"медиа слишком большое: {cl} байт (лимит {MAX_MEDIA_BYTES})")
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in r.aiter_bytes():
+                total += len(chunk)
+                if total > MAX_MEDIA_BYTES:
+                    raise ValueError(f"медиа слишком большое: >{MAX_MEDIA_BYTES} байт (лимит)")
+                chunks.append(chunk)
+            return b"".join(chunks)
 
 
 async def analyze_photo(image_bytes: bytes) -> dict:
