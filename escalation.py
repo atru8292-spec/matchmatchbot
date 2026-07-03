@@ -163,7 +163,7 @@ async def notify_escalation(lead: dict, reason: str, last_msg: str) -> None:
 async def notify_vip(lead: dict) -> None:
     """VIP/клиент из whitelist написал — бот молчит, отвечает Аня лично."""
     text = (
-        "🤍 Написал личный клиент\n"
+        "🤍 Написал клиент из списка\n"
         f"{_lead_name(lead)}\n"
         f"👉 Открыть чат: {_wa_link((lead or {}).get('phone', ''))}"
     )

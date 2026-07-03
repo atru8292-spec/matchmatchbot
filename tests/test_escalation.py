@@ -203,7 +203,7 @@ class TestNotifyVip:
         assert send_mock.call_args.args[0] == "MGR"
 
     async def test_text_content(self, monkeypatch):
-        """Текст: '🤍 Написал личный клиент', имя, wa.me ссылка, без личного обращения."""
+        """Текст: '🤍 Написал клиент из списка', имя, wa.me ссылка, без личного обращения."""
         monkeypatch.setattr(escalation.settings, "tg_manager_bot_token", "MGR")
         monkeypatch.setattr(escalation.settings, "tg_manager_chat_id", "C1")
         send_mock = AsyncMock()
@@ -213,7 +213,7 @@ class TestNotifyVip:
         await escalation.notify_vip(lead)
 
         text = send_mock.call_args.args[2]
-        assert "🤍 Написал личный клиент" in text
+        assert "🤍 Написал клиент из списка" in text
         assert "Carlos" in text
         assert "https://wa.me/79635378880" in text
         assert "твой" not in text.lower() and "ответь" not in text.lower()
