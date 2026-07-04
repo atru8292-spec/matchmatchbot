@@ -274,6 +274,21 @@ async def get_unprocessed_inbound(phone: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def update_message_text(message_id, text: str) -> None:
+    """Обновить текст сообщения по id (для транскрипта голосового вместо плейсхолдера).
+
+    Не критично для ответа текущего залпа (combined уже несёт транскрипт), но чинит
+    историю: следующий вызов увидит реальный текст, а не '[voice message]'.
+    """
+    try:
+        await _get_pool().execute(
+            "UPDATE messages SET text = $1 WHERE id = $2", text, message_id,
+        )
+    except Exception:
+        # Не роняем обработку залпа из-за косметики истории — только лог.
+        logger.exception("update_message_text failed: id=%s", message_id)
+
+
 async def phones_with_unprocessed_inbound() -> list[str]:
     """Уникальные номера с непроцессенными входящими (для startup-sweep после рестарта).
 

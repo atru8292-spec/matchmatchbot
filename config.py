@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_temperature: float = 0.3
     openai_vision_model: str = "gpt-4o-mini"  # фото-модерация (блок 9)
+    openai_whisper_model: str = "whisper-1"  # транскрибация голосовых (voice.py)
 
     # ===== Supabase Storage (блок 9) =====
     supabase_url: str = ""

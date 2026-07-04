@@ -8,7 +8,8 @@
     "blocks_lead": false,
     "messages": [
       "Hola! Soy Anna, fundadora de MatchMatch 🤍",
-      "Antes de contarte de los servicios déjame conocerte un poquito, eres soltero?"
+      "Somos una agencia matrimonial premium: yo personalmente te busco una mujer eslava —rusa, ucraniana o bielorrusa— que de verdad encaje contigo para algo serio, pareja y familia ✨",
+      "Antes de contarte más, déjame conocerte un poquito, eres soltero?"
     ],
     "note": "",
     "trigger_es": "hola / buenas / buenos dias / hola que tal / información"
@@ -21,7 +22,9 @@
     "mode": "bot_auto",
     "blocks_lead": false,
     "messages": [
-      "Hola! 🤍 te cuento todo, pero antes, eres soltero?"
+      "Hola! Soy Anna de MatchMatch 🤍 con gusto te cuento del evento y de todo",
+      "Somos una agencia matrimonial premium: te presento personalmente mujeres eslavas que buscan una relación seria, y hacemos eventos privados para conocerlas ✨",
+      "Pero antes, eres soltero?"
     ],
     "note": "",
     "trigger_es": "quiero ir al evento / info del evento / cuando es el evento / boletos evento"
@@ -35,7 +38,8 @@
     "blocks_lead": false,
     "messages": [
       "Hola! Qué bueno que te interesa 🤍 soy Anna de MatchMatch",
-      "Antes de platicarte, eres soltero?"
+      "Justo eso hago: como matchmaker personal te busco una mujer eslava —rusa, ucraniana o bielorrusa— que quiera algo serio, pareja y familia, y te acompaño en todo el proceso ✨",
+      "Antes de platicarte más, eres soltero?"
     ],
     "note": "",
     "trigger_es": "quiero conocer rusas / me gustan las eslavas / mujeres rusas / ucranianas"
@@ -267,7 +271,7 @@
       "Te agendamos? Cuándo te queda?"
     ],
     "note": "",
-    "trigger_es": "como funciona / explicame / que incluye / como es el servicio / 3 mujeres al mes que significa"
+    "trigger_es": "como funciona / como funciona esto / como funciona el servicio / como funciona la membresia / explicame / explicame como funciona / explicame como va / que incluye / que incluye el servicio / que incluye la membresia / que me dan / que ofrecen / que ofrece la agencia / en que consiste / de que se trata / como es el servicio / como es el proceso / como trabajan / como le hacen / que hacen exactamente / 3 mujeres al mes que significa"
   },
   {
     "id": 20,
@@ -365,10 +369,11 @@
     "blocks_lead": false,
     "messages": [
       "Ay qué bueno que conociste a alguien interesante 🤍",
-      "Justo ese tipo de seguimiento, encontrar contacto, organizar segunda cita, es lo que ofrezco en la membresía. Como miembro te ayudo activamente con las chicas que ya conoces, incluyendo facilitar contactos privados cuando es apropiado",
+      "Ese seguimiento —encontrar el contacto y organizar una segunda cita— es de lo que me encargo con mis miembros",
+      "Justo eso es parte de la membresía guapo 🤍 Como miembro, cuando hay interés mutuo con alguna chica, te paso su contacto para que sigan platicando y organicen verse de nuevo",
       "Agendamos videollamada? $1,400 USD/mes"
     ],
-    "note": "Важно: бот никогда не даёт телефоны девушек, решаешь только ты.",
+    "note": "Передача контакта — это benefit членства при взаимном интересе, его подаёт бот как часть услуги. Сам номер конкретной девушки передаёт лично Аня (не бот в чате), холодному не-члену номер не даём.",
     "trigger_es": "quiero el contacto de / dame su telefono / como contacto a la chica"
   },
   {

@@ -21,6 +21,7 @@ import manager_bot
 import scheduler
 import sender
 import vision
+import voice
 from config import settings
 from debounce import Debouncer
 from normalize import normalize_wazzup_message
@@ -58,16 +59,22 @@ async def _process_burst_impl(phone: str) -> None:
     if not msgs:
         # уже обработано параллельным флашем — нечего делать
         return
-    combined = "\n".join((m.get("text") or "") for m in msgs)
     content_types = [(m.get("meta") or {}).get("content_type") for m in msgs]
+    lead = await db.get_lead_by_phone(phone) or {}
+    whitelisted = await db.is_whitelisted(phone)
+
+    # Голосовые: реальная транскрибация Whisper заменяет плейсхолдер '[voice message]'
+    # на распознанный текст (кроме whitelist — там бот молчит, транскрибация не нужна).
+    if not whitelisted and "voice" in content_types:
+        await _transcribe_voices(phone, msgs)
+
+    combined = "\n".join((m.get("text") or "") for m in msgs)
     logger.info(
         "склеенный залп от %s (%d сообщ., типы: %s): %r",
         phone, len(msgs), content_types, combined,
     )
     await db.mark_messages_processed([m["id"] for m in msgs])
 
-    lead = await db.get_lead_by_phone(phone) or {}
-    whitelisted = await db.is_whitelisted(phone)
     decision = filters.decide(lead, whitelisted, combined, phone,
                               settings.silent_bypass_set)
 
@@ -100,6 +107,36 @@ async def _process_burst_impl(phone: str) -> None:
 
     # 3) текст → детерминированное решение (needs_ai/rejected).
     await _apply_decision(phone, decision, lead, combined)
+
+
+async def _transcribe_voices(phone: str, msgs: list[dict]) -> None:
+    """Заменить плейсхолдер голосовых на реальный транскрипт Whisper (мутирует msgs).
+
+    На сбой скачивания/транскрибации: лог + алерт, плейсхолдер '[voice message]'
+    остаётся — downstream уйдёт в сценарий №35 («me lo escribes?»), лид без ответа
+    не остаётся. Пустой транскрипт (тишина/шум) тоже оставляем как №35.
+    """
+    for m in msgs:
+        meta = m.get("meta") or {}
+        if meta.get("content_type") != "voice":
+            continue
+        content_uri = meta.get("content_uri")
+        if not content_uri:
+            logger.warning("голосовое без content_uri [%s] — плейсхолдер (№35)", phone)
+            continue
+        try:
+            audio = await vision.download_media(content_uri)
+            text = await voice.transcribe(audio)
+        except Exception as e:
+            logger.exception("транскрибация голосового упала [%s] — плейсхолдер (№35)", phone)
+            await escalation.notify_error("main._transcribe_voices", repr(e), phone)
+            continue
+        if not text:
+            logger.info("пустой транскрипт [%s] — плейсхолдер (№35)", phone)
+            continue
+        m["text"] = text
+        await db.update_message_text(m["id"], text)  # чинит историю (не критично)
+        logger.info("голосовое [%s] транскрибировано: %r", phone, text[:80])
 
 
 async def _process_photo(phone: str, lead: dict, content_uri: str) -> None:
