@@ -6,3 +6,7 @@ venv/
 .pytest_cache/
 .DS_Store
 test_photos/
+
+# дизайн-skills (референс, не код бота) и временные файлы
+sk/
+scratchpad_*
