@@ -39,7 +39,7 @@ LEAD_COLUMNS: frozenset[str] = frozenset({
     "imported_at", "import_batch_id", "extra_data", "photo_received",
     "escort_mention_count", "last_name", "email", "date_of_birth",
     "marital_status", "business_link", "desired_partner_age", "selected_service",
-    "invitation_sent_at",
+    "invitation_sent_at", "videocall_at", "videocall_reminded_at",
 })
 
 
@@ -443,6 +443,60 @@ async def log_event_reminder(phone: str, kind: str, event_date: str) -> None:
         )
     except Exception:
         logger.exception("log_event_reminder failed: phone=%s kind=%s", phone, kind)
+        raise
+
+
+async def set_videocall_at(phone: str, when) -> None:
+    """Назначить/перенести время видеозвонка лида (сценарий 49).
+
+    Сбрасываем videocall_reminded_at → NULL, чтобы напоминание за 2ч ушло заново
+    на новое время (при переносе). when=None снимает назначение.
+    """
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET videocall_at = $2, videocall_reminded_at = NULL, "
+            "updated_at = now() WHERE phone = $1",
+            phone, when,
+        )
+    except Exception:
+        logger.exception("set_videocall_at failed: phone=%s", phone)
+        raise
+
+
+async def due_videocall_reminders(window_start, window_end, limit: int = 30) -> list[dict]:
+    """Лиды, которым пора напомнить о звонке: videocall_at в окне [start, end],
+    ещё не напоминали, mode='auto', не do_not_contact, НЕ в whitelist.
+
+    Окно задаёт планировщик (≈ [now+1.5ч, now+2.5ч]) — попадание в «за 2 часа»
+    с допуском на дискретность тика. Идемпотентность — по videocall_reminded_at.
+    """
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT l.phone, l.whatsapp_name, l.name, l.videocall_at "
+            "FROM leads l LEFT JOIN bot_whitelist w ON w.phone = l.phone "
+            "WHERE l.videocall_at IS NOT NULL AND l.videocall_reminded_at IS NULL "
+            "  AND l.videocall_at >= $1 AND l.videocall_at <= $2 "
+            "  AND l.mode = 'auto' AND COALESCE(l.do_not_contact, false) = false "
+            "  AND w.phone IS NULL "
+            "ORDER BY l.videocall_at ASC LIMIT $3",
+            window_start, window_end, limit,
+        )
+    except Exception:
+        logger.exception("due_videocall_reminders failed")
+        raise
+    return [dict(r) for r in rows]
+
+
+async def mark_videocall_reminded(phone: str) -> None:
+    """Отметить, что напоминание о звонке отправлено (идемпотентность — не дублируем)."""
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET videocall_reminded_at = now(), updated_at = now() "
+            "WHERE phone = $1",
+            phone,
+        )
+    except Exception:
+        logger.exception("mark_videocall_reminded failed: phone=%s", phone)
         raise
 
 

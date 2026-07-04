@@ -4,7 +4,7 @@ db и sender замоканы. Реальных сети/БД нет.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -141,6 +141,21 @@ class TestRunEventReminders:
         assert tmpl.call_args.args[0] == scheduler.REMIND_DAY_SCENARIO
         assert n == 1
 
+    async def test_morning_after_sends_scenario_23(self, monkeypatch):
+        """Следующее утро после ивента (event_date+1) → check-in, сценарий 23."""
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=_event_settings()))
+        tmpl = AsyncMock(return_value="cómo te fue ayer? 🤍")
+        monkeypatch.setattr(db, "get_scenario_template", tmpl)
+        monkeypatch.setattr(db, "event_recipients",
+                            AsyncMock(return_value=[{"phone": "wa_1", "whatsapp_name": None, "name": None}]))
+        monkeypatch.setattr(db, "event_reminder_sent", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
+        send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
+        n = await scheduler.run_event_reminders(today=date(2026, 8, 16))  # утро после ивента
+        assert n == 1
+        assert tmpl.call_args.args[0] == scheduler.CHECKIN_MORNING_SCENARIO
+        send.assert_awaited_once()
+
     async def test_idempotent_skips_already_sent(self, monkeypatch):
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=_event_settings()))
         monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="x"))
@@ -165,21 +180,93 @@ class TestRunEventReminders:
 # ===== tick =====
 
 class TestTick:
-    async def test_tick_runs_both(self, monkeypatch):
-        f = AsyncMock(); e = AsyncMock()
+    async def test_tick_runs_all(self, monkeypatch):
+        f = AsyncMock(); e = AsyncMock(); v = AsyncMock()
         monkeypatch.setattr(scheduler, "run_followups", f)
         monkeypatch.setattr(scheduler, "run_event_reminders", e)
+        monkeypatch.setattr(scheduler, "run_videocall_reminders", v)
         await scheduler.tick()
         f.assert_awaited_once()
         e.assert_awaited_once()
+        v.assert_awaited_once()
 
     async def test_tick_followup_failure_alerts_and_continues(self, monkeypatch):
         monkeypatch.setattr(scheduler, "run_followups", AsyncMock(side_effect=RuntimeError("x")))
         e = AsyncMock(); monkeypatch.setattr(scheduler, "run_event_reminders", e)
+        monkeypatch.setattr(scheduler, "run_videocall_reminders", AsyncMock())
         err = AsyncMock(); monkeypatch.setattr(scheduler.escalation, "notify_error", err)
         await scheduler.tick()
         err.assert_awaited()             # алерт по сбою followups
-        e.assert_awaited_once()          # event-часть всё равно отработала
+        e.assert_awaited_once()          # но event-reminders всё равно вызвались
+
+
+# ===== run_videocall_reminders (сценарий 49, за ~2 часа) =====
+
+def _lead_call(phone="wa_1", call=None):
+    return {"phone": phone, "whatsapp_name": None, "name": None, "videocall_at": call}
+
+
+class TestRunVideocallReminders:
+    async def test_sends_and_marks_within_window(self, monkeypatch):
+        """Звонок через 2 часа → попадает в окно, шлём сценарий 49, помечаем."""
+        now = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+        call = now + timedelta(hours=2)                       # ровно за 2 часа
+        due = AsyncMock(return_value=[_lead_call(call=call)])
+        monkeypatch.setattr(db, "due_videocall_reminders", due)
+        tmpl = AsyncMock(return_value="hoy tenemos videollamada a las [hora]. Sigue en pie?")
+        monkeypatch.setattr(db, "get_scenario_template", tmpl)
+        send = AsyncMock(return_value=1); monkeypatch.setattr(sender, "send", send)
+        mark = AsyncMock(); monkeypatch.setattr(db, "mark_videocall_reminded", mark)
+
+        n = await scheduler.run_videocall_reminders(now=now)
+
+        assert n == 1
+        assert tmpl.call_args.args[0] == scheduler.VIDEOCALL_SCENARIO
+        # окно передано в db: [now+1.5ч, now+2.5ч]
+        start, end = due.call_args.args[0], due.call_args.args[1]
+        assert start == now + timedelta(minutes=90) and end == now + timedelta(minutes=150)
+        # [hora] подставлено в CDMX (UTC-6): 14:00 UTC → 08:00 CDMX
+        sent_bubbles = send.call_args.args[1]
+        assert any("08:00" in b for b in sent_bubbles)
+        assert all("[hora]" not in b for b in sent_bubbles)
+        mark.assert_awaited_once_with("wa_1")
+
+    async def test_none_due_no_send(self, monkeypatch):
+        """Нет подходящих звонков → ничего не шлём, template не читаем."""
+        monkeypatch.setattr(db, "due_videocall_reminders", AsyncMock(return_value=[]))
+        tmpl = AsyncMock(); monkeypatch.setattr(db, "get_scenario_template", tmpl)
+        send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
+        n = await scheduler.run_videocall_reminders(now=datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc))
+        assert n == 0
+        send.assert_not_awaited()
+        tmpl.assert_not_awaited()
+
+    async def test_send_failure_does_not_mark(self, monkeypatch):
+        """Wazzup не принял (send=0) → НЕ помечаем reminded (повтор на след. тике)."""
+        now = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(db, "due_videocall_reminders",
+                            AsyncMock(return_value=[_lead_call(call=now + timedelta(hours=2))]))
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="a las [hora]"))
+        monkeypatch.setattr(sender, "send", AsyncMock(return_value=0))
+        mark = AsyncMock(); monkeypatch.setattr(db, "mark_videocall_reminded", mark)
+        n = await scheduler.run_videocall_reminders(now=now)
+        assert n == 0
+        mark.assert_not_awaited()
+
+    async def test_per_lead_failure_alerts_and_continues(self, monkeypatch):
+        """Сбой на одном лиде → алерт, второй всё равно обрабатывается."""
+        now = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+        call = now + timedelta(hours=2)
+        monkeypatch.setattr(db, "due_videocall_reminders",
+                            AsyncMock(return_value=[_lead_call("wa_1", call), _lead_call("wa_2", call)]))
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="a las [hora]"))
+        send = AsyncMock(side_effect=[RuntimeError("boom"), 1])
+        monkeypatch.setattr(sender, "send", send)
+        monkeypatch.setattr(db, "mark_videocall_reminded", AsyncMock())
+        err = AsyncMock(); monkeypatch.setattr(scheduler.escalation, "notify_error", err)
+        n = await scheduler.run_videocall_reminders(now=now)
+        assert n == 1                    # второй лид прошёл
+        err.assert_awaited()             # по первому — алерт
 
 
 class TestPersonalize:

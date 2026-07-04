@@ -692,7 +692,7 @@
     "messages": [
       "Hola guapo! 🤍 te recuerdo que hoy tenemos nuestra videollamada a las [hora]. Sigue en pie para ti?"
     ],
-    "note": "Если лид подтвердил, отлично. Если просит перенести, ты согласовываешь новое время.",
+    "note": "Если лид подтвердил — отлично, ничего доп. не нужно. Если просит перенести/отменить звонок — НЕ договаривайся сам о новом времени: ответь тепло, что уточнишь и напишешь, и ЭСКАЛИРУЙ Ане (needs_escalation=true). Новое время согласовывает только Аня.",
     "trigger_es": "confirmacion de videollamada 2h antes (mensaje del bot)"
   }
 ]
