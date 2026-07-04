@@ -1,0 +1,96 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== Дизайн-токены (OKLCH, тонированные нейтралы к teal; teal+gold из бренда) ===== */
+:root {
+  /* поверхности: 3 z-плана */
+  --color-paper: oklch(0.985 0.006 95); /* тёплый off-white фон */
+  --color-surface: oklch(0.997 0.004 95); /* карточки */
+  --color-elevated: oklch(0.965 0.008 95); /* приподнятые/hover */
+  /* текст */
+  --color-ink: oklch(0.27 0.022 205); /* charcoal-teal, не чистый чёрный */
+  --color-muted: oklch(0.55 0.02 205); /* вторичный */
+  --color-line: oklch(0.9 0.01 195); /* границы/разделители */
+  /* бренд */
+  --color-primary: oklch(0.52 0.086 194); /* deep teal */
+  --color-primary-hover: oklch(0.47 0.086 194);
+  --color-on-primary: oklch(0.99 0.01 95);
+  --color-accent: oklch(0.76 0.105 85); /* тёплое золото — дозированно */
+  /* семантика */
+  --color-success: oklch(0.57 0.11 155);
+  --color-success-bg: oklch(0.95 0.04 155);
+  --color-danger: oklch(0.55 0.14 25);
+  --color-danger-bg: oklch(0.95 0.04 25);
+  /* тона бейджей стадий воронки (текст + приглушённый фон) */
+  --color-info: oklch(0.5 0.09 235); /* сине-teal — активные стадии */
+  --color-info-bg: oklch(0.95 0.03 235);
+  --color-neutral: oklch(0.5 0.015 205); /* серый — новый/лист ожидания */
+  --color-neutral-bg: oklch(0.94 0.006 205);
+  --color-accent-ink: oklch(0.4 0.09 70); /* глубокий бронзово-золотой — контраст ≥4.5:1 на светлом */
+  --color-accent-bg: oklch(0.94 0.05 85);
+
+  color-scheme: light;
+}
+
+html.dark {
+  --color-paper: oklch(0.205 0.018 210);
+  --color-surface: oklch(0.245 0.018 210);
+  --color-elevated: oklch(0.29 0.02 210);
+  --color-ink: oklch(0.95 0.01 95);
+  --color-muted: oklch(0.72 0.02 205);
+  --color-line: oklch(0.35 0.02 205);
+  --color-primary: oklch(0.68 0.1 190);
+  --color-primary-hover: oklch(0.74 0.1 190);
+  --color-on-primary: oklch(0.2 0.02 210);
+  --color-accent: oklch(0.81 0.11 85);
+  --color-success: oklch(0.72 0.12 155);
+  --color-success-bg: oklch(0.32 0.05 155);
+  --color-danger: oklch(0.7 0.14 25);
+  --color-danger-bg: oklch(0.32 0.06 25);
+  --color-info: oklch(0.72 0.09 235);
+  --color-info-bg: oklch(0.32 0.05 235);
+  --color-neutral: oklch(0.72 0.015 205);
+  --color-neutral-bg: oklch(0.32 0.01 205);
+  --color-accent-ink: oklch(0.82 0.1 85);
+  --color-accent-bg: oklch(0.34 0.05 85);
+
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: Manrope, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+  font-family: "Golos Text", system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.tabnums {
+  font-variant-numeric: tabular-nums;
+}

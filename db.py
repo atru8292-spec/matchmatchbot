@@ -901,3 +901,335 @@ async def set_funnel_stage(phone: str, to_stage: str, meta: dict | None = None) 
     except Exception:
         logger.exception("set_funnel_stage failed: phone=%s to=%s", phone, to_stage)
         raise
+
+
+# ===== Мини-CRM: список лидов с фильтрами/поиском/пагинацией (/api/mini/leads) =====
+
+# Разрешённые режимы сортировки — защита от инъекции в ORDER BY (значение не может
+# идти параметром, поэтому маппим ключ на заранее заданный безопасный SQL-фрагмент).
+_LEADS_SORT_SQL: dict[str, str] = {
+    "recent": "l.last_message_at DESC NULLS LAST, l.created_at DESC",
+    "stage": "l.funnel_stage ASC, l.last_message_at DESC NULLS LAST",
+}
+
+# Базовый SELECT листинга (колонки + JOINs), без WHERE/ORDER/LIMIT — общий для
+# страницы и экспорта (одинаковая выборка). LATERAL — последнее сообщение лида.
+_LEADS_SELECT = (
+    "SELECT l.phone, l.whatsapp_name, l.name, l.funnel_stage, l.mode, l.interest, "
+    "l.age, l.profession, l.city, l.last_message_at, l.last_inbound_at, "
+    "(w.phone IS NOT NULL) AS is_client, "
+    "m.text AS last_message_text, m.sender AS last_message_sender, "
+    "m.direction AS last_message_direction, m.created_at AS last_message_created_at "
+    "FROM leads l "
+    "LEFT JOIN bot_whitelist w ON w.phone = l.phone "
+    "LEFT JOIN LATERAL ("
+    "  SELECT text, sender, direction, created_at FROM messages "
+    "  WHERE lead_phone = l.phone ORDER BY created_at DESC LIMIT 1"
+    ") m ON true "
+)
+
+
+def _leads_where(stages, mode, interest, since, search) -> tuple[str, list]:
+    """Собрать WHERE + args для фильтра лидов (общее для листинга и экспорта).
+
+    Возвращает (where_sql, args). Инъекция-безопасно: значения идут параметрами,
+    поиск экранирует LIKE-метасимволы (%, _, \\)."""
+    where: list[str] = []
+    args: list = []
+    if stages:
+        args.append(list(stages))
+        where.append(f"l.funnel_stage = ANY(${len(args)}::text[])")
+    if mode in ("auto", "manual"):
+        args.append(mode)
+        where.append(f"l.mode = ${len(args)}")
+    if interest:
+        args.append(interest)
+        where.append(f"l.interest = ${len(args)}")
+    if since:
+        args.append(since)
+        where.append(f"l.last_message_at >= ${len(args)}::timestamptz")
+    if search and search.strip():
+        esc = search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        args.append(f"%{esc}%")
+        p = len(args)
+        where.append(
+            f"(l.name ILIKE ${p} ESCAPE '\\' OR l.whatsapp_name ILIKE ${p} ESCAPE '\\' "
+            f"OR l.phone ILIKE ${p} ESCAPE '\\')"
+        )
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    return where_sql, args
+
+
+async def list_leads_page(
+    *,
+    stages: list[str] | None = None,
+    mode: str | None = None,
+    interest: str | None = None,
+    since: str | None = None,
+    search: str | None = None,
+    sort: str = "recent",
+    limit: int = 20,
+    offset: int = 0,
+) -> dict:
+    """Страница лидов для мини-CRM. Возвращает {"leads": [...], "total": int}.
+
+    Фильтры (все опциональны, комбинируются через AND):
+      - stages: список кодов funnel_stage (OR внутри списка)
+      - mode: 'auto' | 'manual'
+      - interest: 'event' | 'agency' | 'both'
+      - since: ISO-дата/время — last_message_at >= since
+      - search: подстрока по имени/whatsapp_name/телефону (ILIKE)
+    sort: 'recent' (по last_message_at, свежие сверху — дефолт) | 'stage'.
+    Каждый лид: превью последнего сообщения (LATERAL к messages) и is_client
+    (есть ли в bot_whitelist). total — общее число под фильтром (для пагинации).
+    """
+    where_sql, args = _leads_where(stages, mode, interest, since, search)
+    order_sql = _LEADS_SORT_SQL.get(sort, _LEADS_SORT_SQL["recent"])
+
+    limit = max(1, min(int(limit), 100))  # жёсткий потолок страницы
+    offset = max(0, int(offset))
+    data_args = args + [limit, offset]
+    data_sql = _LEADS_SELECT + (
+        f"{where_sql} ORDER BY {order_sql} LIMIT ${len(args)+1} OFFSET ${len(args)+2}"
+    )
+    count_sql = f"SELECT count(*) FROM leads l {where_sql}"
+
+    try:
+        pool = _get_pool()
+        rows = await pool.fetch(data_sql, *data_args)
+        total = await pool.fetchval(count_sql, *args) if args else await pool.fetchval(count_sql)
+    except Exception:
+        logger.exception(
+            "list_leads_page failed: stages=%s mode=%s interest=%s search=%r sort=%s",
+            stages, mode, interest, search, sort,
+        )
+        raise
+    return {"leads": [dict(r) for r in rows], "total": int(total or 0)}
+
+
+async def list_leads_for_export(
+    *,
+    stages: list[str] | None = None,
+    mode: str | None = None,
+    interest: str | None = None,
+    since: str | None = None,
+    search: str | None = None,
+    sort: str = "recent",
+    limit: int = 10000,
+) -> list[dict]:
+    """Все лиды под фильтром (без пагинации) для CSV-экспорта. Те же фильтры/колонки,
+    что и list_leads_page. Жёсткий потолок limit — защита от гигантской выгрузки."""
+    where_sql, args = _leads_where(stages, mode, interest, since, search)
+    order_sql = _LEADS_SORT_SQL.get(sort, _LEADS_SORT_SQL["recent"])
+    limit = max(1, min(int(limit), 20000))
+    sql = _LEADS_SELECT + f"{where_sql} ORDER BY {order_sql} LIMIT ${len(args)+1}"
+    try:
+        rows = await _get_pool().fetch(sql, *(args + [limit]))
+    except Exception:
+        logger.exception("list_leads_for_export failed: search=%r", search)
+        raise
+    return [dict(r) for r in rows]
+
+
+# ===== Мини-CRM: статистика (/api/mini/stats) — переиспользуем вьюхи БД =====
+
+async def get_funnel_stats() -> list[dict]:
+    """Воронка по стадиям из вьюхи v_funnel_stats (агрегаты считает БД).
+    Возвращает строки только по непустым стадиям: funnel_stage, total, last_24h, last_7d."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT funnel_stage, total, last_24h, last_7d FROM v_funnel_stats"
+        )
+    except Exception:
+        logger.exception("get_funnel_stats failed")
+        raise
+    return [dict(r) for r in rows]
+
+
+async def get_lead_counts() -> dict:
+    """Счётчики лидов одним запросом: всего / новых сегодня / новых за 7 дней."""
+    try:
+        row = await _get_pool().fetchrow(
+            "SELECT count(*) AS total, "
+            "count(*) FILTER (WHERE created_at >= date_trunc('day', now())) AS today, "
+            "count(*) FILTER (WHERE created_at >= now() - interval '7 days') AS week "
+            "FROM leads"
+        )
+    except Exception:
+        logger.exception("get_lead_counts failed")
+        raise
+    return dict(row)
+
+
+async def get_pending_escalations(limit: int = 50) -> list[dict]:
+    """Зависшие эскалации (ждут ответа менеджера) из v_pending_escalations,
+    самые срочные сверху (minutes_left по возрастанию)."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT phone, whatsapp_name, escalate_reason, minutes_left, last_inbound_at "
+            "FROM v_pending_escalations ORDER BY minutes_left ASC NULLS LAST LIMIT $1",
+            limit,
+        )
+    except Exception:
+        logger.exception("get_pending_escalations failed")
+        raise
+    return [dict(r) for r in rows]
+
+
+async def count_pending_escalations() -> int:
+    """Число зависших эскалаций (для счётчика на дашборде)."""
+    try:
+        n = await _get_pool().fetchval("SELECT count(*) FROM v_pending_escalations")
+    except Exception:
+        logger.exception("count_pending_escalations failed")
+        raise
+    return int(n or 0)
+
+
+# ===== Мини-CRM: экран «Клиенты» (whitelist) (/api/mini/whitelist) =====
+
+async def list_whitelist_with_names(limit: int = 500) -> list[dict]:
+    """Whitelist для экрана «Клиенты»: имя лида (если он есть в leads) + причина/
+    кто добавил/дата. Новые сверху. bot_whitelist.phone == leads.phone (оба wa_)."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT w.phone, w.reason, w.added_by, w.added_at, l.name, l.whatsapp_name "
+            "FROM bot_whitelist w LEFT JOIN leads l ON l.phone = w.phone "
+            "ORDER BY w.added_at DESC LIMIT $1",
+            limit,
+        )
+    except Exception:
+        logger.exception("list_whitelist_with_names failed")
+        raise
+    return [dict(r) for r in rows]
+
+
+# ===== Мини-CRM: карточка лида — таймлайн, заметки, действия (/api/mini/lead/*) =====
+
+async def get_funnel_events(phone: str) -> list[dict]:
+    """Смены стадий лида для таймлайна (старые → новые). ВНИМАНИЕ: столбец времени
+    в funnel_events — changed_at (не created_at)."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT id, from_stage, to_stage, meta, changed_at FROM funnel_events "
+            "WHERE lead_phone = $1 ORDER BY changed_at ASC",
+            phone,
+        )
+    except Exception:
+        logger.exception("get_funnel_events failed: phone=%s", phone)
+        raise
+    return [dict(r) for r in rows]
+
+
+async def get_manager_actions(phone: str) -> list[dict]:
+    """Действия менеджера по лиду для таймлайна (старые → новые)."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT id, action, performed_by, meta, created_at FROM manager_actions "
+            "WHERE lead_phone = $1 ORDER BY created_at ASC",
+            phone,
+        )
+    except Exception:
+        logger.exception("get_manager_actions failed: phone=%s", phone)
+        raise
+    return [dict(r) for r in rows]
+
+
+async def log_manager_action(phone: str, action: str, performed_by: str,
+                             meta: dict | None = None) -> None:
+    """Записать действие менеджера в manager_actions (для таймлайна и аудита).
+
+    Вызывается из мини-аппа при takeover/release/stop/resume/whitelist — иначе
+    системных строк «Взято в работу» и т.п. в истории неоткуда взять (сами
+    set_manual/set_auto только меняют mode, ничего не логируя)."""
+    try:
+        await _get_pool().execute(
+            "INSERT INTO manager_actions (lead_phone, action, performed_by, meta) "
+            "VALUES ($1, $2, $3, $4)",
+            phone, action, performed_by, meta or {},
+        )
+    except Exception:
+        logger.exception("log_manager_action failed: phone=%s action=%s", phone, action)
+        raise
+
+
+async def get_lead_notes(phone: str) -> list[dict]:
+    """Внутренние заметки лида (старые → новые)."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT id, text, created_at FROM lead_notes "
+            "WHERE lead_phone = $1 ORDER BY created_at ASC",
+            phone,
+        )
+    except Exception:
+        logger.exception("get_lead_notes failed: phone=%s", phone)
+        raise
+    return [dict(r) for r in rows]
+
+
+async def add_lead_note(phone: str, text: str) -> dict:
+    """Добавить заметку. Вернуть созданную строку (id, text, created_at)."""
+    try:
+        row = await _get_pool().fetchrow(
+            "INSERT INTO lead_notes (lead_phone, text) VALUES ($1, $2) "
+            "RETURNING id, text, created_at",
+            phone, text,
+        )
+    except Exception:
+        logger.exception("add_lead_note failed: phone=%s", phone)
+        raise
+    return dict(row)
+
+
+async def save_manual_message(phone: str, text: str, delivered: bool) -> dict:
+    """Сохранить РУЧНОЕ исходящее сообщение (менеджер из мини-CRM).
+
+    sender='anna' + meta.manual=true → в таймлайне подпишется «Anna» (как ручные
+    ответы после takeover). meta.status = 'sent'|'failed' — доставлено ли в Wazzup,
+    чтобы неудачная отправка была видна в истории, а не терялась молча.
+    Возвращает созданную строку (id, text, created_at, meta)."""
+    meta = {"manual": True, "status": "sent" if delivered else "failed"}
+    try:
+        row = await _get_pool().fetchrow(
+            "INSERT INTO messages (lead_phone, direction, sender, text, processed, "
+            "processed_at, meta) VALUES ($1, 'outbound', 'anna', $2, true, now(), $3) "
+            "RETURNING id, text, created_at, meta",
+            phone, text, meta,
+        )
+    except Exception:
+        logger.exception("save_manual_message failed: phone=%s", phone)
+        raise
+    return dict(row)
+
+
+async def get_whitelist_entry(phone: str) -> dict | None:
+    """Запись whitelist по телефону (reason/added_by/added_at) или None. Телефон
+    нормализуется в 'wa_<digits>' — как хранит add_to_whitelist."""
+    key = _wa_phone(phone)
+    try:
+        row = await _get_pool().fetchrow(
+            "SELECT phone, reason, added_by, added_at FROM bot_whitelist WHERE phone = $1",
+            key,
+        )
+    except Exception:
+        logger.exception("get_whitelist_entry failed: phone=%s", key)
+        raise
+    return dict(row) if row else None
+
+
+async def resume_lead(phone: str) -> bool:
+    """Контр-действие к block_lead (кнопка «Вернуть боту»): снять do_not_contact,
+    вернуть в auto. Атомарный условный UPDATE (без read-then-write) — безопасно при
+    нескольких менеджерах на одном лиде. Возврат — найден ли лид."""
+    try:
+        row = await _get_pool().fetchrow(
+            "UPDATE leads SET do_not_contact = false, mode = 'auto', "
+            "manual_until = NULL, updated_at = now() WHERE phone = $1 RETURNING phone",
+            phone,
+        )
+    except Exception:
+        logger.exception("resume_lead failed: phone=%s", phone)
+        raise
+    found = row is not None
+    logger.info("resume: %s → auto, do_not_contact=false (найден=%s)", phone, found)
+    return found

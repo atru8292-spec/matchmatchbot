@@ -28,6 +28,7 @@ logger = logging.getLogger("matchmatch.manager_bot")
 
 HELP_TEXT = (
     "👋 Привет! Я помогаю вести переписку с новыми людьми.\n\n"
+    "🗂 /crm — открыть панель CRM (мини-апп)\n\n"
     "Активные лиды:\n"
     "📋 /leads — список активных\n"
     "📇 /lead и номер — карточка лида (переписка, статус)\n\n"
@@ -98,6 +99,18 @@ def _access_request_kb() -> dict | None:
     return {"inline_keyboard": [
         [{"text": "✍️ Написать для доступа", "url": f"https://t.me/{handle}"}],
     ]}
+
+
+def _crm_kb() -> dict:
+    """Inline-кнопка запуска мини-CRM (Telegram Web App). Работает в приватном чате."""
+    return {"inline_keyboard": [
+        [{"text": "🗂 Открыть CRM", "web_app": {"url": settings.mini_app_url}}],
+    ]}
+
+
+async def _cmd_crm(chat_id, args, frm) -> None:
+    """Открыть мини-CRM кнопкой (Telegram Web App)."""
+    await _reply(chat_id, "Панель MatchMatch CRM — открой кнопкой ниже 👇", _crm_kb())
 
 
 async def _answer_callback(callback_id: str, text: str = "") -> None:
@@ -281,6 +294,7 @@ async def _handle_message(message: dict) -> None:
     handlers = {
         "/start": _cmd_help,
         "/help": _cmd_help,
+        "/crm": _cmd_crm,
         "/leads": _cmd_leads,
         "/lead": _cmd_lead,
         "/takeover": _cmd_takeover,
@@ -310,7 +324,8 @@ async def _handle_message(message: dict) -> None:
 
 
 async def _cmd_help(chat_id, args, frm) -> None:
-    await _reply(chat_id, HELP_TEXT)
+    # Кнопка «Открыть CRM» (Web App) прямо под приветствием.
+    await _reply(chat_id, HELP_TEXT, _crm_kb())
 
 
 async def _cmd_leads(chat_id, args, frm) -> None:

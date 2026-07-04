@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.staticfiles import StaticFiles
 
 import actions
 import ai
@@ -18,6 +20,7 @@ import escalation
 import filters
 import funnel
 import manager_bot
+import mini_api
 import scheduler
 import sender
 import vision
@@ -346,8 +349,12 @@ async def lifespan(app: FastAPI):
             logger.exception("startup-sweep упал (не критично для старта)")
             await escalation.notify_error("startup_sweep", repr(e))
     # Планировщик (блок 13): фоллоу-апы + напоминания об ивенте, почасовой тик.
-    if db.is_ready():
+    # scheduler_enabled=false → выключен (локальный прогон против прод-БД, чтобы вторая
+    # копия не слала сообщения; планировщик тикает сразу на старте).
+    if db.is_ready() and settings.scheduler_enabled:
         scheduler_task = asyncio.create_task(scheduler.run_loop())
+    elif not settings.scheduler_enabled:
+        logger.warning("Планировщик выключен (SCHEDULER_ENABLED=false)")
     yield
     if scheduler_task is not None:
         scheduler_task.cancel()
@@ -361,6 +368,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MatchMatch Anna Bot", lifespan=lifespan)
+
+# Мини-CRM (Telegram Mini App): роуты /api/mini/* поверх готовых db-функций.
+# Авторизация — внутри роутера (mini_auth.require_admin по Telegram initData).
+app.include_router(mini_api.router)
+
+# Статика мини-аппа (SPA из miniapp/dist) отдаётся по пути /app — тот же origin, что и
+# /api/mini (без CORS). Монтируем ТОЛЬКО если билд существует: иначе StaticFiles уронил
+# бы старт бота на сервере без собранного dist. html=True → /app и /app/ отдают index.html.
+_MINIAPP_DIST = os.path.join(os.path.dirname(__file__), "miniapp", "dist")
+if os.path.isdir(_MINIAPP_DIST):
+    app.mount("/app", StaticFiles(directory=_MINIAPP_DIST, html=True), name="miniapp")
+    logger.info("мини-апп смонтирован: /app → %s", _MINIAPP_DIST)
+else:
+    logger.warning("miniapp/dist не найден (%s) — /app не смонтирован", _MINIAPP_DIST)
 
 
 @app.get("/health")
