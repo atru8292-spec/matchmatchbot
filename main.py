@@ -224,6 +224,19 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
         await escalation.notify_payment(lead)
         return
 
+    if decision.action == "instagram_handoff":
+        # Лид дал Instagram вместо фото: бот не валидирует профиль как фото (Vision).
+        # Короткий бридж-ответ, ставим manual (дальше ведёт Аня), алерт на ручную проверку.
+        logger.info("РЕШЕНИЕ instagram_handoff [%s]", phone)
+        await sender.send(phone, ["Déjame revisar tu perfil y te confirmo en un momento 🤍"])
+        try:
+            await db.update_lead_fields(phone, mode="manual")
+        except Exception:
+            logger.exception("не смог поставить manual для %s", phone)
+        await escalation.notify_escalation(
+            lead, "Прислал Instagram вместо фото — проверь профиль вручную", combined)
+        return
+
     if decision.action == "blocked":
         # Блок навсегда + стадия lost — атомарно внутри block_lead. is_escort из
         # Decision (не парсим текст reason). Алерт Ане о блокировке.

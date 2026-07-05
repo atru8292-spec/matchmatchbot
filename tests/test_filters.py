@@ -9,7 +9,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from filters import Decision, decide, is_aggression, is_escort_mention, is_russian_number, has_cyrillic
+from filters import (Decision, decide, is_aggression, is_escort_mention, is_russian_number,
+                     has_cyrillic, has_instagram)
 
 
 # ===========================================================================
@@ -152,6 +153,56 @@ class TestDecideWhitelist:
 # ===========================================================================
 # Manual mode
 # ===========================================================================
+
+
+class TestInstagramHandoff:
+
+    def test_has_instagram_url(self):
+        assert has_instagram("mi perfil: instagram.com/juan.perez")
+
+    def test_has_instagram_word(self):
+        assert has_instagram("mejor te paso mi instagram")
+
+    def test_has_instagram_handle(self):
+        assert has_instagram("soy @juan_perez23")
+
+    def test_no_instagram_plain_text(self):
+        assert not has_instagram("aquí está mi foto")
+
+    def test_email_not_matched(self):
+        """Email не должен ловиться как Instagram-хэндл (regex-фикс)."""
+        assert not has_instagram("mándalo a mi correo juan@hotmail.com y te mando la foto")
+
+    def test_photo_pending_email_not_handoff(self):
+        """photo_pending + email (без Instagram) → обычный AI-путь, НЕ handoff."""
+        lead = {"funnel_stage": "photo_pending", "age": 40, "is_single": True}
+        d = decide(lead, False, "te la mando a juan@gmail.com mejor")
+        assert d.action == "needs_ai"
+
+    def test_photo_pending_instagram_handoff(self):
+        """Стадия photo_pending + Instagram → instagram_handoff + алерт Ане."""
+        lead = {"funnel_stage": "photo_pending", "age": 40, "is_single": True}
+        d = decide(lead, False, "mejor te paso mi instagram @juanp")
+        assert d.action == "instagram_handoff"
+        assert d.alert_manager is True
+
+    def test_new_stage_instagram_not_handoff(self):
+        """Стадия new («vi su Instagram» в первом сообщении) → НЕ handoff, идёт в AI."""
+        lead = {"funnel_stage": "new", "age": 40, "is_single": True}
+        d = decide(lead, False, "hola, vi su Instagram, me interesan las eslavas")
+        assert d.action == "needs_ai"
+
+    def test_photo_pending_no_instagram_needs_ai(self):
+        """photo_pending без Instagram → обычный AI-путь."""
+        lead = {"funnel_stage": "photo_pending", "age": 40, "is_single": True}
+        d = decide(lead, False, "ok ahí va")
+        assert d.action == "needs_ai"
+
+    def test_escort_priority_over_instagram(self):
+        """Безопасность важнее: escort на photo_pending всё равно блок, не handoff."""
+        lead = {"funnel_stage": "photo_pending", "age": 40, "is_single": True}
+        d = decide(lead, False, "te paso mi instagram y busco sexo")
+        assert d.action == "blocked"
 
 
 class TestDecideManualMode:

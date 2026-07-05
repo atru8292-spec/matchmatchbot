@@ -64,7 +64,8 @@ async def send_one(chat_id: str, text: str) -> bool:
         return False
 
 
-_LINK_PLACEHOLDERS = (("[course_link]", "course_link"), ("[event_link]", "event_link"))
+_LINK_PLACEHOLDERS = (("[course_link]", "course_link"), ("[event_link]", "event_link"),
+                      ("[call_link]", "call_link"))
 
 
 async def _fill_link_placeholders(text: str) -> str | None:

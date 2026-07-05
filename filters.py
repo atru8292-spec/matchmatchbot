@@ -38,6 +38,17 @@ _PAYMENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Instagram вместо фото: ссылка ig, слово instagram/insta, или @хэндл. Ловим ТОЛЬКО
+# на стадии photo_pending (см. decide) — чтобы «vi su Instagram» в первом сообщении
+# (стадия new) не триггерило. Бот не умеет валидировать IG-профиль как фото (Vision),
+# поэтому передаём Ане на ручную проверку.
+_INSTAGRAM_RE = re.compile(
+    # (?<![a-zA-Z0-9@]) перед @хэндлом — чтобы не ловить локальную часть email
+    # (juan@hotmail.com: @ идёт после буквы → не совпадёт, а «@handle» после пробела/начала — да).
+    r"(instagram\.com/|instagr\.am/|\binstagram\b|\binsta\b|(?<![a-zA-Z0-9@])@[a-zA-Z0-9._]{3,})",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -62,6 +73,11 @@ def is_aggression(text: str) -> bool:
 def is_payment_claim(text: str) -> bool:
     """Лид заявляет, что оплатил (claim-форма, не вопрос про оплату)."""
     return bool(_PAYMENT_RE.search(text or ""))
+
+
+def has_instagram(text: str) -> bool:
+    """Лид дал Instagram (ссылку/@хэндл/слово). Гейтить стадией photo_pending в decide."""
+    return bool(_INSTAGRAM_RE.search(text or ""))
 
 
 def is_russian_number(phone: str) -> bool:
@@ -148,6 +164,11 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
         return Decision("rejected", f"Возраст {age} вне {MIN_AGE}-{MAX_AGE}")
     if lead.get("is_single") is False:
         return Decision("rejected", "Не холост")
+
+    # 4.5) Instagram вместо фото (стадия photo_pending): бот не валидирует IG как фото —
+    #      короткий бридж-ответ + ручной режим + алерт Ане (она смотрит профиль лично).
+    if lead.get("funnel_stage") == "photo_pending" and has_instagram(text):
+        return Decision("instagram_handoff", "Instagram вместо фото — на Аню", alert_manager=True)
 
     # 5) Остальное — решает AI (квалификация, профессия, casual, тон).
     return Decision("needs_ai", "нужен AI")

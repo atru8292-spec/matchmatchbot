@@ -44,6 +44,7 @@ HELP_TEXT = (
     "🎟 /event — настройки ивента и ссылок\n"
     "📅 /set_event дата время | адрес — задать ивент\n"
     "💳 /set_event_link url — ссылка оплаты/брони\n"
+    "📅 /set_call_link url — ссылка записи на видеозвонок (Calendly)\n"
     "🖼 /set_invitation url — картинка-приглашение (+ /invitation_on)\n"
     "📚 /set_course_link url — ссылка на курсы\n\n"
     "💡 Проще всего — жать кнопки под сообщениями."
@@ -307,6 +308,7 @@ async def _handle_message(message: dict) -> None:
         "/set_event": _cmd_set_event,
         "/event_off": _cmd_event_off,
         "/set_event_link": _cmd_set_event_link,
+        "/set_call_link": _cmd_set_call_link,
         "/set_course_link": _cmd_set_course_link,
         "/set_invitation": _cmd_set_invitation,
         "/invitation_on": _cmd_invitation_on,
@@ -442,7 +444,7 @@ async def _cmd_wl_list(chat_id, args, frm) -> None:
 async def _cmd_event(chat_id, args, frm) -> None:
     """Показать текущие настройки ивента, ссылок и приглашения."""
     s = await db.get_settings(["event_active", "event_date", "event_time",
-                               "event_address", "event_link", "course_link",
+                               "event_address", "event_link", "course_link", "call_link",
                                "invitation_url", "invitation_ready"])
     active = s.get("event_active") == "1"
     inv_ready = s.get("invitation_ready") == "1"
@@ -458,9 +460,10 @@ async def _cmd_event(chat_id, args, frm) -> None:
         f"URL картинки: {s.get('invitation_url') or '—'}",
         "",
         f"📚 Ссылка на курсы: {s.get('course_link') or '— (не задана, курсы не предлагаются)'}",
+        f"📅 Ссылка записи на звонок: {s.get('call_link') or '— (не задана, [call_link] в сценариях дропается)'}",
         "",
         "Изменить: /set_event 2026-08-15 20:30 | Av. Reforma 123, CDMX",
-        "Оплата: /set_event_link <url>   Курсы: /set_course_link <url>",
+        "Оплата: /set_event_link <url>   Курсы: /set_course_link <url>   Звонок: /set_call_link <url>",
         "Картинка: /set_invitation <url>, потом /invitation_on",
     ]
     await _reply(chat_id, "\n".join(lines))
@@ -473,6 +476,15 @@ async def _cmd_set_event_link(chat_id, args, frm) -> None:
         return
     await db.set_setting("event_link", args[0].strip())
     await _reply(chat_id, "💳 Ссылка на оплату/бронь сохранена — попадёт в напоминания об ивенте.")
+
+
+async def _cmd_set_call_link(chat_id, args, frm) -> None:
+    """Ссылка на запись видеозвонка (Calendly) — подставляется в push-to-call сценарии через [call_link]."""
+    if not args or not args[0].lower().startswith("http"):
+        await _reply(chat_id, "Формат: /set_call_link <url>")
+        return
+    await db.set_setting("call_link", args[0].strip())
+    await _reply(chat_id, "📅 Ссылка на запись звонка сохранена — попадёт в сценарии с приглашением на видеозвонок.")
 
 
 async def _cmd_set_course_link(chat_id, args, frm) -> None:

@@ -443,6 +443,18 @@ class TestLinkPlaceholders:
         out = await sender._fill_link_placeholders("cursos aquí: [course_link]")
         assert out is None   # пустая ссылка → баббл не отправляем
 
+    async def test_fills_call_link(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings",
+                            AsyncMock(return_value={"call_link": "https://calendly.com/x"}))
+        out = await sender._fill_link_placeholders("agenda aquí: [call_link]")
+        assert out == "agenda aquí: https://calendly.com/x"
+
+    async def test_empty_call_link_drops_bubble(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings",
+                            AsyncMock(return_value={"call_link": ""}))
+        out = await sender._fill_link_placeholders("agenda aquí: [call_link]")
+        assert out is None   # пустая ссылка → баббл с приглашением на звонок не шлём
+
     async def test_no_placeholder_untouched_no_db(self, monkeypatch, db_pool):
         get = AsyncMock(); monkeypatch.setattr(sender.db, "get_settings", get)
         out = await sender._fill_link_placeholders("Hola guapo 🤍")

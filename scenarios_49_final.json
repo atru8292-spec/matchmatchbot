@@ -22,7 +22,7 @@
     "mode": "bot_auto",
     "blocks_lead": false,
     "messages": [
-      "Hola! Soy Anna de MatchMatch 🤍 con gusto te cuento del evento y de todo",
+      "Hola! Soy Anna, fundadora de MatchMatch 🤍 con gusto te cuento del evento y de todo",
       "Somos una agencia matrimonial premium: te presento personalmente mujeres eslavas que buscan una relación seria, y hacemos eventos privados para conocerlas ✨",
       "Pero antes, eres soltero?"
     ],
@@ -37,7 +37,7 @@
     "mode": "bot_auto",
     "blocks_lead": false,
     "messages": [
-      "Hola! Qué bueno que te interesa 🤍 soy Anna de MatchMatch",
+      "Hola! Qué bueno que te interesa 🤍 soy Anna, fundadora de MatchMatch",
       "Justo eso hago: como matchmaker personal te busco una mujer eslava —rusa, ucraniana o bielorrusa— que quiera algo serio, pareja y familia, y te acompaño en todo el proceso ✨",
       "Antes de platicarte más, eres soltero?"
     ],
@@ -66,7 +66,7 @@
     "blocks_lead": false,
     "messages": [
       "Y por último, me mandas unos fotos de ti porfa? 📸",
-      "Para tener tu perfil completo 🤍"
+      "Para tener tu perfil completo. Si prefieres, también me puedes pasar tu Instagram 🤍"
     ],
     "note": "",
     "trigger_es": "tengo 35 años soy abogado / soltero trabajo en / mi profesión es"
@@ -81,7 +81,8 @@
     "messages": [
       "Muchas gracias guapo 🤍 mira, te explico cómo te puedo ayudar. Soy matchmaker personal, mi trabajo es encontrarte una mujer eslava que de verdad encaje contigo, no solo por foto sino por valores y lo que buscas en una relación",
       "Cada mes te presento 3 mujeres seleccionadas especialmente para ti, ya filtradas y listas para conocerte en serio. Tienes acceso a más de 3,000 mujeres rusas, ucranianas y bielorrusas, y entras a nuestros eventos privados a precio preferencial. La membresía es de $1,400 USD al mes",
-      "Te gustaría que platiquemos en una videollamada para conocerte mejor y ver a quién te puedo presentar? 😊"
+      "Te gustaría que platiquemos en una videollamada para conocerte mejor y ver a quién te puedo presentar? 😊",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "Детали Standard и VIP раскрываются только на звонке, по тому что Аня увидит в человеке.",
     "trigger_es": "aqui esta mi foto / te mando mi foto / mi foto"
@@ -195,7 +196,8 @@
     "blocks_lead": false,
     "messages": [
       "Súper guapo 🤍 lo ideal es que platiquemos en una videollamada de 30 min, te conozco mejor, te enseño algunas chicas de la base y vemos si encajas con nuestro perfil",
-      "Cuándo te queda? Mañana en la mañana o en la tarde?"
+      "Cuándo te queda? Mañana en la mañana o en la tarde?",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "После этого лид переходит к Ане лично, дальше она ведёт весь процесс, включая презентацию Standard и VIP если уместно.",
     "trigger_es": "me interesa / si quiero / suena bien / como le hago / quiero la membresia"
@@ -254,7 +256,8 @@
     "messages": [
       "Hola! 🤍 nuestros servicios son internacionales, tenemos clientes en USA, Colombia, Chile, Argentina y otros países",
       "La membresía funciona online: te presento 3 mujeres cada mes (la mayoría viven en México pero también tenemos en otros países), y si vienes a México entras a nuestros eventos privados a precio preferencial. Son $1,400 USD al mes",
-      "Te queda agendar una videollamada para platicar? Cuándo puedes?"
+      "Te queda agendar una videollamada para platicar? Cuándo puedes?",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "",
     "trigger_es": "estoy en usa / vivo en colombia / chile / argentina / no estoy en mexico"
@@ -268,7 +271,8 @@
     "blocks_lead": false,
     "messages": [
       "Te platico todo con detalle en la videollamada 🤍 cada cliente tiene preguntas diferentes según lo que busca",
-      "Te agendamos? Cuándo te queda?"
+      "Te agendamos? Cuándo te queda?",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "",
     "trigger_es": "como funciona / como funciona esto / como funciona el servicio / como funciona la membresia / explicame / explicame como funciona / explicame como va / que incluye / que incluye el servicio / que incluye la membresia / que me dan / que ofrecen / que ofrece la agencia / en que consiste / de que se trata / como es el servicio / como es el proceso / como trabajan / como le hacen / que hacen exactamente / 3 mujeres al mes que significa"
@@ -283,7 +287,8 @@
     "messages": [
       "Tenemos más de 3,000 mujeres en nuestra base 💕",
       "Todas eslavas, solteras, buscan algo serio. De Rusia, Ucrania, Bielorrusia. Muchas viven en México, otras viven en sus países pero abiertas a mudarse",
-      "Cuándo agendamos videollamada para platicar bien? 😊"
+      "Cuándo agendamos videollamada para platicar bien? 😊",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "",
     "trigger_es": "cuantas chicas tienes / catalogo / cuantas mujeres / puedo ver fotos de las chicas"
@@ -297,7 +302,8 @@
     "blocks_lead": false,
     "messages": [
       "Eso te lo platico en la videollamada, tenemos varias opciones según tu situación 🤍",
-      "Cuándo te queda?"
+      "Cuándo te queda?",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "",
     "trigger_es": "como pago / metodos de pago / aceptan tarjeta / como es el pago"
@@ -312,7 +318,8 @@
     "messages": [
       "Te entiendo guapo 🤍 MatchMatch es una agencia matrimonial registrada formalmente. Hemos organizado varios eventos en CDMX, tenemos clientes activos y todo está documentado",
       "Checa mi Instagram: @rusaencdmx, ahí ves fotos de eventos pasados y la dinámica",
-      "En la videollamada te puedo enseñar testimonios. Cuándo te queda? 😊"
+      "En la videollamada te puedo enseñar testimonios. Cuándo te queda? 😊",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "",
     "trigger_es": "es seguro / no es estafa / esto es real / tengo dudas / es confiable"
@@ -340,7 +347,8 @@
     "messages": [
       "Ay qué bueno guapo, me da gusto 🤍",
       "Te quiero contar, como matchmaker noté algunos patrones interesantes en el evento. Seleccioné a algunos hombres con quienes vale la pena seguir más a fondo, y tú estás entre ellos. Me gustaría darte feedback honesto sobre cómo te perciben las mujeres y contarte qué oportunidades se abren para ti en la agencia",
-      "Te late que platiquemos en una videollamada 1:1? Cuándo te queda?"
+      "Te late que platiquemos en una videollamada 1:1? Cuándo te queda?",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "",
     "trigger_es": "estuvo bien el evento / conoci a alguien / me gusto el evento"
@@ -355,7 +363,8 @@
     "messages": [
       "Ay guapo lo siento mucho 🤍 te entiendo, los eventos masivos pueden variar dependiendo con quién te toque cerca",
       "Justo por eso ahora mi enfoque principal es el matchmaking personalizado: te presento 3 mujeres específicas para ti cada mes, con compatibilidad pre-validada",
-      "Si quieres maximizar tus chances, agendamos videollamada y te platico cómo funciona. Cuándo te queda?"
+      "Si quieres maximizar tus chances, agendamos videollamada y te platico cómo funciona. Cuándo te queda?",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "",
     "trigger_es": "no me gusto el evento / estuve solo / habia pocas chicas"
@@ -632,7 +641,8 @@
     "blocks_lead": false,
     "messages": [
       "La videollamada es importante porque cada cliente es diferente, necesito conocerte y entender qué buscas para hacer un buen match 🤍",
-      "Son 30 minutos nada más. Cuándo te queda?"
+      "Son 30 minutos nada más. Cuándo te queda?",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "",
     "trigger_es": "es necesaria la videollamada / podemos por mensaje / no quiero videollamada"
@@ -648,7 +658,8 @@
       "Son chicas eslavas, rusas, ucranianas, bielorrusas. La mayoría entre 25 y 40 años, profesionales: medicina, marketing, IT, negocios",
       "Algunas viven en México hace meses o años, otras viven en sus países pero abiertas a mudarse",
       "Todas buscan relación seria, pareja, familia, matrimonio 🤍",
-      "Cuándo te queda agendar la videollamada para enseñarte algunas?"
+      "Cuándo te queda agendar la videollamada para enseñarte algunas?",
+      "Si quieres, agenda tu videollamada directo aquí: [call_link]"
     ],
     "note": "",
     "trigger_es": "como son las chicas / que edades tienen / de donde son las mujeres"
