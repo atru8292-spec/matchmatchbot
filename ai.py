@@ -238,6 +238,14 @@ def _validate_output(data: dict) -> dict:
     }
 
 
+def _last_anna_text(history: list[dict]) -> str | None:
+    """Последняя реплика бота (sender='anna') из истории — контекст для RAG-фолбэка."""
+    for m in reversed(history or []):
+        if m.get("sender") == "anna" and (m.get("text") or "").strip():
+            return m["text"]
+    return None
+
+
 def _build_user_context(lead: dict, history: list[dict], user_text: str,
                         scenarios: list[dict]) -> str:
     """Собрать пользовательский контекст для AI: профиль + история + RAG-сценарии + текст."""
@@ -305,6 +313,23 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         scenarios = []
 
     top = scenarios[0] if scenarios else None
+
+    # Контекст-фолбэк: если голого текста не хватило (нет уверенного матча, top < FALLBACK) —
+    # перезапрос с последней репликой Anna из истории («вопрос бота + ответ лида»). Чинит
+    # короткие/контекстные ответы («sí soltero», «va», «ok») разом. Самодостаточные сообщения
+    # сюда не попадают (у них top уже >= FALLBACK) — то, что матчится, не ломается.
+    if top is None or top.get("score", 0) < FALLBACK_SCORE:
+        last_bot = _last_anna_text(history)
+        if last_bot:
+            try:
+                ctx = await search_scenarios(f"{last_bot} {user_text}")
+            except Exception:
+                logger.exception("контекст-фолбэк RAG упал, оставляю bare")
+                ctx = []
+            if ctx and (top is None or ctx[0].get("score", 0) > top.get("score", 0)):
+                logger.info("контекст-фолбэк: bare=%.3f → ctx #%s=%.3f",
+                            (top or {}).get("score", 0), ctx[0]["id"], ctx[0]["score"])
+                scenarios, top = ctx, ctx[0]
 
     # Ветка 1: фиксированный сценарий (ai_allowed=false) → template дословно, без OpenAI.
     # Порог зависит от необратимости: блокировка требует высокой уверенности (0.60),

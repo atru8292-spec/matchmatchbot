@@ -419,6 +419,40 @@ class TestGenerateReplyFixed:
         mock_openai.assert_not_awaited()
 
 
+class TestContextFallback:
+    """Контекст-фолбэк: bare<FALLBACK → перезапрос с последней репликой Anna."""
+
+    def test_last_anna_text_returns_latest_bot(self):
+        h = [{"sender": "lead", "text": "hola"}, {"sender": "anna", "text": "eres soltero?"},
+             {"sender": "lead", "text": "va"}]
+        assert ai._last_anna_text(h) == "eres soltero?"
+
+    def test_last_anna_text_none_without_bot(self):
+        assert ai._last_anna_text([{"sender": "lead", "text": "hola"}]) is None
+        assert ai._last_anna_text([]) is None
+
+    async def test_fallback_reranks_when_bare_low(self, lead):
+        """Низкий bare (0.21) + есть реплика Anna → перезапрос с контекстом, берём лучший."""
+        history = [{"sender": "anna", "text": "me mandas una foto?"}]
+        bare = [_make_scenario(id=39, ai_allowed=True, score=0.21)]
+        ctx = [_make_scenario(id=6, ai_allowed=True, score=0.60)]
+        mock_search = AsyncMock(side_effect=[bare, ctx])
+        with patch("ai.search_scenarios", mock_search), \
+             patch("ai._call_openai", AsyncMock(return_value=_VALID_AI_RESPONSE)):
+            await ai.generate_reply(lead, history, "va")
+        assert mock_search.await_count == 2
+        assert "me mandas una foto?" in mock_search.await_args_list[1].args[0]
+
+    async def test_no_fallback_when_bare_confident(self, lead):
+        """Уверенный bare (0.72) → фолбэк НЕ срабатывает (здоровые сценарии не трогаем)."""
+        history = [{"sender": "anna", "text": "hola"}]
+        mock_search = AsyncMock(return_value=[_make_scenario(id=3, ai_allowed=True, score=0.72)])
+        with patch("ai.search_scenarios", mock_search), \
+             patch("ai._call_openai", AsyncMock(return_value=_VALID_AI_RESPONSE)):
+            await ai.generate_reply(lead, history, "quiero conocer rusas")
+        assert mock_search.await_count == 1
+
+
 class TestGenerateReplyAI:
     """Ветка 2: ai_allowed=True (или нет уверенного матча) → OpenAI вызывается."""
 
