@@ -331,6 +331,17 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
                             (top or {}).get("score", 0), ctx[0]["id"], ctx[0]["score"])
                 scenarios, top = ctx, ctx[0]
 
+    # Холодному/неквалифицированному лиду НЕ вываливаем прайс/детали ивента (№51):
+    # сначала крючок + квалификация (№2). Правило промпта «no precio a lead frío» иначе
+    # обходится, т.к. №51 — фикс-сценарий (шлётся дословно, минуя AI). «Холодный» =
+    # ещё не подтвердил, что холост (is_single != True).
+    if top and top.get("id") == 51 and lead.get("is_single") is not True:
+        row = await db.get_scenario_row(2)
+        if row:
+            logger.info("холодный лид + №51 → крючок №2 (без прайс-дампа)")
+            row["score"] = 1.0
+            scenarios, top = [row], row
+
     # Ветка 1: фиксированный сценарий (ai_allowed=false) → template дословно, без OpenAI.
     # Порог зависит от необратимости: блокировка требует высокой уверенности (0.60),
     # обычный фикс-ответ — ниже (0.45). Ниже порога → уходим в AI.

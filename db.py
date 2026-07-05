@@ -673,6 +673,20 @@ async def get_scenario_template(scenario_id) -> str | None:
         return None
 
 
+async def get_scenario_row(scenario_id) -> dict | None:
+    """Строка сценария по id (для роутинга: холодный лид + №51 → крючок №2)."""
+    if not isinstance(scenario_id, int):
+        return None
+    try:
+        r = await _get_pool().fetchrow(
+            "SELECT id, template_es, mode, ai_allowed, blocks_lead FROM scenarios WHERE id = $1",
+            scenario_id)
+    except Exception:
+        logger.exception("get_scenario_row failed: id=%s", scenario_id)
+        return None
+    return dict(r) if r else None
+
+
 async def is_whitelisted(phone: str) -> bool:
     """Есть ли номер в bot_whitelist (бот для него молчит)."""
     try:

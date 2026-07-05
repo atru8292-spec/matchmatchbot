@@ -453,6 +453,33 @@ class TestContextFallback:
         assert mock_search.await_count == 1
 
 
+class TestColdLeadEventGuard:
+    """Холодный лид + №51 (прайс/детали ивента) → крючок №2, без прайс-дампа."""
+
+    async def test_cold_lead_51_routed_to_2(self):
+        lead = {"funnel_stage": "new"}  # is_single не задан → холодный
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.62)
+        n2_row = {"id": 2, "template_es": "Crючок", "mode": "bot_auto",
+                  "ai_allowed": True, "blocks_lead": False}
+        getrow = AsyncMock(return_value=n2_row)
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
+             patch("ai.db.get_scenario_row", getrow), \
+             patch("ai._call_openai", AsyncMock(return_value=_VALID_AI_RESPONSE)):
+            await ai.generate_reply(lead, [], "info del evento?")
+        getrow.assert_awaited_once_with(2)   # роут на №2 сработал
+
+    async def test_qualified_lead_51_not_routed(self):
+        lead = {"funnel_stage": "qualified", "is_single": True}  # квалифицирован
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.62)
+        getrow = AsyncMock()
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
+             patch("ai.db.get_scenario_row", getrow), \
+             patch("ai._call_openai", AsyncMock()):
+            result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
+        getrow.assert_not_awaited()          # №51 остался (не роутили)
+        assert result["used_scenario_id"] == 51
+
+
 class TestGenerateReplyAI:
     """Ветка 2: ai_allowed=True (или нет уверенного матча) → OpenAI вызывается."""
 
