@@ -73,3 +73,7 @@ journalctl -u matchmatch-bot -f   # логи
 - Схему таблиц в Supabase (leads, messages, scenarios, lead_photos, deals) — сначала обсудить
 - Продакшн .env
 - Whitelist клиентов агентства
+- ⛔ **НЕ запускать `scripts.load_scenarios`** — DELETE всех сценариев + reseed из
+  `scenarios_49_final.json` (устарел: 49 + старый WIP). Прод — источник правды: 51 сценарий
+  (№50 T-1, №51 цена/детали) + патчи (separado не блок, event, estafa, клуб). Reseed сотрёт
+  №50/№51 и патчи. Правки сценариев — прямыми патч-скриптами в прод-БД. В скрипте guard (`--force`).

@@ -11,11 +11,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import asyncpg
 import httpx
 
 from config import settings
+
+# ⛔ GUARD: JSON устарел (49 + старый WIP), прод — источник правды (51 сценарий + патчи:
+# separado не блок, №50 T-1, №51 цена/детали, event, estafa, клуб). Reseed сотрёт №50/№51
+# и все патчи. Запуск разрешён ТОЛЬКО с явным --force после пересборки JSON из прода.
+if __name__ == "__main__" and "--force" not in sys.argv:
+    sys.exit(
+        "⛔ load_scenarios заблокирован: JSON устарел, reseed сотрёт прод-сценарии №50/№51 "
+        "и все патчи. Прод — источник правды. См. CLAUDE.md / память load-scenarios-danger.\n"
+        "Если точно уверен (JSON пересобран из прода) — запусти с --force."
+    )
 
 SCENARIOS_FILE = "scenarios_49_final.json"
 # Фиксированные ответы (без AI-вариаций): блокировки + скидка + "ты бот".
