@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 
 import httpx
 
@@ -238,6 +239,20 @@ def _validate_output(data: dict) -> dict:
     }
 
 
+# Ценовой вопрос: деньги/стоимость/дороговизна. Для funnel-guard холодного лида по №51.
+_PRICE_RE = re.compile(
+    r"cu[aá]nto\s+(cuesta|sale|es|vale|cobran|cobra|ser[ií]a)|"
+    r"\bprecio\b|\bcosto\b|\bcuesta\b|\bvale\b|\bcaro\b|\bcara\b|\bpagar\b|\bpago\b|"
+    r"\bpesos\b|\bmxn\b|\bdinero\b|\binversi[oó]n\b|\bmensualidad\b|\bcosta\b|\$",
+    re.IGNORECASE,
+)
+
+
+def _is_price_question(text: str) -> bool:
+    """Есть ли в сообщении лида ценовой смысл (деньги/стоимость/дорого)."""
+    return bool(_PRICE_RE.search(text or ""))
+
+
 def _last_anna_text(history: list[dict]) -> str | None:
     """Последняя реплика бота (sender='anna') из истории — контекст для RAG-фолбэка."""
     for m in reversed(history or []):
@@ -331,16 +346,25 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
                             (top or {}).get("score", 0), ctx[0]["id"], ctx[0]["score"])
                 scenarios, top = ctx, ctx[0]
 
-    # Холодному/неквалифицированному лиду НЕ вываливаем прайс/детали ивента (№51):
-    # сначала крючок + квалификация (№2). Правило промпта «no precio a lead frío» иначе
-    # обходится, т.к. №51 — фикс-сценарий (шлётся дословно, минуя AI). «Холодный» =
-    # ещё не подтвердил, что холост (is_single != True).
-    if top and top.get("id") == 51 and lead.get("is_single") is not True:
-        row = await db.get_scenario_row(2)
-        if row:
-            logger.info("холодный лид + №51 → крючок №2 (без прайс-дампа)")
-            row["score"] = 1.0
-            scenarios, top = [row], row
+    # Холодному/неквалифицированному лиду (is_single != True) роутим по типу вопроса:
+    #   • любой ценовой вопрос (cuánto sale / precio / caro …) → крючок №2 (сначала квалификация);
+    #     правило «no precio a lead frío» касается любого ценового вопроса, не только через №51.
+    #   • детали ивента без денег (qué incluye / cuéntame …) и RAG=№51 → №52 (детали без цены).
+    # Квалифицированный лид получает полный №51 (с ценой) как есть.
+    if lead.get("is_single") is not True:
+        if _is_price_question(user_text):
+            row = await db.get_scenario_row(2)
+            if row:
+                logger.info("холодный лид + ценовой вопрос → №2 (крючок), был top=%s",
+                            top.get("id") if top else None)
+                row["score"] = 1.0
+                scenarios, top = [row], row
+        elif top and top.get("id") == 51:
+            row = await db.get_scenario_row(52)
+            if row:
+                logger.info("холодный лид + №51 → №52 (детали без цены)")
+                row["score"] = 1.0
+                scenarios, top = [row], row
 
     # Ветка 1: фиксированный сценарий (ai_allowed=false) → template дословно, без OpenAI.
     # Порог зависит от необратимости: блокировка требует высокой уверенности (0.60),

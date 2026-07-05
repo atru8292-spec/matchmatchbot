@@ -454,19 +454,33 @@ class TestContextFallback:
 
 
 class TestColdLeadEventGuard:
-    """Холодный лид + №51 (прайс/детали ивента) → крючок №2, без прайс-дампа."""
+    """Холодный лид + ценовой/детальный вопрос → крючок или детали без цены."""
 
-    async def test_cold_lead_51_routed_to_2(self):
+    async def test_cold_lead_price_question_routed_to_2(self):
+        """Холодный лид + ценовой вопрос (любой RAG) → №2 (крючок)."""
         lead = {"funnel_stage": "new"}  # is_single не задан → холодный
-        n51 = _make_scenario(id=51, ai_allowed=False, score=0.62)
-        n2_row = {"id": 2, "template_es": "Crючок", "mode": "bot_auto",
+        n16 = _make_scenario(id=16, ai_allowed=False, score=0.55)
+        n2_row = {"id": 2, "template_es": "Крючок", "mode": "bot_auto",
                   "ai_allowed": True, "blocks_lead": False}
         getrow = AsyncMock(return_value=n2_row)
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n16])), \
+             patch("ai.db.get_scenario_row", getrow), \
+             patch("ai._call_openai", AsyncMock(return_value=_VALID_AI_RESPONSE)):
+            await ai.generate_reply(lead, [], "cuánto sale entrar?")
+        getrow.assert_awaited_once_with(2)   # ценовой вопрос → крючок №2
+
+    async def test_cold_lead_51_details_routed_to_52(self):
+        """Холодный лид + RAG=N51 + не ценовой вопрос → №52 (детали без цены)."""
+        lead = {"funnel_stage": "new"}  # is_single не задан → холодный
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.62)
+        n52_row = {"id": 52, "template_es": "Detailes sin precio", "mode": "bot_auto",
+                   "ai_allowed": False, "blocks_lead": False}
+        getrow = AsyncMock(return_value=n52_row)
         with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
              patch("ai.db.get_scenario_row", getrow), \
              patch("ai._call_openai", AsyncMock(return_value=_VALID_AI_RESPONSE)):
             await ai.generate_reply(lead, [], "info del evento?")
-        getrow.assert_awaited_once_with(2)   # роут на №2 сработал
+        getrow.assert_awaited_once_with(52)  # детали без цены → №52
 
     async def test_qualified_lead_51_not_routed(self):
         lead = {"funnel_stage": "qualified", "is_single": True}  # квалифицирован
