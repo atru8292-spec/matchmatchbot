@@ -19,7 +19,7 @@ from config import settings
 
 SCENARIOS_FILE = "scenarios_49_final.json"
 # Фиксированные ответы (без AI-вариаций): блокировки + скидка + "ты бот".
-AI_DISALLOWED_IDS = {7, 8, 9, 10, 12, 27, 28, 29, 39, 40}
+AI_DISALLOWED_IDS = {7, 8, 9, 10, 12, 15, 27, 28, 29, 39, 40}  # 15 — приглашение на ивент дословно
 
 
 async def _embed_batch(texts: list[str]) -> list[list[float]]:

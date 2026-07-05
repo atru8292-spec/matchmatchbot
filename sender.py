@@ -64,8 +64,27 @@ async def send_one(chat_id: str, text: str) -> bool:
         return False
 
 
-_LINK_PLACEHOLDERS = (("[course_link]", "course_link"), ("[event_link]", "event_link"),
-                      ("[call_link]", "call_link"))
+_LINK_PLACEHOLDERS = (("[course_link]", "course_link"), ("[event_link]", "event_link"))
+
+# Переменные события для сценариев приглашения/цены (№2/№15/№51). Подставляются из
+# app_settings в пути отправки бота (аналог _fill_event в планировщике для №47).
+_EVENT_VAR_KEYS = ("event_address", "event_date", "event_time",
+                   "event_men", "event_women", "event_start", "event_end")
+
+
+async def _fill_event_vars(text: str) -> str:
+    """Подставить переменные события [event_address]/[event_date]/… из app_settings.
+
+    Незаданный ключ → пустая строка (как _fill_event в планировщике). Запрос в БД —
+    только если в тексте реально есть такой плейсхолдер.
+    """
+    present = [k for k in _EVENT_VAR_KEYS if f"[{k}]" in text]
+    if not present:
+        return text
+    s = await db.get_settings(present)
+    for k in present:
+        text = text.replace(f"[{k}]", (s.get(k) or "").strip())
+    return text
 
 
 async def _fill_link_placeholders(text: str) -> str | None:
@@ -132,7 +151,8 @@ async def send(phone: str, messages: list) -> int:
     chat_id = phone.replace("wa_", "", 1)
     sent = 0
     for text in messages:
-        text = await _fill_link_placeholders(text)
+        text = await _fill_event_vars(text)          # переменные события (№2/№15/№51)
+        text = await _fill_link_placeholders(text)   # ссылки (course/event); пусто → дроп баббла
         if not text or not text.strip():
             continue  # баббл был только про ссылку, а ссылка не задана — пропускаем
         await asyncio.sleep(compute_delay(text))

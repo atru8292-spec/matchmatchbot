@@ -443,17 +443,22 @@ class TestLinkPlaceholders:
         out = await sender._fill_link_placeholders("cursos aquí: [course_link]")
         assert out is None   # пустая ссылка → баббл не отправляем
 
-    async def test_fills_call_link(self, monkeypatch, db_pool):
-        monkeypatch.setattr(sender.db, "get_settings",
-                            AsyncMock(return_value={"call_link": "https://calendly.com/x"}))
-        out = await sender._fill_link_placeholders("agenda aquí: [call_link]")
-        assert out == "agenda aquí: https://calendly.com/x"
+    async def test_fills_event_vars(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings", AsyncMock(return_value={
+            "event_men": "15", "event_women": "20", "event_date": "22 de julio"}))
+        out = await sender._fill_event_vars("[event_women] mujeres y [event_men] hombres, el [event_date]")
+        assert out == "20 mujeres y 15 hombres, el 22 de julio"
 
-    async def test_empty_call_link_drops_bubble(self, monkeypatch, db_pool):
-        monkeypatch.setattr(sender.db, "get_settings",
-                            AsyncMock(return_value={"call_link": ""}))
-        out = await sender._fill_link_placeholders("agenda aquí: [call_link]")
-        assert out is None   # пустая ссылка → баббл с приглашением на звонок не шлём
+    async def test_empty_event_var_becomes_blank(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings", AsyncMock(return_value={"event_time": ""}))
+        out = await sender._fill_event_vars("🕣 [event_time]")
+        assert out == "🕣 "   # незаданный ключ → пусто (не литеральный плейсхолдер)
+
+    async def test_event_vars_no_placeholder_no_db(self, monkeypatch, db_pool):
+        get = AsyncMock(); monkeypatch.setattr(sender.db, "get_settings", get)
+        out = await sender._fill_event_vars("Hola guapo")
+        assert out == "Hola guapo"
+        get.assert_not_awaited()
 
     async def test_no_placeholder_untouched_no_db(self, monkeypatch, db_pool):
         get = AsyncMock(); monkeypatch.setattr(sender.db, "get_settings", get)
