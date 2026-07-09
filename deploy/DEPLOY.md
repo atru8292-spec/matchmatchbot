@@ -11,7 +11,7 @@ localtunnel больше НЕ используется.
 ## 1. Пакеты
 ```bash
 apt update
-apt install -y python3.11 python3.11-venv git nginx certbot python3-certbot-nginx ufw
+apt install -y python3.11 python3.11-venv git nginx certbot python3-certbot-nginx ufw ffmpeg  # ffmpeg — сжатие видео с ивентов (mini_api /event/media)
 ```
 
 ## 2. Пользователь и код
