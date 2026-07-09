@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/cn";
-import { fetchLeadDetail, leadActions, sendMessage } from "@/lib/api";
+import { ApiError, fetchLeadDetail, leadActions, sendMessage } from "@/lib/api";
 import { formatPhone, initials } from "@/lib/format";
 import type { LeadDetail, LeadMode, LeadPhoto, TimelineItem } from "@/lib/types";
 import { LeadInfo } from "./LeadInfo";
@@ -129,7 +129,20 @@ function LeadCardInner({ detail }: { detail: LeadDetail }) {
   // переводим на manual (авто-takeover на бэке); на settle — инвалидация (статус
   // sent|failed из БД). Ошибка — откат.
   const sendM = useMutation({
-    mutationFn: (text: string) => sendMessage(phone, text),
+    // 409 = лид с opt-out (do_not_contact). Переспрашиваем и, если Аня подтверждает,
+    // повторяем с override=true (человек решает — предупреждение, не жёсткий блок).
+    mutationFn: async (text: string) => {
+      try {
+        return await sendMessage(phone, text);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) {
+          if (window.confirm("Este lead pidió no ser contactado (opt-out). ¿Enviar de todos modos?")) {
+            return await sendMessage(phone, text, true);
+          }
+        }
+        throw e;
+      }
+    },
     onMutate: async (text: string) => {
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<LeadDetail>(key);

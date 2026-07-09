@@ -128,6 +128,14 @@ def payment_target_kb(phone: str) -> dict:
     ]}
 
 
+def videocall_action_kb(phone: str) -> dict:
+    """Кнопки под алертом «звонок забронирован»: написать лиду (отправить ссылку) / карточка."""
+    return {"inline_keyboard": [
+        [{"text": "💬 Написать (отправить ссылку)", "url": _wa_link(phone)}],
+        [_btn("📇 Карточка", "card", phone)],
+    ]}
+
+
 def card_action_kb(phone: str, is_manual: bool) -> dict:
     """Кнопки под карточкой лида: открыть переписку в WhatsApp + тумблер режима + стоп."""
     toggle = (_btn("↩️ Вернуть боту", "release", phone) if is_manual
@@ -169,6 +177,7 @@ async def notify_escalation(lead: dict, reason: str, last_msg: str) -> None:
         f"{_lead_name(lead)}\n"
         f"{reason_line}\n"
         f'Последнее сообщение: "{last_msg}"\n'
+        "⚠️ Бот уже замолчал — просто напиши в WhatsApp\n"
         f"👉 Написать: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")
@@ -224,6 +233,35 @@ async def notify_payment(lead: dict) -> None:
     phone = (lead or {}).get("phone", "")
     await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
                          text, payment_action_kb(phone) if phone else None)
+
+
+async def notify_optout(lead: dict) -> None:
+    """Лид сам попросил не писать (opt-out) — бот замолчал навсегда. Аня в курсе; если
+    это ошибка (ложное срабатывание) — может вернуть боту кнопкой."""
+    text = (
+        "🛑 Лид отписался (opt-out)\n"
+        f"{_lead_name(lead)}\n"
+        "Больше не пишем этому номеру. Если это ошибка — «Вернуть боту».\n"
+        f"👉 Чат: {_wa_link((lead or {}).get('phone', ''))}"
+    )
+    phone = (lead or {}).get("phone", "")
+    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
+                         text, block_action_kb(phone) if phone else None)
+
+
+async def notify_videocall_booked(lead: dict, when_text: str) -> None:
+    """Бот сам забронировал видеозвонок (создал событие в календаре) — Аня отправляет
+    лиду ссылку на звонок вручную (бот Meet-ссылку не генерит)."""
+    text = (
+        "📅 Звонок забронирован ботом\n"
+        f"{_lead_name(lead)}\n"
+        f"🕐 {when_text}\n"
+        "⚠️ Отправь лиду ссылку на видеозвонок\n"
+        f"👉 Написать: {_wa_link((lead or {}).get('phone', ''))}"
+    )
+    phone = (lead or {}).get("phone", "")
+    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
+                         text, videocall_action_kb(phone) if phone else None)
 
 
 # ===== Technical (бот «Ошибки») =====

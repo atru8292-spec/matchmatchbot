@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
+from datetime import datetime
 
 import httpx
 
@@ -66,33 +68,77 @@ async def send_one(chat_id: str, text: str) -> bool:
 
 _LINK_PLACEHOLDERS = (("[course_link]", "course_link"), ("[event_link]", "event_link"))
 
+# Лид ЯВНО просит ссылку → разрешаем повтор (иначе Layer 2 дропнет уже отправленную).
+_LINK_REQUEST_RE = re.compile(
+    r"\b(manda|m[aá]ndame|p[aá]sa(me)?|env[ií]a(me)?|dame|comparte)\b.{0,20}\b(link|enlace|liga)\b|"
+    r"\bd[oó]nde\s+(reservo|pago|compro|es)\b|\bel\s+link\b|\bla\s+liga\b",
+    re.IGNORECASE)
+
+
+def _is_link_request(text: str) -> bool:
+    """Явная просьба лида прислать ссылку — тогда дедуп Layer 2 не применяем."""
+    return bool(_LINK_REQUEST_RE.search(text or ""))
+
 # Переменные события для сценариев приглашения/цены (№2/№15/№51). Подставляются из
 # app_settings в пути отправки бота (аналог _fill_event в планировщике для №47).
 _EVENT_VAR_KEYS = ("event_address", "event_date", "event_time",
-                   "event_men", "event_women", "event_start", "event_end")
+                   "event_start", "event_end",
+                   "event_price_member", "event_price_nonmember")
+
+# Испанские месяцы для человекочитаемой даты в сообщениях лиду.
+_ES_MONTHS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+              "agosto", "septiembre", "octubre", "noviembre", "diciembre")
+
+
+def _fmt_date_es(iso: str) -> str:
+    """'2026-07-22' → '22 de julio de 2026'. Не-ISO строку возвращаем как есть.
+
+    event_date в app_settings хранится в ISO (единый источник для планировщика и
+    формы CRM); лиду показываем по-испански.
+    """
+    try:
+        d = datetime.strptime((iso or "").strip(), "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return iso or ""
+    return f"{d.day} de {_ES_MONTHS[d.month - 1]} de {d.year}"
 
 
 async def _fill_event_vars(text: str) -> str:
     """Подставить переменные события [event_address]/[event_date]/… из app_settings.
 
     Незаданный ключ → пустая строка (как _fill_event в планировщике). Запрос в БД —
-    только если в тексте реально есть такой плейсхолдер.
+    только если в тексте реально есть такой плейсхолдер. event_date форматируется
+    из ISO в испанскую дату (_fmt_date_es).
     """
     present = [k for k in _EVENT_VAR_KEYS if f"[{k}]" in text]
-    if not present:
+    # [event_promo] — условный: «(antes <старая цена>)», если задана event_price_old,
+    # иначе пустая строка (акция кончилась → Аня очистила поле → «было» исчезает само).
+    promo = "[event_promo]" in text
+    if not present and not promo:
         return text
-    s = await db.get_settings(present)
+    keys = present + (["event_price_old"] if promo else [])
+    s = await db.get_settings(keys)
     for k in present:
-        text = text.replace(f"[{k}]", (s.get(k) or "").strip())
+        val = (s.get(k) or "").strip()
+        if k == "event_date":
+            val = _fmt_date_es(val)
+        text = text.replace(f"[{k}]", val)
+    if promo:
+        old = (s.get("event_price_old") or "").strip()
+        text = text.replace("[event_promo]", f" (antes {old})" if old else "")
     return text
 
 
-async def _fill_link_placeholders(text: str) -> str | None:
+async def _fill_link_placeholders(text: str, phone: str | None = None,
+                                  allow_repeat: bool = False) -> str | None:
     """Подставить ссылки из app_settings в [course_link]/[event_link].
 
     Ссылка задана → подставляем. Ссылка пустая → возвращаем None (баббл не отправляем,
     чтобы лид не получил «... aquí: » без ссылки). Плейсхолдеры вынесены в отдельные
     бабблы (см. миграцию 005), поэтому дроп баббла не рвёт остальной текст.
+
+    Layer 2 (дедуп): если баббл только про ссылку, а её уже слали этому лиду — дропаем,
+    чтобы не спамить повтором. Исключение — allow_repeat=True (лид явно просит ссылку).
     """
     present = [(ph, key) for ph, key in _LINK_PLACEHOLDERS if ph in text]
     if not present:
@@ -102,23 +148,27 @@ async def _fill_link_placeholders(text: str) -> str | None:
     # (не подставляем частично, чтобы не потерять уже вставленное и не оставить дыру).
     if any(not (settings_map.get(key) or "").strip() for _, key in present):
         return None
+    if phone and not allow_repeat:
+        for _ph, key in present:
+            if await db.link_already_sent(phone, settings_map[key].strip()):
+                logger.info("ссылка [%s] уже отправлена %s — дропаю баббл", key, phone)
+                return None
     for ph, key in present:
         text = text.replace(ph, settings_map[key].strip())
     return text
 
 
-async def send_image(phone: str, image_url: str) -> bool:
-    """Отправить картинку в WhatsApp через Wazzup (contentUri = публичный URL). Не бросает.
+async def _send_content_uri(phone: str, url: str, where: str) -> bool:
+    """Отправить медиа (contentUri) в WhatsApp через Wazzup. Не бросает → bool.
 
-    Медиа-сообщение: тот же POST /v3/message, но поле contentUri вместо text
-    (подтверждено докой Wazzup v3). Успех пишем в messages как исходящее.
+    Фото и видео шлются одним и тем же полем contentUri (Wazzup определяет тип по файлу).
     """
-    if not image_url:
+    if not url:
         return False
     chat_id = phone.replace("wa_", "", 1)
     await asyncio.sleep(compute_delay(""))  # антибан-пауза (минимальная для медиа)
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(
                 WAZZUP_SEND_URL,
                 headers={
@@ -129,32 +179,66 @@ async def send_image(phone: str, image_url: str) -> bool:
                     "channelId": settings.wazzup_channel_id,
                     "chatType": "whatsapp",
                     "chatId": chat_id,
-                    "contentUri": image_url,
+                    "contentUri": url,
                 },
             )
             r.raise_for_status()
     except Exception as e:
-        logger.exception("Wazzup send_image failed: chat_id=%s", chat_id)
-        await escalation.notify_error("sender.send_image", repr(e), phone)
+        logger.exception("Wazzup %s failed: chat_id=%s", where, chat_id)
+        await escalation.notify_error(f"sender.{where}", repr(e), phone)
         return False
-    await db.save_outbound(phone, "[изображение отправлено]")
-    logger.info("картинка отправлена лиду %s", phone)
     return True
 
 
-async def send(phone: str, messages: list) -> int:
+async def send_image(phone: str, image_url: str) -> bool:
+    """Отправить картинку-приглашение в WhatsApp через Wazzup (contentUri). Не бросает."""
+    ok = await _send_content_uri(phone, image_url, "send_image")
+    if ok:
+        await db.save_outbound(phone, "[изображение отправлено]")
+        logger.info("картинка отправлена лиду %s", phone)
+    return ok
+
+
+async def send_media(phone: str, url: str, media_type: str = "image") -> bool:
+    """Отправить медиа с ивента (фото/видео) лиду. Типовой маркер в messages — дедуп по типу."""
+    ok = await _send_content_uri(phone, url, "send_media")
+    if ok:
+        await db.save_outbound(phone, db.MEDIA_MARKERS.get(media_type, "[media ивента отправлено]"))
+        logger.info("media ивента (%s) отправлено лиду %s", media_type, phone)
+    return ok
+
+
+async def render_bubbles(messages: list, phone: str | None = None,
+                         allow_repeat_links: bool = True) -> list[str]:
+    """Подставить переменные события и ссылки в бабблы → готовые к отправке строки.
+
+    Пустые бабблы и те, где ссылку дропнул дедуп/пустое значение, отсеиваются.
+    Используется и реальной отправкой (send), и предпросмотром в CRM (phone=None,
+    allow_repeat_links=True — дедуп ссылок не применяем, показываем как есть).
+    """
+    out = []
+    for text in messages:
+        text = await _fill_event_vars(text)          # переменные события (№2/№15/№51)
+        # ссылки (course/event); пусто ИЛИ уже слали (дедуп) → дроп баббла
+        text = await _fill_link_placeholders(text, phone, allow_repeat_links)
+        if text and text.strip():
+            out.append(text)
+    return out
+
+
+async def send(phone: str, messages: list, allow_repeat_links: bool = False) -> int:
     """Отправить бабблы лиду последовательно с задержками. Вернуть число отправленных.
 
     phone — 'wa_<digits>'; для Wazzup срезаем префикс. Успешные пишем в messages.
     Одно упавшее сообщение не прерывает остальные и не роняет вызов.
+
+    allow_repeat_links — разрешить повтор уже отправленной ссылки (лид явно просит).
+    По умолчанию False: Layer 2 дедуп дропает баббл с уже отправленной лиду ссылкой.
     """
     chat_id = phone.replace("wa_", "", 1)
+    bubbles = await render_bubbles(messages, phone, allow_repeat_links)
     sent = 0
-    for text in messages:
-        text = await _fill_event_vars(text)          # переменные события (№2/№15/№51)
-        text = await _fill_link_placeholders(text)   # ссылки (course/event); пусто → дроп баббла
-        if not text or not text.strip():
-            continue  # баббл был только про ссылку, а ссылка не задана — пропускаем
+    for text in bubbles:
         await asyncio.sleep(compute_delay(text))
         ok = await send_one(chat_id, text)
         if ok:

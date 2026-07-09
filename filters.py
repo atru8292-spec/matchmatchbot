@@ -50,6 +50,27 @@ _INSTAGRAM_RE = re.compile(
 )
 
 
+# Opt-out / стоп-слово: ЯВНАЯ просьба прекратить контакт / удалить / оставить в покое.
+# НЕ путать с мягким «no me interesa» (#17, лист ожидания — лид может вернуться).
+# Требуем контакт-стоп-интент, поэтому «no me interesa / no gracias / paso» сюда НЕ попадают.
+# Осторожно с ловушками: «no me molesta» (=«меня не смущает», ПОЗИТИВ) ≠ «no me molestes»
+# (императив, opt-out) — ловим только императивные формы molest(-es/-en/-ar).
+# Голое «baja»/«alto»/«stop» не берём (риск ложных) — только в связке.
+_OPTOUT_RE = re.compile(
+    r"no\s+me\s+(escrib\w*|contact\w*|vuelvas?\s+a\s+escribir|manden?\s+mensajes?)|"
+    r"no\s+me\s+vuelv\w+\s+a\s+(escribir|contactar|molestar)|"
+    r"dej[ae]n?\s+de\s+(escribir\w*|molestar\w*|mandar\w*)|"
+    r"d[eé]jame\s+(en\s+paz|de\s+escribir\w*)|d[eé]jenme\s+en\s+paz|"
+    r"no\s+me\s+molest(es|en|e\s+m[aá]s|ar)|"
+    r"(quiero\s+)?(darme|dar)\s+de\s+baja|"
+    r"b[oó]rrame|elim[ií]name|borra\s+mi\s+n[uú]mero|"
+    r"(qu[ií]tame|s[aá]came)\s+de\s+(tu|la)\s+lista|"
+    r"не\s+пиши\w*\s+мне|не\s+пишите\s+(мне|больше)|отпиш\w+|отписаться|"
+    r"удалите\s+мой\s+номер|хватит\s+писать|не\s+беспоко\w+",
+    re.IGNORECASE,
+)
+
+
 @dataclass(frozen=True)
 class Decision:
     """Результат детерминированного решения по залпу лида."""
@@ -73,6 +94,11 @@ def is_aggression(text: str) -> bool:
 def is_payment_claim(text: str) -> bool:
     """Лид заявляет, что оплатил (claim-форма, не вопрос про оплату)."""
     return bool(_PAYMENT_RE.search(text or ""))
+
+
+def is_optout(text: str) -> bool:
+    """Лид явно просит прекратить контакт / отписаться (opt-out). НЕ мягкое «no me interesa»."""
+    return bool(_OPTOUT_RE.search(text or ""))
 
 
 def has_instagram(text: str) -> bool:
@@ -132,6 +158,10 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     # спамить Аню VIP-уведомлением на каждое сообщение; в manual Аня и так в чате WhatsApp.
     if lead.get("do_not_contact"):
         return Decision("silent", f"do_not_contact — молчу: {name}")
+    # Opt-out ДО manual/региона: явная просьба «не пиши» ставит do_not_contact навсегда,
+    # даже если лида вёл менеджер (иначе при возврате в auto догоны возобновятся).
+    if is_optout(text):
+        return Decision("optout", "лид попросил не писать (opt-out)", alert_manager=True)
     if _manual_active(lead):
         return Decision("silent", f"manual mode — менеджер ведёт: {name}")
 

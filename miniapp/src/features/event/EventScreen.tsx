@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarHeart, MapPin, CreditCard, GraduationCap, Image as ImageIcon, Check, CloudOff, UploadCloud, Loader2, X } from "lucide-react";
+import { CalendarHeart, MapPin, CreditCard, GraduationCap, Image as ImageIcon, Check, CloudOff, UploadCloud, Loader2, X, Tag } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -10,6 +10,8 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/cn";
 import { fetchEvent, saveEvent, uploadInvitation } from "@/lib/api";
 import type { EventSettings } from "@/lib/types";
+import { DayOfReminder } from "./DayOfReminder";
+import { EventMediaSection } from "./EventMediaSection";
 
 const KEY = ["event"];
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -45,8 +47,12 @@ function EventForm({ initial }: { initial: EventSettings }) {
   const qc = useQueryClient();
   const [active, setActive] = useState(initial.eventActive);
   const [date, setDate] = useState(initial.eventDate);
-  const [time, setTime] = useState(initial.eventTime);
+  const [start, setStart] = useState(initial.eventStart);
+  const [end, setEnd] = useState(initial.eventEnd);
   const [address, setAddress] = useState(initial.eventAddress);
+  const [priceMember, setPriceMember] = useState(initial.eventPriceMember);
+  const [priceNonmember, setPriceNonmember] = useState(initial.eventPriceNonmember);
+  const [priceOld, setPriceOld] = useState(initial.eventPriceOld);
   const [eventLink, setEventLink] = useState(initial.eventLink);
   const [courseLink, setCourseLink] = useState(initial.courseLink);
   const [invUrl, setInvUrl] = useState(initial.invitationUrl);
@@ -85,11 +91,15 @@ function EventForm({ initial }: { initial: EventSettings }) {
   if (active) {
     if (!date) err.date = "Укажите дату";
     else if (date < todayStr()) err.date = "Дата не может быть в прошлом";
-    if (!time) err.time = "Укажите время";
+    if (!start.trim()) err.start = "Укажите время начала";
     if (!address.trim()) err.address = "Укажите адрес";
   } else if (date && date < todayStr()) {
     err.date = "Дата не может быть в прошлом";
   }
+  const priceOk = (v: string) => /^[\d.,\s]+$/.test(v.trim());
+  if (priceMember.trim() && !priceOk(priceMember)) err.priceMember = "Только цифры";
+  if (priceNonmember.trim() && !priceOk(priceNonmember)) err.priceNonmember = "Только цифры";
+  if (priceOld.trim() && !priceOk(priceOld)) err.priceOld = "Только цифры";
   if (eventLink.trim() && !isUrl(eventLink)) err.eventLink = "Нужен URL (http…)";
   if (courseLink.trim() && !isUrl(courseLink)) err.courseLink = "Нужен URL (http…)";
   if (invUrl.trim() && !isUrl(invUrl)) err.invUrl = "Нужен URL (http…)";
@@ -99,7 +109,12 @@ function EventForm({ initial }: { initial: EventSettings }) {
   const onSave = () => {
     if (hasErrors || saveM.isPending) return;
     saveM.mutate({
-      eventActive: active, eventDate: date, eventTime: time, eventAddress: address.trim(),
+      eventActive: active, eventDate: date,
+      eventStart: start.trim(), eventEnd: end.trim(),
+      eventTime: start.trim(),  // зеркало для #15/#47/#54 (бэк тоже дублирует)
+      eventAddress: address.trim(),
+      eventPriceMember: priceMember.trim(), eventPriceNonmember: priceNonmember.trim(),
+      eventPriceOld: priceOld.trim(),
       eventLink: eventLink.trim(), courseLink: courseLink.trim(),
       invitationUrl: invUrl.trim(), invitationReady: invReady,
     });
@@ -117,21 +132,39 @@ function EventForm({ initial }: { initial: EventSettings }) {
             checked={active}
             onChange={setActive}
           />
+          <Field label="Дата" required={active} error={err.date}>
+            <Input type="date" value={date} min={todayStr()} onChange={(e) => setDate(e.target.value)} />
+          </Field>
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Дата" required={active} error={err.date}>
-              <Input type="date" value={date} min={todayStr()} onChange={(e) => setDate(e.target.value)} />
+            <Field label="Время начала" required={active} error={err.start}>
+              <Input value={start} onChange={(e) => setStart(e.target.value)} placeholder="8:30 PM" />
             </Field>
-            <Field label="Время" required={active} error={err.time}>
-              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+            <Field label="Время окончания">
+              <Input value={end} onChange={(e) => setEnd(e.target.value)} placeholder="12:00 AM" />
             </Field>
           </div>
           <Field label="Адрес" required={active} error={err.address}>
             <Input
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="Av. Reforma 123, CDMX"
+              placeholder="Roma Norte, Ciudad de México"
               leading={<MapPin size={18} />}
             />
+          </Field>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Цена не-члена (MXN)" error={err.priceNonmember}>
+              <Input value={priceNonmember} onChange={(e) => setPriceNonmember(e.target.value)}
+                placeholder="6,000" inputMode="numeric" leading={<Tag size={18} />} />
+            </Field>
+            <Field label="Цена члена (MXN)" error={err.priceMember}>
+              <Input value={priceMember} onChange={(e) => setPriceMember(e.target.value)}
+                placeholder="4,000" inputMode="numeric" leading={<Tag size={18} />} />
+            </Field>
+          </div>
+          <Field label="Старая цена (акция)" error={err.priceOld}
+            hint="Показывается как «antes X». Пусто — акция скрыта.">
+            <Input value={priceOld} onChange={(e) => setPriceOld(e.target.value)}
+              placeholder="9,000" inputMode="numeric" leading={<Tag size={18} />} />
           </Field>
         </Card>
 
@@ -217,6 +250,12 @@ function EventForm({ initial }: { initial: EventSettings }) {
             disabled={!invUrl.trim()}
           />
         </Card>
+
+        {/* Медиа с ивентов: загрузка фото/видео (бот шлёт лидам) */}
+        <EventMediaSection />
+
+        {/* Напоминание дня ивента: предпросмотр шаблонов + ручная отправка */}
+        <DayOfReminder />
       </div>
 
       {/* Липкий футер сохранения */}

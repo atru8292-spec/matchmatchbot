@@ -18,12 +18,25 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
 import db
 import funnel
 from config import settings
+
+_CDMX = ZoneInfo("America/Mexico_City")
+_ES_DAYS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+_ES_MONTHS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+              "agosto", "septiembre", "octubre", "noviembre", "diciembre")
+
+
+def _ahora_cdmx() -> str:
+    """Текущие дата/день недели/время CDMX для AI (парсинг «el jueves»/«mañana»)."""
+    n = datetime.now(_CDMX)
+    return f"{_ES_DAYS[n.weekday()]} {n.day} de {_ES_MONTHS[n.month - 1]} de {n.year}, {n.strftime('%H:%M')}"
 
 logger = logging.getLogger("matchmatch.ai")
 
@@ -159,6 +172,12 @@ def _split_template(template_es: str) -> list[str]:
     return parts[:MAX_MESSAGES]
 
 
+# Фикс-сценарии деталей ивента (#51 цена/детали, #52 детали без цены) — ai_allowed=false,
+# идут в обход OpenAI, поэтому AI не может выставить send_event_video сам. Прикрепляем видео
+# на уровне кода: это ровно «детальный вопрос про ивент» из правила медиа. Дедуп — в actions.
+_EVENT_DETAIL_SCENARIOS = {51, 52}
+
+
 def _fixed_reply(scenario: dict) -> dict:
     """Ответ по фиксированному сценарию (ai_allowed=false) — template дословно, без OpenAI."""
     mode = scenario.get("mode")
@@ -173,6 +192,9 @@ def _fixed_reply(scenario: dict) -> dict:
         "extracted": {},
         "needs_escalation": action == "escalate",
         "used_scenario_id": scenario.get("id"),
+        # детали ивента (#51/#52) → прикладываем видео атмосферы (дедуп по типу в actions)
+        "send_event_photo": False,
+        "send_event_video": scenario.get("id") in _EVENT_DETAIL_SCENARIOS,
     }
 
 
@@ -236,6 +258,15 @@ def _validate_output(data: dict) -> dict:
         # Блок 13: AI ставит true, когда лид спрашивает детали/локацию ивента —
         # main тогда шлёт картинку-приглашение (если она готова в app_settings).
         "send_invitation": bool(data.get("send_invitation")),
+        # Медиа прошлых ивентов — два независимых «инструмента», AI ставит по контексту
+        # (критерии в промпте). Дедуп по типу (не слать повторно этому лиду) — в actions/db.
+        "send_event_photo": bool(data.get("send_event_photo")),
+        "send_event_video": bool(data.get("send_event_video")),
+        # #53 автозапись: ISO-время (CDMX), когда лид назвал КОНКРЕТНЫЙ день+час для
+        # звонка; иначе None. main запускает booking.resolve_and_book.
+        "proposed_videocall_at": (data.get("proposed_videocall_at")
+                                  if isinstance(data.get("proposed_videocall_at"), str)
+                                  and data.get("proposed_videocall_at").strip() else None),
     }
 
 
@@ -275,6 +306,9 @@ def _build_user_context(lead: dict, history: list[dict], user_text: str,
         rag = "sin escenario claro — responde amable y general, invita a videollamada, sin inventar"
 
     return json.dumps({
+        # Текущее «сейчас» CDMX — чтобы AI парсил относительные даты (el jueves/mañana)
+        # правильно; у модели нет доступа к реальному времени без явной передачи.
+        "ahora_cdmx": _ahora_cdmx(),
         "lead_profile": profile,
         "conversation_history": hist,
         "rag_scenarios": rag,
@@ -384,7 +418,21 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     context = _build_user_context(lead, history, user_text, confident)
     try:
         raw = await _call_openai(context)
-        return _validate_output(raw)
+        result = _validate_output(raw)
     except Exception:
         logger.exception("OpenAI/парсинг упал → fallback + escalate")
         return _fallback_reply()
+
+    # Handoff-сценарии (bot_then_anna) эскалируем детерминированно, не полагаясь на то,
+    # что LLM сам вернёт escalate. Через main (escalate → mode='manual') гарантирует, что
+    # дальше лид ведётся Аней, а бот не отвечает повторно. Напр. №48 "no puedo ir" →
+    # выпадает из завтрашнего check-in №23; также №14/№19/№24/№26/№41/№42/№53.
+    if top and top.get("mode") == "bot_then_anna" and top.get("score", 0) >= FALLBACK_SCORE:
+        if result["action"] != "escalate":
+            logger.info("bot_then_anna #%s → форсирую escalate (LLM вернул %s)",
+                        top["id"], result["action"])
+        result["action"] = "escalate"
+        result["needs_escalation"] = True
+        if not result.get("used_scenario_id"):
+            result["used_scenario_id"] = top["id"]
+    return result

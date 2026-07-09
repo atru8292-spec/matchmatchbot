@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import datetime, timezone
 
 import asyncpg
 from asyncpg.exceptions import UniqueViolationError
@@ -40,6 +41,7 @@ LEAD_COLUMNS: frozenset[str] = frozenset({
     "escort_mention_count", "last_name", "email", "date_of_birth",
     "marital_status", "business_link", "desired_partner_age", "selected_service",
     "invitation_sent_at", "videocall_at", "videocall_reminded_at",
+    "videocall_event_id",
 })
 
 
@@ -343,9 +345,13 @@ async def set_setting(key: str, value: str) -> None:
 
 
 async def due_followups(no_followup_stages: list[str], max_followups: int,
-                        limit: int = 50) -> list[dict]:
+                        quiet_hours: int, limit: int = 50) -> list[dict]:
     """Лиды, которым пора фоллоу-ап: next_followup_at<=now, auto, не do_not_contact,
-    стадия не в no_followup_stages, попыток < max, НЕ в whitelist. Свежие сверху по сроку."""
+    стадия не в no_followup_stages, попыток < max, НЕ в whitelist. Свежие сверху по сроку.
+
+    Страховка от нуджа активного лида: НЕ шлём, если last_inbound_at свежее «тихого окна»
+    (лид писал за последние quiet_hours часов — значит не молчун). Двойная защита к сбросу
+    таймера на входящем (main.reset_followup_timer)."""
     try:
         rows = await _get_pool().fetch(
             "SELECT l.phone, l.funnel_stage, COALESCE(l.followup_sent_count, 0) AS followup_sent_count, "
@@ -355,9 +361,10 @@ async def due_followups(no_followup_stages: list[str], max_followups: int,
             "  AND l.mode = 'auto' AND COALESCE(l.do_not_contact, false) = false "
             "  AND l.funnel_stage <> ALL($1::text[]) "
             "  AND COALESCE(l.followup_sent_count, 0) < $2 "
+            "  AND (l.last_inbound_at IS NULL OR l.last_inbound_at <= now() - make_interval(hours => $3)) "
             "  AND w.phone IS NULL "
-            "ORDER BY l.next_followup_at ASC LIMIT $3",
-            no_followup_stages, max_followups, limit,
+            "ORDER BY l.next_followup_at ASC LIMIT $4",
+            no_followup_stages, max_followups, quiet_hours, limit,
         )
     except Exception:
         logger.exception("due_followups failed")
@@ -383,6 +390,43 @@ async def arm_followup_if_missing(phone: str, hours: int) -> None:
         raise
 
 
+async def reset_followup_timer(phone: str, hours: int) -> None:
+    """Сброс таймера тишины на ЛЮБОМ входящем от лида (он активен → не нудим).
+
+    В отличие от arm_followup_if_missing (ставит только если NULL) — ставит ВСЕГДА:
+    next_followup_at = now()+hours, followup_sent_count=0 (свежий отсчёт молчания).
+    Так догон = «N дней РЕАЛЬНОГО молчания», а не «N дней с одной установки»."""
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET next_followup_at = now() + make_interval(hours => $2), "
+            "followup_sent_count = 0, updated_at = now() WHERE phone = $1",
+            phone, hours,
+        )
+    except Exception:
+        logger.exception("reset_followup_timer failed: phone=%s", phone)
+        raise
+
+
+# ===== Суточные счётчики (антибан-лимит рассылки) — в app_settings, ключ по дате UTC =====
+
+def _daily_counter_key(name: str) -> str:
+    return f"counter:{name}:{datetime.now(timezone.utc).date().isoformat()}"
+
+
+async def get_daily_counter(name: str) -> int:
+    """Сколько отправлено сегодня (UTC) по счётчику name. Нет ключа → 0."""
+    v = await get_setting(_daily_counter_key(name))
+    return int(v) if v and v.strip().isdigit() else 0
+
+
+async def incr_daily_counter(name: str) -> int:
+    """Инкремент сегодняшнего счётчика name (+1). Вернуть новое значение. Персистентно
+    в app_settings (переживает рестарт), ключ по дате → авто-сброс на новые сутки."""
+    new = await get_daily_counter(name) + 1
+    await set_setting(_daily_counter_key(name), str(new))
+    return new
+
+
 async def mark_followup_sent(phone: str, next_followup_at) -> None:
     """Инкремент followup_sent_count + новый next_followup_at (или None → NULL, финиш)."""
     try:
@@ -398,12 +442,14 @@ async def mark_followup_sent(phone: str, next_followup_at) -> None:
 
 async def event_recipients(exclude_stages: list[str], limit: int = 30) -> list[dict]:
     """Кому слать напоминания об ивенте: selected_service='event', mode='auto',
-    не do_not_contact, стадия не в exclude_stages, НЕ в whitelist. LIMIT — антибан-порция
-    (остаток догонит след. тик; идемпотентность не даст дублей). mode='auto' — не пишем
-    тем, кого Аня ведёт вручную (/takeover)."""
+    не do_not_contact, стадия не в exclude_stages, НЕ в whitelist (клиенты агентства
+    исключаются полностью — их ведёт Аня напрямую). LIMIT — антибан-порция (остаток
+    догонит след. тик; идемпотентность не даст дублей). mode='auto' — не пишем тем,
+    кого Аня ведёт вручную (/takeover). funnel_stage — для выбора шаблона в день ивента
+    (оплатившие событие/члены → без ссылки, остальные → со ссылкой)."""
     try:
         rows = await _get_pool().fetch(
-            "SELECT l.phone, l.whatsapp_name, l.name "
+            "SELECT l.phone, l.whatsapp_name, l.name, l.funnel_stage "
             "FROM leads l LEFT JOIN bot_whitelist w ON w.phone = l.phone "
             "WHERE l.selected_service = 'event' "
             "  AND l.mode = 'auto' "
@@ -446,6 +492,40 @@ async def log_event_reminder(phone: str, kind: str, event_date: str) -> None:
         raise
 
 
+async def event_reminder_sent_at(phone: str, kind: str, event_date: str):
+    """Когда слали это напоминание (kind) на эту дату — created_at маркера или None.
+
+    Для предупреждения о дубле в CRM («уже отправлено такого-то числа»)."""
+    try:
+        row = await _get_pool().fetchrow(
+            "SELECT created_at FROM events WHERE lead_phone = $1 AND event_type = $2 "
+            "AND meta->>'event_date' = $3 ORDER BY created_at LIMIT 1",
+            phone, kind, event_date,
+        )
+    except Exception:
+        logger.exception("event_reminder_sent_at failed: phone=%s kind=%s", phone, kind)
+        raise
+    return row["created_at"] if row else None
+
+
+async def event_lead_candidates(limit: int = 200) -> list[dict]:
+    """Кандидаты для ручного напоминания дня ивента: selected_service='event' и бот
+    им пишет (не do_not_contact). БЕЗ фильтров авто-рассылки (mode/стадия) — Аня
+    выбирает сама; whitelist-клиенты сюда не попадают (у них нет selected_service='event').
+    """
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT phone, whatsapp_name, name, funnel_stage FROM leads "
+            "WHERE selected_service = 'event' AND COALESCE(do_not_contact, false) = false "
+            "ORDER BY funnel_stage, name LIMIT $1",
+            limit,
+        )
+    except Exception:
+        logger.exception("event_lead_candidates failed")
+        raise
+    return [dict(r) for r in rows]
+
+
 async def set_videocall_at(phone: str, when) -> None:
     """Назначить/перенести время видеозвонка лида (сценарий 49).
 
@@ -460,6 +540,28 @@ async def set_videocall_at(phone: str, when) -> None:
         )
     except Exception:
         logger.exception("set_videocall_at failed: phone=%s", phone)
+        raise
+
+
+async def set_videocall_booking(phone: str, when, event_id: str, link: str,
+                                conn=None) -> None:
+    """Сохранить автозабронированный звонок: время + id события Google + ссылка на событие.
+
+    videocall_event_id нужен для переноса/отмены (patch/delete). calendar_link — ссылка
+    на само событие в Google Calendar (для Ани; лиду Meet шлёт она вручную).
+    videocall_reminded_at сбрасываем → напоминание #49 уйдёт на новое время. conn — опц.
+    соединение (когда вызывается внутри транзакции с advisory-lock от гонки).
+    """
+    executor = conn or _get_pool()
+    try:
+        await executor.execute(
+            "UPDATE leads SET videocall_at = $2, videocall_event_id = $3, "
+            "calendar_link = $4, videocall_reminded_at = NULL, updated_at = now() "
+            "WHERE phone = $1",
+            phone, when, event_id, link,
+        )
+    except Exception:
+        logger.exception("set_videocall_booking failed: phone=%s", phone)
         raise
 
 
@@ -593,6 +695,107 @@ async def save_outbound(lead_phone: str, text: str, sender: str = "anna") -> Non
     except Exception:
         logger.exception("save_outbound failed (сообщение отправлено, запись не сохранена): "
                          "lead_phone=%s", lead_phone)
+
+
+async def link_already_sent(lead_phone: str, url: str) -> bool:
+    """Слали ли уже этому лиду исходящее сообщение с этой ссылкой (дедуп ссылок, Layer 2).
+
+    url в messages хранится уже подставленным (sender пишет финальный текст).
+    Пустой url → False. Сбой → False (лучше отправить, чем молчать по ошибке БД).
+    """
+    if not url or not url.strip():
+        return False
+    try:
+        row = await _get_pool().fetchrow(
+            "SELECT 1 FROM messages "
+            "WHERE lead_phone = $1 AND direction = 'outbound' "
+            "AND text LIKE '%' || $2 || '%' LIMIT 1",
+            lead_phone, url.strip(),
+        )
+        return row is not None
+    except Exception:
+        logger.exception("link_already_sent failed [%s] — считаю не отправленной", lead_phone)
+        return False
+
+
+# ===== Медиа с ивентов (event_media) — фото/видео для отправки ботом =====
+
+async def add_event_media(storage_url: str, storage_path: str, media_type: str,
+                          size_bytes: int) -> dict:
+    """Добавить медиа с ивента (после загрузки в Storage). Вернуть строку."""
+    try:
+        row = await _get_pool().fetchrow(
+            "INSERT INTO event_media (storage_url, storage_path, media_type, size_bytes) "
+            "VALUES ($1, $2, $3, $4) RETURNING *",
+            storage_url, storage_path, media_type, size_bytes,
+        )
+        return dict(row)
+    except Exception:
+        logger.exception("add_event_media failed")
+        raise
+
+
+async def list_event_media() -> list[dict]:
+    """Все медиа с ивентов (для CRM), свежие сверху."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT id, storage_url, storage_path, media_type, size_bytes, is_active, created_at "
+            "FROM event_media ORDER BY created_at DESC")
+        return [dict(r) for r in rows]
+    except Exception:
+        logger.exception("list_event_media failed")
+        raise
+
+
+async def delete_event_media(media_id: int) -> bool:
+    """Удалить медиа по id. Вернуть True если удалили."""
+    try:
+        res = await _get_pool().execute("DELETE FROM event_media WHERE id = $1", media_id)
+        return res.endswith(" 1")
+    except Exception:
+        logger.exception("delete_event_media failed: id=%s", media_id)
+        raise
+
+
+# Маркеры отправленного медиа в messages — для пер-типового дедупа (не повторяем тип).
+# Пишет sender.send_media, читает event_media_sent.
+MEDIA_MARKERS = {"image": "[foto ивента отправлено]", "video": "[video ивента отправлено]"}
+
+
+async def event_media_sent(lead_phone: str, media_type: str) -> bool:
+    """Слали ли уже этому лиду медиа этого типа (дедуп по типу — не повторяем).
+
+    Ищем типовой маркер в исходящих. Сбой → False (лучше отправить, чем молчать по ошибке)."""
+    marker = MEDIA_MARKERS.get(media_type)
+    if not marker:
+        return False
+    try:
+        row = await _get_pool().fetchrow(
+            "SELECT 1 FROM messages WHERE lead_phone = $1 AND direction = 'outbound' "
+            "AND text = $2 LIMIT 1", lead_phone, marker)
+        return row is not None
+    except Exception:
+        logger.exception("event_media_sent failed [%s] type=%s", lead_phone, media_type)
+        return False
+
+
+async def random_event_media(media_type: str, limit: int) -> list[dict]:
+    """Активные медиа заданного типа: ОСНОВНОЕ (is_primary) первым, остальные случайно.
+
+    Для видео так гарантируем, что explainer-видео Ани всегда идёт на детальный вопрос
+    про ивент (а не случайный клип, если позже добавят атмосферные). Для фото is_primary
+    обычно false → чистый random. Пусто если медиа типа нет.
+    """
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT storage_url, media_type FROM event_media "
+            "WHERE is_active = true AND media_type = $1 "
+            "ORDER BY is_primary DESC, random() LIMIT $2",
+            media_type, limit)
+        return [dict(r) for r in rows]
+    except Exception:
+        logger.exception("random_event_media failed")
+        return []
 
 
 async def save_photo(lead_phone: str, storage_url: str | None, storage_path: str | None,

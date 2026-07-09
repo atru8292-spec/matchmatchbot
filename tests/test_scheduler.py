@@ -15,6 +15,15 @@ import scheduler
 import sender
 
 
+@pytest.fixture(autouse=True)
+def _sched_antiban_stubs(monkeypatch):
+    """Глобально: паузы между лидами в ноль (иначе тесты спят 15-90с) + суточный счётчик
+    холодных далёк от лимита (тесты не упираются в cap, если явно не проверяют его)."""
+    monkeypatch.setattr(scheduler, "_lead_pause", AsyncMock())
+    monkeypatch.setattr(db, "get_daily_counter", AsyncMock(return_value=0))
+    monkeypatch.setattr(db, "incr_daily_counter", AsyncMock())
+
+
 # ===== _fill_event =====
 
 class TestFillEvent:
@@ -92,6 +101,39 @@ class TestRunFollowups:
         assert send.await_count == 2  # второй обработан несмотря на сбой первого
         assert n == 1
 
+    async def test_daily_cap_blocks_when_exhausted(self, monkeypatch):
+        """Суточный лимит холодных исчерпан → вообще не выбираем лидов, не шлём."""
+        monkeypatch.setattr(db, "get_daily_counter",
+                            AsyncMock(return_value=scheduler.settings.cold_followup_daily_cap))
+        due = AsyncMock(); monkeypatch.setattr(db, "due_followups", due)
+        send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
+        n = await scheduler.run_followups()
+        assert n == 0
+        due.assert_not_called()   # даже не запрашиваем лидов
+        send.assert_not_called()
+
+    async def test_remaining_cap_limits_batch(self, monkeypatch):
+        """Осталось 2 до лимита → limit в запросе = 2 (не весь FOLLOWUP_BATCH)."""
+        cap = scheduler.settings.cold_followup_daily_cap
+        monkeypatch.setattr(db, "get_daily_counter", AsyncMock(return_value=cap - 2))
+        due = AsyncMock(return_value=[]); monkeypatch.setattr(db, "due_followups", due)
+        await scheduler.run_followups()
+        assert due.call_args.kwargs["limit"] == 2
+
+    async def test_increments_counter_and_pauses(self, monkeypatch):
+        """Успешная отправка засчитывается в суточный счётчик + пауза между лидами."""
+        lead = {"phone": "wa_1", "funnel_stage": "qualified", "followup_sent_count": 0,
+                "whatsapp_name": "X", "name": None}
+        monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[lead]))
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola"))
+        monkeypatch.setattr(sender, "send", AsyncMock(return_value=1))
+        monkeypatch.setattr(db, "mark_followup_sent", AsyncMock())
+        incr = AsyncMock(); monkeypatch.setattr(db, "incr_daily_counter", incr)
+        pause = AsyncMock(); monkeypatch.setattr(scheduler, "_lead_pause", pause)
+        await scheduler.run_followups()
+        incr.assert_awaited_once_with(scheduler.COLD_COUNTER)
+        pause.assert_awaited_once()
+
 
 # ===== run_event_reminders =====
 
@@ -128,18 +170,42 @@ class TestRunEventReminders:
         assert tmpl.call_args.args[0] == scheduler.REMIND_1D_SCENARIO
         send.assert_awaited_once()
 
-    async def test_day_of_sends_scenario_47(self, monkeypatch):
+    async def test_day_of_unpaid_uses_54_with_link(self, monkeypatch):
+        """День ивента, неоплативший (обычная стадия) → Шаблон B (#54), ссылка разрешена."""
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=_event_settings()))
-        tmpl = AsyncMock(return_value="hoy [hora] [dirección, lugar, parking]")
-        monkeypatch.setattr(db, "get_scenario_template", tmpl)
+        async def tmpl(sid):
+            return "A sin link" if sid == scheduler.REMIND_DAY_SCENARIO else "B con [event_link]"
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(side_effect=tmpl))
         monkeypatch.setattr(db, "event_recipients",
-                            AsyncMock(return_value=[{"phone": "wa_1", "whatsapp_name": None, "name": None}]))
+                            AsyncMock(return_value=[{"phone": "wa_1", "whatsapp_name": None,
+                                                     "name": None, "funnel_stage": "qualified"}]))
         monkeypatch.setattr(db, "event_reminder_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
-        monkeypatch.setattr(sender, "send", AsyncMock())
+        send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
         n = await scheduler.run_event_reminders(today=date(2026, 8, 15))  # день ивента
-        assert tmpl.call_args.args[0] == scheduler.REMIND_DAY_SCENARIO
         assert n == 1
+        # неоплатившему: Шаблон B + ссылка разрешена к повтору
+        args, kwargs = send.call_args
+        assert kwargs.get("allow_repeat_links") is True
+        assert "con" in args[1][0]  # текст из Шаблона B
+
+    async def test_day_of_paid_uses_47_no_repeat(self, monkeypatch):
+        """День ивента, оплативший (event_attended) → Шаблон A (#47), ссылку не повторяем."""
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=_event_settings()))
+        async def tmpl(sid):
+            return "A sin link" if sid == scheduler.REMIND_DAY_SCENARIO else "B con [event_link]"
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(side_effect=tmpl))
+        monkeypatch.setattr(db, "event_recipients",
+                            AsyncMock(return_value=[{"phone": "wa_2", "whatsapp_name": None,
+                                                     "name": None, "funnel_stage": "event_attended"}]))
+        monkeypatch.setattr(db, "event_reminder_sent", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
+        send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
+        n = await scheduler.run_event_reminders(today=date(2026, 8, 15))  # день ивента
+        assert n == 1
+        args, kwargs = send.call_args
+        assert kwargs.get("allow_repeat_links") is False
+        assert "sin" in args[1][0]  # текст из Шаблона A
 
     async def test_morning_after_sends_scenario_23(self, monkeypatch):
         """Следующее утро после ивента (event_date+1) → check-in, сценарий 23."""

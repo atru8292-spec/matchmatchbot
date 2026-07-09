@@ -17,12 +17,15 @@ import logging
 from datetime import datetime, date
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 
+import ai
 import db
 import escalation
 import funnel
+import media
+import scheduler
 import sender
 import vision
 from mini_auth import require_admin
@@ -429,6 +432,9 @@ async def add_note(phone: str, body: NoteIn, _: dict = Depends(require_admin)) -
 
 class MessageIn(BaseModel):
     text: str
+    # override=true — Аня подтвердила отправку лиду с do_not_contact (opt-out). Без него
+    # бэкенд отдаёт 409, фронт показывает предупреждение (как дубль-варнинг для day-of).
+    override: bool = False
 
 
 @router.post("/lead/{phone}/message")
@@ -449,6 +455,12 @@ async def send_manual_message(phone: str, body: MessageIn, user: dict = Depends(
         lead = await db.get_lead_by_phone(p)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
+        # opt-out: лид просил не писать. Не блокируем Аню жёстко (человек решает), но
+        # требуем явного override — фронт показывает предупреждение и переспрашивает.
+        if lead.get("do_not_contact") and not body.override:
+            raise HTTPException(
+                status_code=409,
+                detail="Este lead pidió no ser contactado (opt-out). Confirma para enviar de todos modos.")
         # авто-takeover: пишем руками → бот не должен отвечать сам
         took_over = False
         if lead.get("mode") == "auto":
@@ -683,7 +695,9 @@ async def stats(_: dict = Depends(require_admin)) -> dict:
 # ТЕ ЖЕ ключи, что читает/пишет менеджер-бот (/set_event, /set_invitation, ...) и
 # планировщик — форма и команды работают с одним источником, без дублирования логики.
 _EVENT_KEYS = [
-    "event_active", "event_date", "event_time", "event_address",
+    "event_active", "event_date", "event_time", "event_start", "event_end",
+    "event_address",
+    "event_price_member", "event_price_nonmember", "event_price_old",
     "event_link", "course_link", "invitation_url", "invitation_ready",
 ]
 
@@ -691,20 +705,32 @@ _EVENT_KEYS = [
 class EventSettingsIn(BaseModel):
     eventActive: bool = False
     eventDate: Optional[str] = None
-    eventTime: Optional[str] = None
+    eventStart: Optional[str] = None
+    eventEnd: Optional[str] = None
     eventAddress: Optional[str] = None
+    eventPriceMember: Optional[str] = None
+    eventPriceNonmember: Optional[str] = None
+    eventPriceOld: Optional[str] = None
     eventLink: Optional[str] = None
     courseLink: Optional[str] = None
     invitationUrl: Optional[str] = None
     invitationReady: bool = False
+    # eventTime не редактируется отдельно — зеркалим из eventStart (см. put_event),
+    # чтобы #15/#47/#54 ([event_time]) и #51/#52 ([event_start]) не расходились.
+    eventTime: Optional[str] = None
 
 
 def _event_out(s: dict) -> dict:
     return {
         "eventActive": s.get("event_active") == "1",
         "eventDate": s.get("event_date") or "",
+        "eventStart": s.get("event_start") or "",
+        "eventEnd": s.get("event_end") or "",
         "eventTime": s.get("event_time") or "",
         "eventAddress": s.get("event_address") or "",
+        "eventPriceMember": s.get("event_price_member") or "",
+        "eventPriceNonmember": s.get("event_price_nonmember") or "",
+        "eventPriceOld": s.get("event_price_old") or "",
         "eventLink": s.get("event_link") or "",
         "courseLink": s.get("course_link") or "",
         "invitationUrl": s.get("invitation_url") or "",
@@ -758,27 +784,36 @@ async def put_event(body: EventSettingsIn, _: dict = Depends(require_admin)) -> 
     ссылки http…, для активного ивента нужны дата/время/адрес, для «отправлять
     приглашение» нужен URL картинки."""
     date = (body.eventDate or "").strip()
-    time = (body.eventTime or "").strip()
+    start = (body.eventStart or "").strip()
+    end = (body.eventEnd or "").strip()
     address = (body.eventAddress or "").strip()
+    price_member = (body.eventPriceMember or "").strip()
+    price_nonmember = (body.eventPriceNonmember or "").strip()
+    price_old = (body.eventPriceOld or "").strip()
     event_link = (body.eventLink or "").strip()
     course_link = (body.courseLink or "").strip()
     invitation_url = (body.invitationUrl or "").strip()
 
-    # дата: формат ГГГГ-ММ-ДД (иначе планировщик не распознает)
+    # дата: ISO ГГГГ-ММ-ДД (планировщик считает по ней, бот форматирует в испанскую)
     if date:
         try:
             datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(status_code=422, detail="Дата должна быть в формате ГГГГ-ММ-ДД")
+    # цены: непустые — только цифры/запятые/точки/пробелы (отображаемая строка, напр. «6,000»)
+    for val, name in ((price_member, "цена члена"), (price_nonmember, "цена не-члена"),
+                      (price_old, "старая цена")):
+        if val and not all(ch.isdigit() or ch in ",. " for ch in val):
+            raise HTTPException(status_code=422, detail=f"{name}: только цифры и разделители")
     # ссылки: непустые — только http…
     for val, name in ((event_link, "ссылка оплаты"), (course_link, "ссылка курсов"),
                       (invitation_url, "URL картинки")):
         if val and not val.lower().startswith("http"):
             raise HTTPException(status_code=422, detail=f"{name}: нужен URL (http…)")
-    # инварианты команд бота
-    if body.eventActive and not (date and time and address):
+    # инварианты: для активного ивента нужны дата, время начала и адрес
+    if body.eventActive and not (date and start and address):
         raise HTTPException(status_code=422,
-                            detail="Для активного ивента нужны дата, время и адрес")
+                            detail="Для активного ивента нужны дата, время начала и адрес")
     if body.invitationReady and not invitation_url:
         raise HTTPException(status_code=422,
                             detail="Чтобы отправлять приглашение, задайте URL картинки")
@@ -786,8 +821,13 @@ async def put_event(body: EventSettingsIn, _: dict = Depends(require_admin)) -> 
     values = {
         "event_active": "1" if body.eventActive else "0",
         "event_date": date,
-        "event_time": time,
+        "event_start": start,
+        "event_end": end,
+        "event_time": start,  # зеркало: #15/#47/#54 читают [event_time] = времени начала
         "event_address": address,
+        "event_price_member": price_member,
+        "event_price_nonmember": price_nonmember,
+        "event_price_old": price_old,
         "event_link": event_link,
         "course_link": course_link,
         "invitation_url": invitation_url,
@@ -799,3 +839,324 @@ async def put_event(body: EventSettingsIn, _: dict = Depends(require_admin)) -> 
     except Exception as e:
         await _alert_500("put_event", e)
     return _event_out(values)
+
+
+# ===== Напоминание дня ивента (предпросмотр + ручная отправка) =====
+# Тот же kind/date, что у планировщика (_send_event_daytime) → идемпотентность в обе
+# стороны: ручная отправка не даст планировщику продублировать, и наоборот.
+_DAY_OF_KIND = "remind_day"
+_DAY_OF_MAX_RECIPIENTS = 30  # ручная отправка — точечная; массовую делает планировщик
+
+
+def _split_template(tmpl: str) -> list[str]:
+    """Шаблон → сырые бабблы по \\n\\n (как ai._split_template / scheduler._bubbles)."""
+    return [p.strip() for p in (tmpl or "").split("\n\n") if p.strip()]
+
+
+def _default_template(funnel_stage: str | None) -> str:
+    """A — оплатившим/членам (PAID_STAGES), B — остальным. Как в _send_event_daytime."""
+    return "A" if funnel_stage in scheduler.PAID_STAGES else "B"
+
+
+def _lead_display_name(lead: dict) -> str:
+    return lead.get("name") or lead.get("whatsapp_name") or (lead.get("phone") or "").replace("wa_", "", 1)
+
+
+async def _render_day_of_template(template_id: int) -> list[str]:
+    """Готовые (с подставленными значениями) бабблы шаблона для предпросмотра/отправки."""
+    tmpl = await db.get_scenario_template(template_id)
+    if not tmpl:
+        return []
+    # phone=None + allow_repeat=True: дедуп ссылок не применяем (это предпросмотр)
+    return await sender.render_bubbles(_split_template(tmpl), phone=None, allow_repeat_links=True)
+
+
+@router.get("/event/day-of/preview")
+async def day_of_preview(_: dict = Depends(require_admin)) -> dict:
+    """Предпросмотр обоих шаблонов дня ивента с реальными значениями (read-only).
+    A (#47) — оплатившим, без ссылки; B (#54) — неоплатившим, со ссылкой на билет."""
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    try:
+        a = await _render_day_of_template(scheduler.REMIND_DAY_SCENARIO)
+        b = await _render_day_of_template(scheduler.REMIND_DAY_UNPAID_SCENARIO)
+    except Exception as e:
+        await _alert_500("day_of_preview", e)
+    return {"templateA": a, "templateB": b}
+
+
+@router.get("/event/day-of/recipients")
+async def day_of_recipients(_: dict = Depends(require_admin)) -> dict:
+    """Кандидаты для ручного напоминания: лиды с selected_service='event'. У каждого —
+    какой шаблон уйдёт по умолчанию (A/B по funnel_stage) и слали ли уже (идемпотентность)."""
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    try:
+        event_date = ((await db.get_settings(["event_date"])).get("event_date") or "").strip()
+        cands = await db.event_lead_candidates()
+        out = []
+        for c in cands:
+            phone = c["phone"]
+            at = (await db.event_reminder_sent_at(phone, _DAY_OF_KIND, event_date)
+                  if event_date else None)
+            out.append({
+                "phone": phone,
+                "name": _lead_display_name(c),
+                "funnelStage": c.get("funnel_stage"),
+                "funnelStageLabel": funnel.stage_label(c.get("funnel_stage")),
+                "template": _default_template(c.get("funnel_stage")),
+                "alreadySent": at is not None,
+                "sentAt": _iso(at),
+            })
+    except Exception as e:
+        await _alert_500("day_of_recipients", e)
+    return {"recipients": out, "eventDate": event_date}
+
+
+class DayOfRecipientIn(BaseModel):
+    phone: str
+    template: str = "auto"  # auto (по funnel_stage) | A | B (override)
+
+
+class DayOfSendIn(BaseModel):
+    recipients: List[DayOfRecipientIn]
+    force: bool = False  # повторить, даже если уже слали (после подтверждения дубля)
+
+
+@router.post("/event/day-of/send")
+async def day_of_send(body: DayOfSendIn, user: dict = Depends(require_admin)) -> dict:
+    """Ручная отправка напоминания дня ивента выбранным лидам.
+
+    Шаблон: override (A/B) или auto по funnel_stage. Дубль (уже слали — планировщиком
+    или вручную) при force=false НЕ шлётся, попадает в duplicates с датой. force=true —
+    шлём повторно. do_not_contact уважается; авто-takeover НЕ делаем (режим не трогаем);
+    после отправки логируем маркер (kind=remind_day) — планировщик не продублирует."""
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    if not body.recipients:
+        raise HTTPException(status_code=422, detail="recipients required")
+    if len(body.recipients) > _DAY_OF_MAX_RECIPIENTS:
+        raise HTTPException(status_code=422,
+                            detail=f"Не больше {_DAY_OF_MAX_RECIPIENTS} за раз "
+                                   "(массовую рассылку планировщик сделает сам в день ивента)")
+    event_date = ((await db.get_settings(["event_date"])).get("event_date") or "").strip()
+    if not event_date:
+        raise HTTPException(status_code=422, detail="Дата ивента не задана")
+
+    try:
+        raw = {
+            "A": _split_template(await db.get_scenario_template(scheduler.REMIND_DAY_SCENARIO)),
+            "B": _split_template(await db.get_scenario_template(scheduler.REMIND_DAY_UNPAID_SCENARIO)),
+        }
+        if not raw["A"] or not raw["B"]:
+            raise HTTPException(status_code=500, detail="Шаблон #47/#54 не найден")
+
+        sent, duplicates, failed = [], [], []
+        for r in body.recipients:
+            try:
+                phone = _norm_phone(r.phone)
+            except HTTPException:
+                failed.append({"phone": r.phone, "name": r.phone, "reason": "неверный номер"})
+                continue
+            lead = await db.get_lead_by_phone(phone)
+            if not lead:
+                failed.append({"phone": phone, "name": phone, "reason": "лид не найден"})
+                continue
+            name = _lead_display_name(lead)
+            if lead.get("do_not_contact"):
+                failed.append({"phone": phone, "name": name, "reason": "бот не пишет (заблокирован)"})
+                continue
+            tmpl = r.template if r.template in ("A", "B") else _default_template(lead.get("funnel_stage"))
+            already = await db.event_reminder_sent(phone, _DAY_OF_KIND, event_date)
+            if already and not body.force:
+                at = await db.event_reminder_sent_at(phone, _DAY_OF_KIND, event_date)
+                duplicates.append({"phone": phone, "name": name, "template": tmpl, "sentAt": _iso(at)})
+                continue
+            # рендер + отправка бабблами; meta.manual=true (в таймлайне «Anna вручную»)
+            bubbles = await sender.render_bubbles(raw[tmpl], phone, allow_repeat_links=(tmpl == "B"))
+            chat_id = phone.replace("wa_", "", 1)
+            delivered_any = False
+            for b in bubbles:
+                await asyncio.sleep(sender.compute_delay(b))
+                ok = await sender.send_one(chat_id, b)
+                await db.save_manual_message(phone, b, ok)
+                delivered_any = delivered_any or ok
+            if delivered_any:
+                if not already:  # маркер уже есть при force-повторе — не дублируем
+                    await db.log_event_reminder(phone, _DAY_OF_KIND, event_date)
+                sent.append({"phone": phone, "name": name, "template": tmpl})
+            else:
+                failed.append({"phone": phone, "name": name, "reason": "не доставлено"})
+    except HTTPException:
+        raise
+    except Exception as e:
+        await _alert_500("day_of_send", e)
+    return {"sent": sent, "duplicates": duplicates, "failed": failed}
+
+
+# ===== Тест переписки (/api/mini/test-chat) — песочница, НИЧЕГО не пишет в БД =====
+# Прогоняет сообщение через РЕАЛЬНЫЙ ai.generate_reply (тот же пайплайн, что для
+# боевых лидов: RAG + funnel-guard + контекст-фолбэк + генерация). READ-ONLY:
+# не создаёт лида (leads), не пишет messages, не трогает фото. История диалога и
+# профиль тест-лида приходят из тела запроса (память сессии живёт на фронте).
+
+class TestChatProfile(BaseModel):
+    """Накопленный профиль тест-лида (фронт мёржит extracted после каждого ответа)."""
+    isSingle: Optional[bool] = None
+    age: Optional[int] = None
+    profession: Optional[str] = None
+    city: Optional[str] = None
+    interest: Optional[str] = None
+    photoReceived: bool = False
+    funnelStage: Optional[str] = None
+    whatsappName: Optional[str] = "Test"
+
+
+class TestChatMessage(BaseModel):
+    sender: str  # "lead" | "anna"
+    text: str
+
+
+class TestChatIn(BaseModel):
+    leadProfile: TestChatProfile = TestChatProfile()
+    history: List[TestChatMessage] = []
+    message: str
+
+
+@router.post("/test-chat")
+async def test_chat(body: TestChatIn, _: dict = Depends(require_admin)) -> dict:
+    """Песочница: ответ бота на сообщение без записи в БД.
+
+    Изоляция: строим синтетический lead-dict в памяти (без phone → нечего писать),
+    зовём только ai.generate_reply (read-only) + sender.render_bubbles(phone=None).
+    НЕ вызываем insert_message / upsert_lead / save_photo.
+    """
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    text = (body.message or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Пустое сообщение")
+
+    p = body.leadProfile
+    lead = {
+        "phone": None,
+        "whatsapp_name": (p.whatsappName or "Test"),
+        "is_single": p.isSingle, "age": p.age, "profession": p.profession,
+        "city": p.city, "interest": p.interest,
+        "photo_received": p.photoReceived, "funnel_stage": p.funnelStage,
+    }
+    history = [{"sender": m.sender, "text": m.text} for m in body.history]
+
+    try:
+        result = await ai.generate_reply(lead, history, text)
+        # рендер как увидит лид (подстановка [event_link]/[event_date]…; phone=None → без дедупа)
+        rendered = await sender.render_bubbles(result.get("messages") or [], phone=None)
+        # дебаг: сырые RAG-кандидаты со score + названия (для отладки, какой сценарий матчил)
+        try:
+            cands = await ai.search_scenarios(text, top_k=3)
+        except Exception:
+            logger.exception("test_chat: RAG-дебаг упал (не критично)")
+            cands = []
+        rag = [{"id": c["id"], "score": round(c.get("score", 0.0), 3),
+                "title": await db.get_scenario_title(c["id"])} for c in cands]
+        used_id = result.get("used_scenario_id")
+        used_title = await db.get_scenario_title(used_id) if isinstance(used_id, int) else None
+    except Exception as e:
+        await _alert_500("test_chat", e)
+
+    return {
+        "messages": rendered,
+        "extracted": result.get("extracted") or {},
+        "funnelStage": result.get("funnel_stage"),
+        "usedScenarioId": used_id,
+        "usedScenarioTitle": used_title,
+        "action": result.get("action"),
+        "needsEscalation": bool(result.get("needs_escalation")),
+        "ragCandidates": rag,
+    }
+
+
+# ===== Медиа с ивентов (/api/mini/event/media) — фото/видео для отправки ботом =====
+# Хранение — Supabase Storage (префикс event-media/), тот же механизм, что приглашение.
+# Видео перекодируется под требования Wazzup (mp4/H.264/AAC ≤16 МБ); не влезло после
+# сжатия → 422 с понятным сообщением (Аня обрежет сама).
+
+def _media_out(row: dict) -> dict:
+    return {
+        "id": row.get("id"),
+        "url": row.get("storage_url"),
+        "mediaType": row.get("media_type"),
+        "sizeBytes": row.get("size_bytes"),
+        "isActive": bool(row.get("is_active")),
+        "createdAt": _iso(row.get("created_at")),
+    }
+
+
+@router.get("/event/media")
+async def list_event_media(_: dict = Depends(require_admin)) -> dict:
+    """Список медиа с ивентов (для CRM)."""
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    try:
+        rows = await db.list_event_media()
+    except Exception as e:
+        await _alert_500("list_event_media", e)
+    return {"media": [_media_out(r) for r in rows]}
+
+
+@router.post("/event/media")
+async def upload_event_media(file: UploadFile = File(...),
+                             _: dict = Depends(require_admin)) -> dict:
+    """Загрузить фото/видео с ивента (multipart). Видео сжимается под лимит Wazzup.
+
+    Фото > 5 МБ или не-jpg/png/webp → 422. Видео: транскод в mp4/H.264 ≤16 МБ; если после
+    сжатия всё равно тяжелее — 422 с объяснением (Аня обрежет и попробует снова)."""
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    kind = media.classify(file.content_type or "")
+    if not kind:
+        raise HTTPException(status_code=422,
+                            detail="Formato no soportado. Sube imagen (jpg/png/webp) o video (mp4).")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=422, detail="Archivo vacío")
+    if len(raw) > media.UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413,
+                            detail=f"Archivo demasiado grande (máx {media.UPLOAD_MAX_BYTES // (1024*1024)} MB).")
+
+    if kind == "image":
+        if len(raw) > media.IMAGE_MAX_BYTES:
+            raise HTTPException(status_code=413,
+                                detail=f"La imagen supera {media.IMAGE_MAX_BYTES // (1024*1024)} MB.")
+        data, ext, ctype = raw, media.IMAGE_EXTS[(file.content_type or "").lower()], file.content_type
+    else:  # video → транскод под Wazzup (в отдельном потоке, ffmpeg блокирующий)
+        try:
+            data = await asyncio.to_thread(media.transcode_video, raw)
+        except media.VideoTooLargeError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except media.VideoProcessingError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        ext, ctype = "mp4", "video/mp4"
+
+    url, path = await vision.upload_event_media(data, ext, ctype)
+    if not url:
+        raise HTTPException(status_code=502, detail="No se pudo subir al almacenamiento")
+    try:
+        row = await db.add_event_media(url, path, kind, len(data))
+    except Exception as e:
+        await _alert_500("upload_event_media", e)
+    return _media_out(row)
+
+
+@router.delete("/event/media/{media_id}")
+async def delete_event_media(media_id: int, _: dict = Depends(require_admin)) -> dict:
+    """Удалить медиа с ивента по id."""
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    try:
+        ok = await db.delete_event_media(media_id)
+    except Exception as e:
+        await _alert_500("delete_event_media", e)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Media not found")
+    return {"deleted": media_id}

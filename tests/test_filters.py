@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import filters
 from filters import (Decision, decide, is_aggression, is_escort_mention, is_russian_number,
                      has_cyrillic, has_instagram)
 
@@ -234,6 +235,53 @@ class TestDecideManualMode:
         """Нет поля mode → не manual → обрабатываем нормально."""
         d = decide({"age": 35, "is_single": True}, False, "hola")
         assert d.action == "needs_ai"
+
+
+# ===========================================================================
+# Opt-out (стоп-слово)
+# ===========================================================================
+
+class TestIsOptout:
+    def test_catches_optout_phrases(self):
+        for t in ["no me escribas más", "no me escriban más", "quiero darme de baja",
+                  "dar de baja", "déjame de escribir", "déjame en paz",
+                  "dejen de molestarme", "no me molestes", "bórrame",
+                  "quítame de la lista", "sácame de tu lista", "no me contactes",
+                  "не пишите мне", "отпишите меня", "удалите мой номер", "хватит писать"]:
+            assert filters.is_optout(t) is True, t
+
+    def test_does_not_catch_soft_decline_17(self):
+        # #17 (лист ожидания) и прочие — НЕ opt-out
+        for t in ["no me interesa", "no gracias", "paso", "no es para mi",
+                  "está caro", "no me molesta el precio", "tengo que pensarlo",
+                  "déjame pensarlo", "ahorita no"]:
+            assert filters.is_optout(t) is False, t
+
+
+class TestDecideOptout:
+    def test_optout_returns_action_with_alert(self):
+        d = decide({"mode": "auto", "age": 35, "is_single": True}, False, "no me escribas más porfa")
+        assert d.action == "optout"
+        assert d.alert_manager is True
+
+    def test_optout_even_in_manual_mode(self):
+        """Opt-out ловится ДО manual → флаг проставится даже когда лида ведёт Аня."""
+        d = decide({"mode": "manual", "manual_until": None}, False, "déjame en paz")
+        assert d.action == "optout"
+
+    def test_optout_before_aggression(self):
+        """Грубый opt-out → optout (тёплое прощание), не aggression-блок."""
+        d = decide({"mode": "auto"}, False, "déjame en paz, no me escribas más")
+        assert d.action == "optout"
+
+    def test_already_do_not_contact_stays_silent(self):
+        """Уже отписан → silent (не пере-обрабатываем как новый opt-out)."""
+        d = decide({"do_not_contact": True}, False, "no me escribas más")
+        assert d.action == "silent"
+
+    def test_soft_decline_not_optout_goes_to_ai(self):
+        d = decide({"mode": "auto", "age": 35, "is_single": True}, False, "no me interesa gracias")
+        assert d.action != "optout"
 
 
 # ===========================================================================

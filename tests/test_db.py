@@ -1330,18 +1330,20 @@ class TestSettings:
 class TestDueFollowups:
     async def test_filters_in_sql(self, pool):
         pool.fetch.return_value = []
-        await db.due_followups(["lost", "rejected"], 3, limit=50)
+        await db.due_followups(["lost", "rejected"], 3, 24, limit=50)
         sql, *params = pool.fetch.call_args.args
         assert "next_followup_at <= now()" in sql
         assert "mode = 'auto'" in sql
         assert "do_not_contact" in sql
         assert "w.phone IS NULL" in sql          # исключение whitelist
-        assert params == [["lost", "rejected"], 3, 50]
+        # страховка: не слать активному лиду (last_inbound_at свежее тихого окна)
+        assert "last_inbound_at" in sql
+        assert params == [["lost", "rejected"], 3, 24, 50]
 
     async def test_returns_dicts(self, pool):
         pool.fetch.return_value = [{"phone": "wa_1", "funnel_stage": "qualified",
                                     "followup_sent_count": 0, "whatsapp_name": "X", "name": None}]
-        out = await db.due_followups(["lost"], 3)
+        out = await db.due_followups(["lost"], 3, 24)
         assert out[0]["phone"] == "wa_1"
 
 
@@ -1389,3 +1391,49 @@ class TestArmFollowupIfMissing:
         assert "make_interval(hours =>" in sql
         assert "followup_sent_count = 0" in sql
         assert params == ["wa_1", 48]
+
+
+class TestResetFollowupTimer:
+    async def test_resets_unconditionally(self, pool):
+        await db.reset_followup_timer("wa_1", 48)
+        sql, *params = pool.execute.call_args.args
+        assert "next_followup_at = now() + make_interval(hours =>" in sql
+        assert "next_followup_at IS NULL" not in sql       # ставит ВСЕГДА, без guard
+        assert "followup_sent_count = 0" in sql
+        assert params == ["wa_1", 48]
+
+
+class TestDailyCounter:
+    async def test_incr_reads_and_writes_dated_key(self, pool):
+        pool.fetchval.return_value = "5"                   # get_setting → 5
+        new = await db.incr_daily_counter("cold_followups")
+        assert new == 6
+        # ключ по дате, значение записано
+        key, val = pool.execute.call_args.args[1], pool.execute.call_args.args[2]
+        assert key.startswith("counter:cold_followups:") and val == "6"
+
+    async def test_get_counter_zero_when_absent(self, pool):
+        pool.fetchval.return_value = None
+        assert await db.get_daily_counter("cold_followups") == 0
+
+
+class TestEventMediaPool:
+    async def test_random_media_filters_by_type_primary_first(self, pool):
+        """Выборка по типу: ОСНОВНОЕ (is_primary) первым, затем случайно, только активные."""
+        pool.fetch.return_value = [{"storage_url": "u", "media_type": "video"}]
+        await db.random_event_media("video", 1)
+        sql, *params = pool.fetch.call_args.args
+        assert "is_active = true" in sql and "media_type = $1" in sql
+        assert "ORDER BY is_primary DESC, random()" in sql   # explainer детерминированно
+        assert params == ["video", 1]
+
+    async def test_media_sent_checks_typed_marker(self, pool):
+        pool.fetchrow.return_value = {"?column?": 1}
+        assert await db.event_media_sent("wa_1", "video") is True
+        sql, *params = pool.fetchrow.call_args.args
+        assert "direction = 'outbound'" in sql and "text = $2" in sql
+        assert params == ["wa_1", db.MEDIA_MARKERS["video"]]   # типовой маркер видео
+
+    async def test_media_sent_unknown_type_false(self, pool):
+        assert await db.event_media_sent("wa_1", "gif") is False
+        pool.fetchrow.assert_not_called()

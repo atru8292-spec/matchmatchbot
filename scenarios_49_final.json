@@ -95,7 +95,7 @@
     "mode": "bot_then_block",
     "blocks_lead": true,
     "messages": [
-      "Ay guapo, nuestras clientas buscan hombres de 30+, con vida estable y listos para algo serio 🤍",
+      "Ay guapo, nuestras clientas buscan hombres de 28+, con vida estable y listos para algo serio 🤍",
       "Te deseo mucha suerte! Si en el futuro encajas, aquí estamos ✨"
     ],
     "note": "",
@@ -109,7 +109,7 @@
     "mode": "bot_then_block",
     "blocks_lead": true,
     "messages": [
-      "Nuestro servicio está pensado para hombres hasta 60 años guapo 🤍",
+      "Nuestro servicio está pensado para hombres hasta 65 años guapo 🤍",
       "Te deseo lo mejor!"
     ],
     "note": "",
@@ -133,16 +133,16 @@
     "id": 10,
     "title": "Низкий доход",
     "trigger": "soy mesero / conductor / estudiante / desempleado",
-    "mode_raw": "БОТ САМ. Автоответчик.",
-    "mode": "bot_then_block",
+    "mode_raw": "БОТ САМ. Автоответчик. НЕ блокирует (можно пересмотреть если доход выше).",
+    "mode": "bot_auto",
     "blocks_lead": false,
     "messages": [
       "Gracias por el info guapo 🤍",
       "Mira, ahorita tengo una lista de espera que puede tardar entre 6 y 12 meses.",
-      "Mientras, te invito a tomar nuestros cursos en línea aquí: [course_link]. Cuando se desocupan lugares para la agencia, primero consideramos a quienes ya tomaron los cursos, y de ahí los demás"
+      "Mientras, te invito a tomar nuestros cursos en línea sobre cómo conocer, conquistar y tener una relación con mujeres eslavas, aquí: [course_link]. Cuando se desocupan lugares para la agencia, primero consideramos a quienes ya tomaron los cursos, y de ahí los demás"
     ],
     "note": "",
-    "trigger_es": "soy mesero / soy conductor / estudiante / desempleado / no tengo trabajo"
+    "trigger_es": "tengo 29 años y soy estudiante todavía / sigo estudiando / apenas estudio / soy estudiante universitario / tengo 35 años y soy mesero / soy chofer de uber / chofer de didi / chofer de plataforma / trabajo en plataforma / hago viajes de app / soy conductor / taxista / repartidor / mensajero / albañil / obrero / mecánico / guardia de seguridad / estoy desempleado / no tengo trabajo / sin empleo / gano poco / trabajo de lo que salga / empleado de mostrador / vendedor / mi sueldo es bajo / no gano mucho"
   },
   {
     "id": 11,
@@ -165,12 +165,10 @@
     "mode": "bot_then_block",
     "blocks_lead": true,
     "messages": [
-      "Gracias por la foto guapo 🤍",
-      "Ahorita tengo una lista de espera para la agencia.",
-      "Mientras, te invito a tomar nuestro curso de cómo conectar con mujeres eslavas aquí: [course_link]"
+      "Esa foto no es la adecuada guapo. Te deseo lo mejor 🤍"
     ],
     "note": "",
-    "trigger_es": "foto inapropiada / foto desnudo / nude"
+    "trigger_es": "foto inapropiada / foto desnudo / nude / foto sin camisa / en calzones / en ropa interior / semidesnudo / foto vulgar / mostrando el cuerpo"
   },
   {
     "id": 13,
@@ -241,7 +239,7 @@
     "messages": [
       "Todo bien guapo, respeto tu decisión 🤍",
       "Te dejo en nuestra lista por si algún día cambia algo.",
-      "Mientras, te invito a tomar nuestros cursos en línea aquí: [course_link] ✨"
+      "Mientras, te invito a tomar nuestros cursos en línea sobre cómo conocer y conquistar mujeres eslavas, aquí: [course_link] ✨"
     ],
     "note": "",
     "trigger_es": "no me interesa / no gracias / paso / no es para mi"
@@ -396,7 +394,7 @@
       "Te agradezco la honestidad guapo 🤍",
       "Pero nosotros trabajamos solo con personas que buscan relación seria. Las chicas en nuestra base buscan matrimonio, familia, pareja a largo plazo",
       "Si cambias tu enfoque, aquí estaremos ✨",
-      "Mientras, te invito a tomar nuestros cursos en línea aquí: [course_link]"
+      "Mientras, te invito a tomar nuestros cursos en línea sobre cómo conocer y conquistar mujeres eslavas, aquí: [course_link]"
     ],
     "note": "",
     "trigger_es": "algo casual / sin compromiso / no busco nada serio / solo diversion"
@@ -425,7 +423,7 @@
       "Prefiero no seguir esta conversación. Te deseo lo mejor."
     ],
     "note": "",
-    "trigger_es": "groserias / insultos / amenazas / mensajes agresivos"
+    "trigger_es": "pinches rateros / pinche estafadora / son unos rateros / me quieren robar ladrones / no mames / son una mierda / váyanse a la verga / pendejos / eres una pinche ratera / puto bot de mierda / groserías / insultos / amenazas / mensajes agresivos y ofensivos"
   },
   {
     "id": 30,

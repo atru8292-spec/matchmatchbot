@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_key: str = ""
     supabase_storage_bucket: str = "lead-photos"
+    # Медиа с ивентов (фото/видео) — отдельный bucket: у lead-photos лимит 10 МБ и только
+    # image-MIME, а видео до 16 МБ + mp4. event-media: public, 20 МБ, image+video/mp4.
+    supabase_event_media_bucket: str = "event-media"
 
     # ===== Telegram-алерты (блок 8) =====
     # Бот «Лиды» — business-алерты Ане (эскалация/VIP/блок).
@@ -64,6 +67,19 @@ class Settings(BaseSettings):
     # Контакт для запроса доступа (показывается чужим в ответе «закрытый бот»).
     # Telegram-хендл с @; кнопка ведёт на t.me/<хендл>.
     support_contact: str = "@arinashrr"
+
+    # ===== Антибан follow-up (планировщик, блок 13) =====
+    # Не слать догон, если лид писал за последние N часов (активный ≠ молчун).
+    followup_quiet_hours: int = 24
+    # Суточный лимит ХОЛОДНЫХ догонов/реактивации (#33/#36/#38) — антибан по номеру.
+    # Тёплые напоминания (ивент/звонок) под этот лимит НЕ попадают.
+    cold_followup_daily_cap: int = 30
+
+    # ===== Google (Calendar автозапись звонков #53 + Sheets гостевой список) =====
+    # Один сервис-аккаунт на оба API; JSON-ключ лежит на сервере (права 600).
+    google_service_account_file: str = "/opt/matchmatch-bot/google-service-account.json"
+    google_calendar_id: str = ""   # id общего календаря (пока тестовый личный)
+    google_sheet_id: str = ""      # id таблицы гостевого списка
 
     @property
     def manager_admin_ids(self) -> frozenset[int]:

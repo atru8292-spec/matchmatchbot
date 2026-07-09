@@ -147,6 +147,38 @@ async def upload_invitation(image_bytes: bytes, content_type: str = "image/jpeg"
         return None
 
 
+async def upload_event_media(data: bytes, ext: str,
+                             content_type: str) -> tuple[str | None, str | None]:
+    """Загрузить медиа с ивента (фото/видео) в Storage под префиксом event-media/.
+
+    Тот же bucket/паттерн, что upload_invitation (путь по хешу — идемпотентно). Вернуть
+    (public_url, path) или (None, None) при сбое/ненастроенном Storage."""
+    if not settings.supabase_url or not settings.supabase_service_key:
+        logger.debug("Storage не настроен — event-media не загружено")
+        return (None, None)
+    try:
+        import hashlib
+        digest = hashlib.sha1(data).hexdigest()[:16]
+        path = f"{digest}.{ext}"
+        base = settings.supabase_url.rstrip("/")
+        bucket = settings.supabase_event_media_bucket  # отдельный bucket (видео + 20 МБ)
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(
+                f"{base}/storage/v1/object/{bucket}/{path}",
+                headers={
+                    "Authorization": f"Bearer {settings.supabase_service_key}",
+                    "Content-Type": content_type,
+                    "x-upsert": "true",
+                },
+                content=data,
+            )
+            r.raise_for_status()
+        return (f"{base}/storage/v1/object/public/{bucket}/{path}", path)
+    except Exception:
+        logger.exception("upload_event_media упал")
+        return (None, None)
+
+
 async def upload_to_storage(phone: str, image_bytes: bytes) -> tuple[str | None, str | None]:
     """Загрузить фото в Supabase Storage (bucket lead-photos). Вернуть (public_url, path).
 

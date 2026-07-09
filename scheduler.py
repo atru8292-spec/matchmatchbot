@@ -16,24 +16,42 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timedelta, timezone
 
 import db
 import escalation
 import funnel
 import sender
+from config import settings
 
 logger = logging.getLogger("matchmatch.scheduler")
 
 TICK_INTERVAL_SEC = 3600  # раз в час
-FOLLOWUP_BATCH = 50       # лидов за тик (антибан: не всё разом)
+FOLLOWUP_BATCH = 30       # холодных догонов за тик (≤ суточному лимиту; остаток — след. тик)
 EVENT_REMINDER_BATCH = 30 # получателей напоминаний за тик (антибан порциями)
+
+# Антибан: пауза между ЛИДАМИ внутри тика (не путать с compute_delay между бабблами одного
+# лида) — размазать всплеск рассылки. Холодные догоны — дольше, тёплые напоминания — короче.
+COLD_LEAD_PAUSE = (30.0, 90.0)   # сек между холодными догонами (#33/#36/#38)
+WARM_LEAD_PAUSE = (15.0, 40.0)   # сек между тёплыми напоминаниями (ивент/звонок/check-in)
+COLD_COUNTER = "cold_followups"  # ключ суточного счётчика холодных догонов (app_settings)
+
+
+async def _lead_pause(bounds: tuple[float, float]) -> None:
+    """Антибан-пауза между лидами внутри тика (рандом в диапазоне). Тесты мокают в ноль."""
+    await asyncio.sleep(random.uniform(*bounds))
 
 # Ключи app_settings ивента.
 EVENT_KEYS = ["event_active", "event_date", "event_time", "event_address"]
 REMIND_1D_SCENARIO = 50       # «завтра ивент»
-REMIND_DAY_SCENARIO = 47      # «сегодня ивент»
+REMIND_DAY_SCENARIO = 47      # «сегодня ивент» — Шаблон A (оплатившим, без ссылки)
+REMIND_DAY_UNPAID_SCENARIO = 54  # «сегодня ивент» — Шаблон B (неоплатившим, со ссылкой на билет)
 CHECKIN_MORNING_SCENARIO = 23  # утренний check-in на следующий день после ивента
+
+# Стадии «уже оплатил/клиент» → в день ивента шлём Шаблон A без призыва купить билет.
+# Клиенты агентства (whitelist) исключены из выборки отдельно (event_recipients).
+PAID_STAGES = {"event_attended", "client_starter", "client_standard", "client_vip"}
 
 # Напоминание о видеозвонке (сценарий 49).
 VIDEOCALL_SCENARIO = 49
@@ -71,11 +89,23 @@ def _fill_event(template: str, settings_map: dict) -> str:
 # ===== A) Follow-up =====
 
 async def run_followups() -> int:
-    """Разослать очередные фоллоу-апы. Вернуть число обработанных лидов."""
-    leads = await db.due_followups(list(funnel.NO_FOLLOWUP_STAGES),
-                                   funnel.MAX_FOLLOWUPS, limit=FOLLOWUP_BATCH)
+    """Разослать очередные ХОЛОДНЫЕ фоллоу-апы (#33/#36/#38). Вернуть число отправленных.
+
+    Антибан: суточный лимит cold_followup_daily_cap (персистентный счётчик по номеру) +
+    пауза между лидами. Тихое окно (не слать активному лиду) — в db.due_followups."""
+    cap = settings.cold_followup_daily_cap
+    sent_today = await db.get_daily_counter(COLD_COUNTER)
+    remaining = cap - sent_today
+    if remaining <= 0:
+        logger.info("followups: суточный лимит %d исчерпан (сегодня %d) — стоп", cap, sent_today)
+        return 0
+    leads = await db.due_followups(list(funnel.NO_FOLLOWUP_STAGES), funnel.MAX_FOLLOWUPS,
+                                   settings.followup_quiet_hours,
+                                   limit=min(FOLLOWUP_BATCH, remaining))
     done = 0
     for ld in leads:
+        if done >= remaining:
+            break  # добили дневной лимит на этот тик
         phone = ld["phone"]
         try:
             count = ld["followup_sent_count"]
@@ -92,18 +122,20 @@ async def run_followups() -> int:
             sent = await sender.send(phone, bubbles)
             if sent == 0:
                 # Wazzup не принял (send не бросает, вернул 0) — НЕ жжём ступень лестницы,
-                # оставляем next_followup_at как есть, повторим на следующем тике.
+                # не считаем в лимит, повторим на следующем тике.
                 logger.warning("followup: send=0 для %s — не помечаю, повтор позже", phone)
                 continue
             next_at = (None if next_days is None
                        else datetime.now(timezone.utc) + timedelta(days=next_days))
             await db.mark_followup_sent(phone, next_at)
+            await db.incr_daily_counter(COLD_COUNTER)  # засчитываем в суточный лимит
             done += 1
+            await _lead_pause(COLD_LEAD_PAUSE)  # антибан-пауза между лидами
         except Exception as e:
             logger.exception("followup упал для %s", phone)
             await escalation.notify_error("scheduler.followup", repr(e), phone)
     if done:
-        logger.info("followups: отправлено %d", done)
+        logger.info("followups: отправлено %d (сегодня %d/%d)", done, sent_today + done, cap)
     return done
 
 
@@ -127,7 +159,7 @@ async def run_event_reminders(today=None) -> int:
     if today == event_date - timedelta(days=1):
         return await _send_event_batch("remind_1d", REMIND_1D_SCENARIO, s, date_str)
     if today == event_date:
-        return await _send_event_batch("remind_day", REMIND_DAY_SCENARIO, s, date_str)
+        return await _send_event_daytime(s, date_str)
     if today == event_date + timedelta(days=1):
         # Утренний check-in на следующий день после ивента (сценарий 23).
         return await _send_event_batch("checkin_morning", CHECKIN_MORNING_SCENARIO, s, date_str)
@@ -158,11 +190,53 @@ async def _send_event_batch(kind: str, scenario_id: int, settings_map: dict,
                 continue  # Wazzup не принял — не логируем маркер, повторим на след. тике
             await db.log_event_reminder(phone, kind, date_str)
             sent += 1
+            await _lead_pause(WARM_LEAD_PAUSE)  # антибан-пауза между лидами (без суточного лимита)
         except Exception as e:
             logger.exception("event reminder %s упал для %s", kind, phone)
             await escalation.notify_error("scheduler.event", repr(e), phone)
     if sent:
         logger.info("event reminder %s: отправлено %d (дата %s)", kind, sent, date_str)
+    return sent
+
+
+async def _send_event_daytime(settings_map: dict, date_str: str) -> int:
+    """День ивента: оплатившим/членам — Шаблон A (#47, без ссылки), остальным —
+    Шаблон B (#54, призыв + ссылка на билет). Выбор по funnel_stage получателя.
+
+    «Оплатил» = funnel_stage в PAID_STAGES (event_attended/client_*). Клиенты агентства
+    (whitelist) в выборку не попадают вовсе (event_recipients фильтрует w.phone IS NULL).
+    Неоплатившим ссылку шлём ВСЕГДА (allow_repeat_links=True): факт оплаты важнее дедупа
+    по тексту — «видел ссылку» ≠ «оплатил». Один day-of на лида (идемпотентность по kind).
+    """
+    kind = "remind_day"
+    tmpl_paid = await db.get_scenario_template(REMIND_DAY_SCENARIO)      # A: без ссылки
+    tmpl_unpaid = await db.get_scenario_template(REMIND_DAY_UNPAID_SCENARIO)  # B: со ссылкой
+    if not tmpl_paid or not tmpl_unpaid:
+        logger.error("day-of: нет шаблона %s/%s", REMIND_DAY_SCENARIO, REMIND_DAY_UNPAID_SCENARIO)
+        await escalation.notify_error("scheduler.event",
+                                      f"нет сценария {REMIND_DAY_SCENARIO}/{REMIND_DAY_UNPAID_SCENARIO}")
+        return 0
+    recipients = await db.event_recipients(list(funnel.EVENT_REMINDER_EXCLUDE_STAGES),
+                                           limit=EVENT_REMINDER_BATCH)
+    sent = 0
+    for ld in recipients:
+        phone = ld["phone"]
+        try:
+            if await db.event_reminder_sent(phone, kind, date_str):
+                continue  # один day-of на лида на эту дату (идемпотентность), любой шаблон
+            paid = ld.get("funnel_stage") in PAID_STAGES
+            bubbles = _bubbles(_fill_event(tmpl_paid if paid else tmpl_unpaid, settings_map))
+            ok = await sender.send(phone, bubbles, allow_repeat_links=not paid)
+            if ok == 0:
+                continue  # Wazzup не принял — маркер не логируем, повторим на след. тике
+            await db.log_event_reminder(phone, kind, date_str)
+            sent += 1
+            await _lead_pause(WARM_LEAD_PAUSE)  # антибан-пауза между лидами (без суточного лимита)
+        except Exception as e:
+            logger.exception("day-of reminder упал для %s", phone)
+            await escalation.notify_error("scheduler.event", repr(e), phone)
+    if sent:
+        logger.info("day-of reminder: отправлено %d (дата %s)", sent, date_str)
     return sent
 
 
@@ -198,6 +272,7 @@ async def run_videocall_reminders(now=None) -> int:
                 continue  # Wazzup не принял — не помечаем, повторим на след. тике
             await db.mark_videocall_reminded(phone)
             sent += 1
+            await _lead_pause(WARM_LEAD_PAUSE)  # антибан-пауза между лидами (без суточного лимита)
         except Exception as e:
             logger.exception("videocall reminder упал для %s", phone)
             await escalation.notify_error("scheduler.videocall", repr(e), phone)

@@ -105,12 +105,54 @@ export interface Stats {
 export interface EventSettings {
   eventActive: boolean;
   eventDate: string;
+  eventStart: string;
+  eventEnd: string;
   eventTime: string;
   eventAddress: string;
+  eventPriceMember: string;
+  eventPriceNonmember: string;
+  eventPriceOld: string;
   eventLink: string;
   courseLink: string;
   invitationUrl: string;
   invitationReady: boolean;
+}
+
+// ===== Медиа с ивентов (галерея фото/видео) =====
+export interface EventMediaItem {
+  id: number;
+  url: string;
+  mediaType: "image" | "video";
+  sizeBytes: number | null;
+  isActive: boolean;
+  createdAt: string | null;
+}
+
+// ===== Напоминание дня ивента (предпросмотр + ручная отправка) =====
+export interface DayOfPreview {
+  templateA: string[];
+  templateB: string[];
+}
+
+export interface DayOfRecipient {
+  phone: string;
+  name: string;
+  funnelStage: string;
+  funnelStageLabel: string;
+  template: "A" | "B";
+  alreadySent: boolean;
+  sentAt: string | null;
+}
+
+export interface DayOfRecipientsResponse {
+  recipients: DayOfRecipient[];
+  eventDate: string;
+}
+
+export interface DayOfSendResult {
+  sent: { phone: string; name: string; template: string }[];
+  duplicates: { phone: string; name: string; template: string; sentAt: string | null }[];
+  failed: { phone: string; name: string; reason: string }[];
 }
 
 export interface LeadsQuery {
@@ -120,4 +162,39 @@ export interface LeadsQuery {
   sort?: "recent" | "stage";
   limit?: number;
   offset?: number;
+}
+
+// ===== Тест переписки (/api/mini/test-chat) — песочница, не пишет в БД =====
+export interface TestChatProfile {
+  isSingle: boolean | null;
+  age: number | null;
+  profession: string | null;
+  city: string | null;
+  interest: string | null;
+  photoReceived: boolean;
+  funnelStage: string | null;
+  whatsappName: string;
+}
+
+export interface TestRagCandidate {
+  id: number;
+  score: number;
+  title: string | null;
+}
+
+export interface TestChatRequest {
+  leadProfile: TestChatProfile;
+  history: { sender: "lead" | "anna"; text: string }[];
+  message: string;
+}
+
+export interface TestChatResponse {
+  messages: string[];
+  extracted: Record<string, unknown>;
+  funnelStage: string | null;
+  usedScenarioId: number | null;
+  usedScenarioTitle: string | null;
+  action: string;
+  needsEscalation: boolean;
+  ragCandidates: TestRagCandidate[];
 }

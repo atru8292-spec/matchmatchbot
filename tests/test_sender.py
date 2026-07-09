@@ -445,9 +445,38 @@ class TestLinkPlaceholders:
 
     async def test_fills_event_vars(self, monkeypatch, db_pool):
         monkeypatch.setattr(sender.db, "get_settings", AsyncMock(return_value={
-            "event_men": "15", "event_women": "20", "event_date": "22 de julio"}))
-        out = await sender._fill_event_vars("[event_women] mujeres y [event_men] hombres, el [event_date]")
-        assert out == "20 mujeres y 15 hombres, el 22 de julio"
+            "event_address": "Roma Norte", "event_date": "22 de julio"}))
+        out = await sender._fill_event_vars("en [event_address], el [event_date]")
+        assert out == "en Roma Norte, el 22 de julio"
+
+    async def test_event_men_women_not_substituted(self, monkeypatch, db_pool):
+        # event_men/event_women убраны из переменных ивента — токен НЕ подставляется
+        # (шаблоны их больше не содержат; если вдруг встретится — остаётся как есть, не из БД).
+        get = AsyncMock(return_value={})
+        monkeypatch.setattr(sender.db, "get_settings", get)
+        out = await sender._fill_event_vars("Habrá [event_women] mujeres y [event_men] hombres")
+        assert out == "Habrá [event_women] mujeres y [event_men] hombres"
+        get.assert_not_called()  # нет поддерживаемых плейсхолдеров → в БД не ходим
+
+    async def test_fills_price_tokens(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings", AsyncMock(return_value={
+            "event_price_member": "4,000", "event_price_nonmember": "6,000"}))
+        out = await sender._fill_event_vars(
+            "no miembros [event_price_nonmember] MXN, miembros [event_price_member] MXN")
+        assert out == "no miembros 6,000 MXN, miembros 4,000 MXN"
+
+    async def test_promo_shown_when_old_price_set(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.db, "get_settings", AsyncMock(return_value={
+            "event_price_nonmember": "6,000", "event_price_old": "9,000"}))
+        out = await sender._fill_event_vars("[event_price_nonmember] MXN[event_promo]")
+        assert out == "6,000 MXN (antes 9,000)"
+
+    async def test_promo_hidden_when_old_price_empty(self, monkeypatch, db_pool):
+        # акция кончилась → event_price_old пусто → «(antes …)» исчезает целиком
+        monkeypatch.setattr(sender.db, "get_settings", AsyncMock(return_value={
+            "event_price_nonmember": "6,000", "event_price_old": ""}))
+        out = await sender._fill_event_vars("[event_price_nonmember] MXN[event_promo]")
+        assert out == "6,000 MXN"
 
     async def test_empty_event_var_becomes_blank(self, monkeypatch, db_pool):
         monkeypatch.setattr(sender.db, "get_settings", AsyncMock(return_value={"event_time": ""}))

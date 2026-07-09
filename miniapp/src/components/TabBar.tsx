@@ -1,13 +1,14 @@
-import { Users, UserCheck, CalendarHeart, BarChart3 } from "lucide-react";
+import { Users, UserCheck, CalendarHeart, BarChart3, FlaskConical } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-export type TabId = "leads" | "clients" | "event" | "stats";
+export type TabId = "leads" | "clients" | "event" | "stats" | "test";
 
 const TABS: { id: TabId; label: string; icon: typeof Users }[] = [
   { id: "leads", label: "Лиды", icon: Users },
   { id: "clients", label: "Клиенты", icon: UserCheck },
   { id: "event", label: "Ивент", icon: CalendarHeart },
   { id: "stats", label: "Статы", icon: BarChart3 },
+  { id: "test", label: "Тест", icon: FlaskConical },
 ];
 
 interface Props {

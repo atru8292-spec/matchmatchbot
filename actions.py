@@ -7,11 +7,16 @@ Stripe-вебхук вызывают confirm_payment (source различает 
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import db
+import gcal
 import sender
+from config import settings
 
 logger = logging.getLogger("matchmatch.actions")
+_CDMX = ZoneInfo("America/Mexico_City")
 
 INVITATION_URL_KEY = "invitation_url"
 INVITATION_READY_KEY = "invitation_ready"
@@ -40,6 +45,41 @@ async def maybe_send_invitation(phone: str) -> bool:
     return await sender.send_image(phone, s[INVITATION_URL_KEY])
 
 
+EVENT_PHOTO_COUNT = 3  # фото за раз (антибан)
+EVENT_VIDEO_COUNT = 1  # видео за раз (тяжёлое — одного достаточно)
+
+
+async def send_event_photos(phone: str) -> int:
+    """Прислать лиду до 3 случайных ФОТО с ивентов (если фото ещё не слали). Вернуть число."""
+    return await _send_event_media(phone, "image", EVENT_PHOTO_COUNT)
+
+
+async def send_event_video(phone: str) -> int:
+    """Прислать лиду 1 случайное ВИДЕО с ивента (если видео ещё не слали). Вернуть число."""
+    return await _send_event_media(phone, "video", EVENT_VIDEO_COUNT)
+
+
+async def _send_event_media(phone: str, media_type: str, count: int) -> int:
+    """Отправить медиа заданного типа с пер-типовым дедупом (не повторяем тип лиду).
+
+    Уже слали этот тип → 0 (пропуск). Нет медиа типа → 0. Отдельными сообщениями с
+    антибан-паузой (внутри send_media). Сбой не роняет основной ответ (ловит вызывающий).
+    """
+    if await db.event_media_sent(phone, media_type):
+        logger.info("медиа ивента (%s) уже слалось %s — пропуск (дедуп)", media_type, phone)
+        return 0
+    items = await db.random_event_media(media_type, count)
+    if not items:
+        logger.info("медиа ивента (%s) нет в пуле — нечего слать %s", media_type, phone)
+        return 0
+    sent = 0
+    for m in items:
+        if await sender.send_media(phone, m["storage_url"], m.get("media_type", media_type)):
+            sent += 1
+    logger.info("медиа ивента (%s): отправлено %d/%d %s", media_type, sent, len(items), phone)
+    return sent
+
+
 def stage_for_service(selected_service: str | None) -> str | None:
     """Стадия по selected_service лида (или None, если неоднозначно — спросить Аню)."""
     return SERVICE_TO_STAGE.get((selected_service or "").strip().lower())
@@ -56,5 +96,27 @@ async def confirm_payment(phone: str, target_stage: str, source: str = "manual")
     changed = await db.set_funnel_stage(phone, target_stage, meta={"payment": source})
     if changed and target_stage == "event_attended":
         await maybe_send_invitation(phone)
+        await _add_to_guest_list(phone)
     logger.info("оплата подтверждена [%s] → %s (source=%s, changed=%s)",
                 phone, target_stage, source, changed)
+
+
+async def _add_to_guest_list(phone: str) -> None:
+    """Добавить оплатившего ивент в гостевой список (Google Sheets 'Invitados').
+
+    Не критично: сбой Sheets (или не настроено) НЕ ломает подтверждение оплаты.
+    """
+    if not settings.google_sheet_id:
+        return
+    try:
+        lead = await db.get_lead_by_phone(phone)
+        if not lead:
+            return
+        name = lead.get("name") or lead.get("whatsapp_name") or ""
+        digits = "".join(c for c in (phone or "") if c.isdigit())
+        registered = datetime.now(_CDMX).strftime("%Y-%m-%d %H:%M")
+        await gcal.append_guest_row(name, ("+" + digits) if digits else "", "Pagado",
+                                    lead.get("interest") or "", registered)
+        logger.info("гостевой список: добавлен %s", phone)
+    except Exception:
+        logger.exception("guest list append failed [%s] (оплата уже подтверждена)", phone)

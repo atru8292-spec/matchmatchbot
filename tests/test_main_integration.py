@@ -734,7 +734,7 @@ class TestRunAI:
         monkeypatch.setattr(db, "get_scenario_title", title_mock)
         send_mock = AsyncMock(return_value=1)
         monkeypatch.setattr(main.sender, "send", send_mock)
-        monkeypatch.setattr(db, "arm_followup_if_missing", AsyncMock())  # блок 13
+        monkeypatch.setattr(db, "reset_followup_timer", AsyncMock())  # блок 13
         return gen_mock, update_mock, funnel_mock, block_mock, title_mock, send_mock
 
     # --- 1. respond + extracted → update_lead_fields вызван ---
@@ -849,7 +849,7 @@ class TestRunAI:
         with caplog.at_level(logging.INFO):
             await main._run_ai("wa_esc", {}, "quiero más info")
 
-        send_mock.assert_awaited_once_with("wa_esc", ["Te contactaré"])
+        send_mock.assert_awaited_once_with("wa_esc", ["Te contactaré"], allow_repeat_links=False)
         block_mock.assert_not_awaited()
         # _run_ai логирует "escalate" + "TODO-алерт Ане"
         assert "escalate" in caplog.text.lower() or "Ане" in caplog.text
@@ -1051,7 +1051,7 @@ class TestEscalationIntegration:
         monkeypatch.setattr(db, "block_lead", AsyncMock())
         monkeypatch.setattr(db, "get_scenario_title", AsyncMock(return_value="Хочу контакт девушки"))
         monkeypatch.setattr(main.sender, "send", AsyncMock(return_value=1))
-        monkeypatch.setattr(db, "arm_followup_if_missing", AsyncMock())  # блок 13
+        monkeypatch.setattr(db, "reset_followup_timer", AsyncMock())  # блок 13
         # Эскалация
         vip_mock = AsyncMock()
         block_mock = AsyncMock()
@@ -1593,6 +1593,22 @@ class TestPaymentClaimBranch:
         block.assert_not_awaited()          # стадию НЕ трогаем сами
 
 
+class TestOptoutBranch:
+    async def test_confirms_blocks_and_alerts(self, monkeypatch):
+        dec = _filters.Decision("optout", "opt-out", alert_manager=True)
+        send = AsyncMock(); monkeypatch.setattr(main.sender, "send", send)
+        block = AsyncMock(); monkeypatch.setattr(main.db, "block_lead", block)
+        alert = AsyncMock(); monkeypatch.setattr(main.escalation, "notify_optout", alert)
+        await main._apply_decision("wa_1", dec, {"phone": "wa_1"}, "no me escribas más")
+        # одно подтверждение лиду
+        send.assert_awaited_once()
+        assert send.call_args.args[1] == [main._OPTOUT_CONFIRM]
+        # do_not_contact навсегда (block_lead) + алерт Ане
+        block.assert_awaited_once()
+        assert "opt-out" in block.call_args.args[1]
+        alert.assert_awaited_once()
+
+
 class TestRunAiSendInvitation:
     async def test_send_invitation_triggers_maybe_send(self, monkeypatch):
         monkeypatch.setattr(main.ai, "generate_reply", AsyncMock(return_value={
@@ -1617,6 +1633,46 @@ class TestRunAiSendInvitation:
         inv.assert_not_awaited()
 
 
+class TestRunAiSendMedia:
+    def _reply(self, **flags):
+        base = {"messages": ["cómo se ve? mira 🤍"], "action": "respond", "funnel_stage": None,
+                "extracted": {}, "used_scenario_id": None, "needs_escalation": False,
+                "send_invitation": False, "send_event_photo": False, "send_event_video": False}
+        base.update(flags)
+        return base
+
+    async def test_video_sent_after_text_separately(self, monkeypatch):
+        """send_event_video=true → видео шлётся ОТДЕЛЬНО и ПОСЛЕ текста (порядок вызовов)."""
+        calls = []
+        monkeypatch.setattr(main.ai, "generate_reply", AsyncMock(return_value=self._reply(send_event_video=True)))
+        monkeypatch.setattr(main.db, "get_conversation_history", AsyncMock(return_value=[]))
+        async def rec_send(*a, **k): calls.append("text")
+        async def rec_vid(*a, **k): calls.append("video")
+        monkeypatch.setattr(main.sender, "send", rec_send)
+        monkeypatch.setattr(main.actions, "send_event_video", rec_vid)
+        monkeypatch.setattr(main.actions, "send_event_photos", AsyncMock())
+        await main._run_ai("wa_1", {"phone": "wa_1"}, "cómo se ve el evento?")
+        assert calls == ["text", "video"]
+
+    async def test_photo_tool_triggers_photos(self, monkeypatch):
+        monkeypatch.setattr(main.ai, "generate_reply", AsyncMock(return_value=self._reply(send_event_photo=True)))
+        monkeypatch.setattr(main.db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        ph = AsyncMock(); monkeypatch.setattr(main.actions, "send_event_photos", ph)
+        vid = AsyncMock(); monkeypatch.setattr(main.actions, "send_event_video", vid)
+        await main._run_ai("wa_1", {"phone": "wa_1"}, "mándame fotos")
+        ph.assert_awaited_once(); vid.assert_not_awaited()
+
+    async def test_no_media_when_both_flags_false(self, monkeypatch):
+        monkeypatch.setattr(main.ai, "generate_reply", AsyncMock(return_value=self._reply()))
+        monkeypatch.setattr(main.db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(main.sender, "send", AsyncMock())
+        ph = AsyncMock(); monkeypatch.setattr(main.actions, "send_event_photos", ph)
+        vid = AsyncMock(); monkeypatch.setattr(main.actions, "send_event_video", vid)
+        await main._run_ai("wa_1", {"phone": "wa_1"}, "hola")
+        ph.assert_not_awaited(); vid.assert_not_awaited()
+
+
 class TestProcessBurstWrapper:
     async def test_impl_exception_alerts_not_raises(self, monkeypatch):
         """Непойманный сбой в _process_burst_impl → notify_error, наружу не пробрасывается."""
@@ -1628,14 +1684,14 @@ class TestProcessBurstWrapper:
 
 
 class TestRunAiArmsFollowup:
-    async def test_arms_followup_when_timer_missing(self, monkeypatch):
-        """Лид остался 'new' (AI не сменил стадию) → взводим таймер догона."""
+    async def test_resets_followup_timer_on_reply(self, monkeypatch):
+        """Любой ответ лида → СБРАСываем таймер догона (не нудим активному)."""
         monkeypatch.setattr(main.ai, "generate_reply", AsyncMock(return_value={
             "messages": ["hola"], "action": "respond", "funnel_stage": None,
             "extracted": {}, "used_scenario_id": None, "needs_escalation": False,
             "send_invitation": False}))
         monkeypatch.setattr(main.db, "get_conversation_history", AsyncMock(return_value=[]))
         monkeypatch.setattr(main.sender, "send", AsyncMock())
-        arm = AsyncMock(); monkeypatch.setattr(main.db, "arm_followup_if_missing", arm)
+        reset = AsyncMock(); monkeypatch.setattr(main.db, "reset_followup_timer", reset)
         await main._run_ai("wa_1", {"phone": "wa_1", "funnel_stage": "new"}, "hola")
-        arm.assert_awaited_once_with("wa_1", main.funnel.FOLLOWUP_FIRST_DELAY_HOURS["new"])
+        reset.assert_awaited_once_with("wa_1", main.funnel.FOLLOWUP_FIRST_DELAY_HOURS["new"])

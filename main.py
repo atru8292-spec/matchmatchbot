@@ -9,12 +9,14 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 import actions
 import ai
+import booking
 import db
 import escalation
 import filters
@@ -35,6 +37,9 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("matchmatch")
+
+# Подтверждение при opt-out (лид попросил не писать). Одно тёплое сообщение, дальше тишина.
+_OPTOUT_CONFIRM = "Listo, ya no te voy a escribir más. Te deseo lo mejor 🤍"
 
 # Debouncer создаётся в lifespan (склейка серии быстрых сообщений одного лида).
 debouncer: Debouncer | None = None
@@ -216,6 +221,16 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
         logger.info("РЕШЕНИЕ silent [%s]: %s", phone, decision.reason)
         return
 
+    if decision.action == "optout":
+        # Лид явно попросил не писать. Одно тёплое подтверждение + do_not_contact навсегда
+        # (block_lead: флаг + стадия lost + гасит next_followup_at). Дальше — полная тишина
+        # на всех путях (follow-up/scheduled/ручная отправка уважают do_not_contact).
+        logger.info("РЕШЕНИЕ optout [%s]", phone)
+        await sender.send(phone, [_OPTOUT_CONFIRM])
+        await db.block_lead(phone, "opt-out: лид попросил не писать")
+        await escalation.notify_optout(lead)
+        return
+
     if decision.action == "payment_claim":
         # Лид сообщил об оплате (блок 13). Бот НЕ меняет стадию сам — короткий ack +
         # эскалация Ане с кнопкой «Подтвердить оплату». Реальное действие — confirm_payment.
@@ -280,6 +295,13 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
         except Exception:
             logger.exception("не смог обновить extracted для %s: %s", phone, result["extracted"])
 
+    # #53 автозапись видеозвонка: AI распарсил конкретный день+час → бронируем сами
+    # (Google-событие + Meet + подтверждение лиду), без участия Ани. Обрабатываем ДО
+    # обычной ветки action, т.к. сообщение лиду формируется детерминированно по исходу.
+    if result.get("proposed_videocall_at"):
+        await _handle_videocall_booking(phone, lead, combined, result["proposed_videocall_at"])
+        return
+
     action = result["action"]
     messages = result["messages"]
 
@@ -290,7 +312,8 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
         title = await db.get_scenario_title(result["used_scenario_id"])
         reason = f"AI: {title}" if title else "AI-блок по сценарию"
         await db.block_lead(phone, reason)
-        await sender.send(phone, messages)  # прощальное сообщение лиду
+        await sender.send(phone, messages,  # прощальное сообщение лиду
+                          allow_repeat_links=sender._is_link_request(combined))
         logger.info("AI block [%s]: %s (scenario=%s)", phone, reason, result["used_scenario_id"])
         await escalation.notify_block(lead, title or "заблокирован по сценарию")
         return
@@ -300,13 +323,15 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
         await db.set_funnel_stage(phone, result["funnel_stage"],
                                   meta={"scenario_id": result["used_scenario_id"]})
 
-    await sender.send(phone, messages)  # messages лиду
-    # Блок 13: взвести догон, если таймер ещё не стоит (лид застрял на 'new' — стадия
-    # ставится дефолтом при INSERT, не через set_funnel_stage). Существующий таймер не трогаем.
+    await sender.send(phone, messages,  # messages лиду
+                      allow_repeat_links=sender._is_link_request(combined))
+    # Антибан-догон: СБРАСЫВАЕМ таймер тишины на любом ответе лида (он активен → не нудим),
+    # а не только когда таймер пуст. Так догон уходит лишь после реального молчания N дней
+    # (пробел (а): раньше активный лид в той же стадии всё равно получал догон).
     stage_now = result["funnel_stage"] or lead.get("funnel_stage")
     hours = funnel.FOLLOWUP_FIRST_DELAY_HOURS.get(stage_now)
     if hours:
-        await db.arm_followup_if_missing(phone, hours)
+        await db.reset_followup_timer(phone, hours)
     # Блок 13: лид спросил детали/локацию ивента (AI выставил send_invitation) →
     # шлём картинку-приглашение, если Аня отметила её готовой (иначе тихо пропустим).
     # Обёрнуто: сбой отправки картинки не должен ронять уже успешный ответ лиду.
@@ -315,15 +340,59 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
             await actions.maybe_send_invitation(phone)
         except Exception:
             logger.exception("maybe_send_invitation упал [%s] (ответ лиду уже отправлен)", phone)
+    # Медиа прошлых ивентов — два независимых инструмента AI (фото / видео).
+    # Отдельными сообщениями ПОСЛЕ текста; пер-типовой дедуп внутри; сбой не роняет ответ.
+    if result.get("send_event_photo"):
+        try:
+            await actions.send_event_photos(phone)
+        except Exception:
+            logger.exception("send_event_photos упал [%s] (ответ лиду уже отправлен)", phone)
+    if result.get("send_event_video"):
+        try:
+            await actions.send_event_video(phone)
+        except Exception:
+            logger.exception("send_event_video упал [%s] (ответ лиду уже отправлен)", phone)
     if action == "escalate":
         # НЕ молчаливо: лид получил messages, плюс алерт Ане (продолжить лично).
         # Причина — название сценария; фолбэк если сценарий не определён.
         title = await db.get_scenario_title(result["used_scenario_id"])
         logger.info("AI escalate [%s] (scenario=%s)", phone, result["used_scenario_id"])
+        try:
+            await db.update_lead_fields(phone, mode="manual")
+        except Exception:
+            logger.exception("не смог поставить manual после эскалации [%s]", phone)
         await escalation.notify_escalation(lead, title or "Нужна твоя помощь", combined)
     else:
         logger.info("AI respond [%s] (scenario=%s, funnel=%s)",
                     phone, result["used_scenario_id"], result["funnel_stage"])
+
+
+async def _handle_videocall_booking(phone: str, lead: dict, combined: str,
+                                    proposed_iso: str) -> None:
+    """#53 автозапись: забронировать/перенести звонок и подтвердить лиду.
+
+    Полностью автомат. Каждый исход (booked/reschedule/vague/past/out_of_hours/busy) —
+    детерминированное сообщение лиду. ERROR (сбой Google/не настроено) → фолбэк: тёплый
+    ответ + эскалация Ане (лид не зависает).
+    """
+    now = datetime.now(booking.CDMX)
+    res = await booking.resolve_and_book(lead, proposed_iso, now)
+    await sender.send(phone, [booking.message_for(res)])
+    logger.info("booking [%s]: %s → %s", phone, proposed_iso, res.outcome.value)
+
+    if res.outcome in (booking.Outcome.BOOKED, booking.Outcome.RESCHEDULED):
+        await db.set_funnel_stage(phone, "videocall_set",
+                                  meta={"videocall_at": res.when.isoformat()})
+        # Алерт Ане: бот забронировал звонок → она отправляет лиду ссылку вручную.
+        await escalation.notify_videocall_booked(lead, booking.fmt_es(res.when))
+    elif res.outcome == booking.Outcome.ERROR:
+        # Фолбэк как у старого #53: назначает Аня вручную.
+        try:
+            await db.update_lead_fields(phone, mode="manual")
+        except Exception:
+            logger.exception("booking ERROR: не смог manual [%s]", phone)
+        await escalation.notify_escalation(
+            lead, "Автозапись звонка не удалась — назначь время вручную", combined)
 
 
 @asynccontextmanager

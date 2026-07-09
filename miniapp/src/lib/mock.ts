@@ -155,8 +155,11 @@ export function mockLeadsCsv(q: LeadsQuery): string {
 
 // Моковые настройки ивента (изменяемый стор — saveEvent обновляет).
 let mockEventStore: EventSettings = {
-  eventActive: true, eventDate: "2026-08-15", eventTime: "20:30",
-  eventAddress: "Av. Reforma 123, CDMX", eventLink: "https://matchmatchagency.com/evento",
+  eventActive: true, eventDate: "2026-08-15",
+  eventStart: "20:30", eventEnd: "00:00", eventTime: "20:30",
+  eventAddress: "Av. Reforma 123, CDMX",
+  eventPriceMember: "4,000", eventPriceNonmember: "6,000", eventPriceOld: "9,000",
+  eventLink: "https://matchmatchagency.com/evento",
   courseLink: "https://matchmatchagency.com/cursos",
   invitationUrl: "", invitationReady: false,
 };
