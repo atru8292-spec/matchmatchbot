@@ -210,7 +210,12 @@ def _fallback_reply() -> dict:
     }
 
 
-_EXTRACTED_KEYS = ("age", "profession", "is_single", "city", "interest")
+# Поля из чат-квалификации + анкеты-в-чате. Анкетные (name/last_name/email/date_of_birth/
+# country/business_link/desired_partner_age) AI извлекает при сборе анкеты после питча.
+# date_of_birth AI отдаёт строкой ISO — в date конвертирует main перед записью в БД.
+_EXTRACTED_KEYS = ("age", "profession", "is_single", "city", "interest",
+                   "name", "last_name", "email", "date_of_birth", "country",
+                   "business_link", "desired_partner_age")
 _VALID_ACTIONS = {"respond", "block", "escalate"}
 
 
@@ -297,7 +302,10 @@ def _build_user_context(lead: dict, history: list[dict], user_text: str,
     """Собрать пользовательский контекст для AI: профиль + история + RAG-сценарии + текст."""
     profile = {k: lead.get(k) for k in
                ("age", "profession", "is_single", "city", "interest", "funnel_stage",
-                "photo_received", "whatsapp_name")}
+                "photo_received", "whatsapp_name",
+                # анкетные поля — чтобы AI спрашивал только недостающее, не повторялся
+                "name", "last_name", "email", "date_of_birth", "country",
+                "business_link", "desired_partner_age")}
     hist = [{"sender": m.get("sender"), "text": m.get("text")} for m in history[-10:]]
     if scenarios:
         rag = [{"id": s["id"], "mode": s["mode"], "template_es": s["template_es"],
@@ -313,7 +321,7 @@ def _build_user_context(lead: dict, history: list[dict], user_text: str,
         "conversation_history": hist,
         "rag_scenarios": rag,
         "lead_message": user_text,
-    }, ensure_ascii=False)
+    }, ensure_ascii=False, default=str)  # default=str: date_of_birth (date) → строка
 
 
 async def _call_openai(user_context: str) -> dict:

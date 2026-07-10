@@ -52,17 +52,42 @@ FOLLOWUP_FIRST_DELAY_HOURS: dict[str, int] = {
 }
 
 
-# Лестница фоллоу-апов (блок 13). Индекс = followup_sent_count (сколько уже слали):
-# 0 → 1-я попытка и т.д. Кортеж (scenario_id, next_delay_days) — какой сценарий слать
-# и через сколько дней ставить следующий next_followup_at (None → больше не догоняем).
-# Первый догон ставится при смене стадии из FOLLOWUP_FIRST_DELAY_HOURS, дальше +5/+10.
-# Цену/ценность ($1,400, сценарий 38) показываем на 2-й ступени (день ~7), не в конце.
-FOLLOWUP_LADDER: tuple[tuple[int, int | None], ...] = (
-    (36, 5),      # 1-я: мягко «ещё интересно?»
-    (38, 10),     # 2-я: ценность пакета + $1,400 (раньше — не в конце)
-    (33, None),   # 3-я (последняя): напоминание про анкету
-)
-MAX_FOLLOWUPS = len(FOLLOWUP_LADDER)
+# Интервалы между догонами (дни до следующего next_followup_at), по номеру попытки.
+# Индекс = followup_sent_count (0 → после 1-й попытки ждём 5 дней и т.д.). None → стоп.
+# Первый next_followup_at ставится при смене стадии из FOLLOWUP_FIRST_DELAY_HOURS.
+# КАКОЙ сценарий слать выбирает followup_scenario_for(lead) по стадии/анкете (не по позиции).
+FOLLOWUP_INTERVALS: tuple[int | None, ...] = (5, 10, None)
+MAX_FOLLOWUPS = len(FOLLOWUP_INTERVALS)
+
+# Поля, собираемые ТОЛЬКО в анкете-в-чате (не в обычной квалификации) — по ним понимаем,
+# начата/готова ли анкета, чтобы выбрать правильный догон.
+ANKETA_CORE_FIELDS = ("email", "date_of_birth", "country", "desired_partner_age")
+
+
+def anketa_complete(lead: dict) -> bool:
+    """Все ключевые анкетные поля собраны."""
+    return all(lead.get(f) for f in ANKETA_CORE_FIELDS)
+
+
+def followup_scenario_for(lead: dict) -> int | None:
+    """Какой сценарий-догон слать по состоянию лида (стадийная логика, не слепая лестница).
+
+    None → не догоняем этим механизмом (звонок назначен — напоминает #49).
+    - старый контакт (tag 'old_base') → #38 (сегмент ПУСТ сейчас — фактически не сработает)
+    - звонок назначен (videocall_set) → None
+    - анкета готова, звонок не назначен → #33 «agendemos la videollamada»
+    - анкета начата, но не полна → #32 «faltan un par de datos»
+    - холодный/ранний молчун (анкета не начата) → #36 «sigues buscando?» + мягкий опт-аут
+    """
+    if "old_base" in (lead.get("tags") or []):
+        return 38
+    if lead.get("funnel_stage") == "videocall_set":
+        return None
+    if anketa_complete(lead):
+        return 33
+    if any(lead.get(f) for f in ANKETA_CORE_FIELDS):
+        return 32
+    return 36
 
 # Напоминания об ивенте НЕ шлём тем, кто уже в этих стадиях (отказ/не подошёл).
 EVENT_REMINDER_EXCLUDE_STAGES: tuple[str, ...] = ("lost", "rejected")

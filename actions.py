@@ -6,11 +6,13 @@ Stripe-вебхук вызывают confirm_payment (source различает 
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import db
+import funnel
 import gcal
 import sender
 from config import settings
@@ -99,6 +101,43 @@ async def confirm_payment(phone: str, target_stage: str, source: str = "manual")
         await _add_to_guest_list(phone)
     logger.info("оплата подтверждена [%s] → %s (source=%s, changed=%s)",
                 phone, target_stage, source, changed)
+
+
+async def save_anketa_if_complete(phone: str) -> bool:
+    """Если анкета лида собрана и ещё не записана — добавить строку в Sheet «Solicitudes».
+
+    Гибрид чат→Sheet: базовые колонки + Extra(JSON) под будущие поля. Дедуп: extra_data.
+    anketa_saved (одна строка на лида). Не критично: сбой не роняет ответ (ловит вызывающий).
+    Вернуть True если записали.
+    """
+    if not settings.google_sheet_id:
+        return False
+    lead = await db.get_lead_by_phone(phone)
+    if not lead or not funnel.anketa_complete(lead):
+        return False
+    if await db.anketa_saved(phone):
+        return False
+    full_name = " ".join(x for x in [lead.get("name"), lead.get("last_name")] if x)
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    dob = lead.get("date_of_birth")
+    dob_s = dob.isoformat() if hasattr(dob, "isoformat") else (dob or "")
+    marital = "Soltero" if lead.get("is_single") else (lead.get("marital_status") or "")
+    # Extra(JSON) — поля из чат-квалификации + запас под будущие поля анкеты
+    extra = json.dumps({"marital_status": marital, "profession": lead.get("profession") or ""},
+                       ensure_ascii=False)
+    registered = datetime.now(_CDMX).strftime("%Y-%m-%d %H:%M")
+    try:
+        await gcal.append_anketa_row(
+            full_name, lead.get("email") or "", ("+" + digits) if digits else "",
+            dob_s, lead.get("city") or "", lead.get("country") or "",
+            lead.get("business_link") or "", str(lead.get("desired_partner_age") or ""),
+            lead.get("interest") or "", extra, registered)
+        await db.mark_anketa_saved(phone)
+        logger.info("анкета записана в Sheet Solicitudes: %s", phone)
+        return True
+    except Exception:
+        logger.exception("save_anketa_if_complete упал [%s]", phone)
+        return False
 
 
 async def _add_to_guest_list(phone: str) -> None:

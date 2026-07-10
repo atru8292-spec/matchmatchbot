@@ -297,3 +297,69 @@ class TestEventMediaActions:
         assert r51["send_event_video"] is True and r51["send_event_photo"] is False
         r39 = ai._fixed_reply({"id": 39, "template_es": "no descuentos", "mode": "bot_auto"})
         assert r39["send_event_video"] is False   # прочие фикс-сценарии — без видео
+
+
+# ===== Анкета-в-чате → Google Sheet =====
+
+class TestAnketa:
+    async def test_saves_when_complete_and_not_yet_saved(self, monkeypatch):
+        import actions, funnel
+        lead = {"phone": "wa_52155", "name": "Diego", "last_name": "Herrera",
+                "email": "d@x.com", "date_of_birth": "1988-05-12", "city": "CDMX",
+                "country": "México", "business_link": "linkedin.com/in/d",
+                "desired_partner_age": "25-35", "is_single": True, "profession": "arquitecto",
+                "interest": "agency"}
+        monkeypatch.setattr(actions.settings, "google_sheet_id", "sheet123")
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=lead))
+        monkeypatch.setattr(db, "anketa_saved", AsyncMock(return_value=False))
+        append = AsyncMock(); monkeypatch.setattr(actions.gcal, "append_anketa_row", append)
+        mark = AsyncMock(); monkeypatch.setattr(db, "mark_anketa_saved", mark)
+        ok = await actions.save_anketa_if_complete("wa_52155")
+        assert ok is True
+        append.assert_awaited_once()
+        # имя = name+last_name; email проброшен
+        args = append.call_args.args
+        assert args[0] == "Diego Herrera" and args[1] == "d@x.com"
+        mark.assert_awaited_once_with("wa_52155")
+
+    async def test_skips_when_incomplete(self, monkeypatch):
+        import actions
+        lead = {"phone": "wa_1", "email": "d@x.com"}  # не хватает полей
+        monkeypatch.setattr(actions.settings, "google_sheet_id", "s")
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=lead))
+        append = AsyncMock(); monkeypatch.setattr(actions.gcal, "append_anketa_row", append)
+        assert await actions.save_anketa_if_complete("wa_1") is False
+        append.assert_not_called()
+
+    async def test_dedup_skips_if_already_saved(self, monkeypatch):
+        import actions
+        lead = {"phone": "wa_1", "name": "D", "email": "d@x.com", "date_of_birth": "1988-05-12",
+                "country": "MX", "desired_partner_age": "25-35"}
+        monkeypatch.setattr(actions.settings, "google_sheet_id", "s")
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=lead))
+        monkeypatch.setattr(db, "anketa_saved", AsyncMock(return_value=True))  # уже писали
+        append = AsyncMock(); monkeypatch.setattr(actions.gcal, "append_anketa_row", append)
+        assert await actions.save_anketa_if_complete("wa_1") is False
+        append.assert_not_called()
+
+    def test_anketa_complete_helper(self):
+        import funnel
+        assert funnel.anketa_complete({"email": "a", "date_of_birth": "b", "country": "c",
+                                       "desired_partner_age": "d"}) is True
+        assert funnel.anketa_complete({"email": "a"}) is False
+
+    def test_parse_dob(self):
+        import main
+        from datetime import date
+        assert main._parse_dob("1988-05-12") == date(1988, 5, 12)
+        assert main._parse_dob("12/05/1988") == date(1988, 5, 12)
+        assert main._parse_dob("no soy fecha") is None
+
+    def test_ai_extracts_anketa_fields(self):
+        import ai
+        out = ai._validate_output({"messages": ["ok"], "extracted": {
+            "email": "d@x.com", "date_of_birth": "1988-05-12", "country": "México",
+            "desired_partner_age": "25-35", "last_name": "Herrera"}})
+        ex = out["extracted"]
+        assert ex["email"] == "d@x.com" and ex["date_of_birth"] == "1988-05-12"
+        assert ex["country"] == "México" and ex["last_name"] == "Herrera"

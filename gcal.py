@@ -30,6 +30,13 @@ DURATION_MIN = 30
 GUEST_SHEET = "Invitados"
 GUEST_HEADERS = ["Nombre", "Teléfono", "Estado de pago", "Interés", "Fecha de registro"]
 
+# Анкеты лидов (анкета-в-чате). Гибкая схема: базовые колонки + «Extra (JSON)» под будущие
+# поля анкеты, которых мы пока не знаем — новые поля не потребуют менять структуру таблицы.
+ANKETA_SHEET = "Solicitudes"
+ANKETA_HEADERS = ["Nombre completo", "Email", "Teléfono", "Fecha de nacimiento", "Ciudad",
+                  "País de origen", "LinkedIn/Negocio", "Edad deseada pareja", "Interés",
+                  "Extra (JSON)", "Fecha de registro"]
+
 _calendar = None
 _sheets = None
 
@@ -125,25 +132,48 @@ async def append_guest_row(name: str, phone: str, status: str, interest: str,
     await asyncio.to_thread(_append_guest_row_sync, [name, phone, status, interest, registered])
 
 
-def _ensure_guest_sheet_sync() -> None:
+def _col_letter(n: int) -> str:
+    """Номер колонки (1-based) → буква (1→A … 26→Z, 27→AA). Хватает на любую схему."""
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _ensure_sheet_sync(title: str, headers: list) -> None:
+    """Создать лист + строку заголовков, если листа/заголовков ещё нет. Идемпотентно."""
     ss = _sheets.spreadsheets()
     meta = ss.get(spreadsheetId=settings.google_sheet_id).execute()
-    titles = [s["properties"]["title"] for s in meta.get("sheets", [])]
-    if GUEST_SHEET not in titles:
+    if title not in [s["properties"]["title"] for s in meta.get("sheets", [])]:
         ss.batchUpdate(spreadsheetId=settings.google_sheet_id, body={
-            "requests": [{"addSheet": {"properties": {"title": GUEST_SHEET}}}]}).execute()
-    got = ss.values().get(spreadsheetId=settings.google_sheet_id,
-                          range=f"{GUEST_SHEET}!A1:E1").execute()
-    if not got.get("values"):
-        ss.values().update(
-            spreadsheetId=settings.google_sheet_id, range=f"{GUEST_SHEET}!A1:E1",
-            valueInputOption="RAW", body={"values": [GUEST_HEADERS]}).execute()
+            "requests": [{"addSheet": {"properties": {"title": title}}}]}).execute()
+    rng = f"{title}!A1:{_col_letter(len(headers))}1"
+    if not ss.values().get(spreadsheetId=settings.google_sheet_id, range=rng).execute().get("values"):
+        ss.values().update(spreadsheetId=settings.google_sheet_id, range=rng,
+                           valueInputOption="RAW", body={"values": [headers]}).execute()
+
+
+def _append_row_sync(title: str, headers: list, row: list) -> None:
+    _ensure_clients()
+    _ensure_sheet_sync(title, headers)
+    last = _col_letter(len(headers))
+    _sheets.spreadsheets().values().append(
+        spreadsheetId=settings.google_sheet_id, range=f"{title}!A:{last}",
+        valueInputOption="RAW", insertDataOption="INSERT_ROWS",
+        body={"values": [row]}).execute()
 
 
 def _append_guest_row_sync(row: list) -> None:
-    _ensure_clients()
-    _ensure_guest_sheet_sync()
-    _sheets.spreadsheets().values().append(
-        spreadsheetId=settings.google_sheet_id, range=f"{GUEST_SHEET}!A:E",
-        valueInputOption="RAW", insertDataOption="INSERT_ROWS",
-        body={"values": [row]}).execute()
+    _append_row_sync(GUEST_SHEET, GUEST_HEADERS, row)
+
+
+async def append_anketa_row(name: str, email: str, phone: str, dob: str, city: str,
+                            country: str, business: str, desired_age: str, interest: str,
+                            extra_json: str, registered: str) -> None:
+    """Добавить строку анкеты лида в лист Solicitudes (создаёт лист/заголовки, если пусто).
+
+    Гибкая схема: базовые колонки + Extra(JSON) под будущие поля (не ломает структуру)."""
+    await asyncio.to_thread(_append_row_sync, ANKETA_SHEET, ANKETA_HEADERS,
+                            [name, email, phone, dob, city, country, business, desired_age,
+                             interest, extra_json, registered])

@@ -355,7 +355,9 @@ async def due_followups(no_followup_stages: list[str], max_followups: int,
     try:
         rows = await _get_pool().fetch(
             "SELECT l.phone, l.funnel_stage, COALESCE(l.followup_sent_count, 0) AS followup_sent_count, "
-            "       l.whatsapp_name, l.name "
+            "       l.whatsapp_name, l.name, "
+            # анкета-сигналы + звонок + теги → для стадийного выбора догона (funnel.followup_scenario_for)
+            "       l.email, l.date_of_birth, l.country, l.desired_partner_age, l.videocall_at, l.tags "
             "FROM leads l LEFT JOIN bot_whitelist w ON w.phone = l.phone "
             "WHERE l.next_followup_at IS NOT NULL AND l.next_followup_at <= now() "
             "  AND l.mode = 'auto' AND COALESCE(l.do_not_contact, false) = false "
@@ -370,6 +372,32 @@ async def due_followups(no_followup_stages: list[str], max_followups: int,
         logger.exception("due_followups failed")
         raise
     return [dict(r) for r in rows]
+
+
+async def anketa_saved(phone: str) -> bool:
+    """Записана ли уже анкета лида в Google Sheet (дедуп: extra_data.anketa_saved).
+
+    Сбой → False (лучше записать повторно, чем потерять; но обычно дедуп сработает)."""
+    try:
+        v = await _get_pool().fetchval(
+            "SELECT COALESCE((extra_data->>'anketa_saved')::boolean, false) "
+            "FROM leads WHERE phone = $1", phone)
+        return bool(v)
+    except Exception:
+        logger.exception("anketa_saved failed: phone=%s", phone)
+        return False
+
+
+async def mark_anketa_saved(phone: str) -> None:
+    """Пометить, что анкета лида записана в Sheet (extra_data.anketa_saved=true)."""
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET extra_data = COALESCE(extra_data, '{}'::jsonb) "
+            "|| '{\"anketa_saved\": true}'::jsonb, updated_at = now() WHERE phone = $1",
+            phone)
+    except Exception:
+        logger.exception("mark_anketa_saved failed: phone=%s", phone)
+        raise
 
 
 async def arm_followup_if_missing(phone: str, hours: int) -> None:

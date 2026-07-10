@@ -45,10 +45,10 @@ class TestFillEvent:
 # ===== run_followups =====
 
 class TestRunFollowups:
-    async def test_sends_scenario_by_ladder_and_marks(self, monkeypatch):
-        """followup_sent_count=0 → 1-я ступень лестницы (сценарий 36), ставит next через 5 дней."""
+    async def test_stage_based_scenario_and_marks(self, monkeypatch):
+        """Холодный молчун (анкета не начата) → #36; next через 5 дней (1-й интервал)."""
         lead = {"phone": "wa_1", "funnel_stage": "qualified", "followup_sent_count": 0,
-                "whatsapp_name": "X", "name": None}
+                "whatsapp_name": "X", "name": None}  # без анкета-полей → #36
         monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[lead]))
         monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola 🤍"))
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
@@ -57,12 +57,27 @@ class TestRunFollowups:
         n = await scheduler.run_followups()
         assert n == 1
         send.assert_awaited_once()
-        # сценарий 1-й ступени
-        scen_id = db.get_scenario_template.call_args.args[0]
-        assert scen_id == funnel.FOLLOWUP_LADDER[0][0]
-        # next_followup_at задан (не None для 1-й ступени)
-        assert mark.call_args.args[0] == "wa_1"
-        assert mark.call_args.args[1] is not None
+        assert db.get_scenario_template.call_args.args[0] == 36   # стадийный выбор → #36
+        assert mark.call_args.args[0] == "wa_1" and mark.call_args.args[1] is not None
+
+    async def test_stage_selects_by_anketa_state(self, monkeypatch):
+        """Анкета начата → #32; анкета готова → #33; звонок назначен → пропуск."""
+        started = {"phone": "wa_1", "funnel_stage": "pitched", "followup_sent_count": 0,
+                   "whatsapp_name": None, "name": None, "email": "a@b.com"}
+        complete = {"phone": "wa_2", "funnel_stage": "pitched", "followup_sent_count": 0,
+                    "whatsapp_name": None, "name": None, "email": "a@b.com",
+                    "date_of_birth": "x", "country": "MX", "desired_partner_age": "25-35"}
+        booked = {"phone": "wa_3", "funnel_stage": "videocall_set", "followup_sent_count": 0,
+                  "whatsapp_name": None, "name": None}
+        picked = []
+        async def tmpl(sid): picked.append(sid); return "Hola"
+        monkeypatch.setattr(db, "get_scenario_template", tmpl)
+        monkeypatch.setattr(sender, "send", AsyncMock(return_value=1))
+        monkeypatch.setattr(db, "mark_followup_sent", AsyncMock())
+        monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[started, complete, booked]))
+        n = await scheduler.run_followups()
+        assert picked == [32, 33]   # #32 (started), #33 (complete); booked → пропущен
+        assert n == 2
 
     async def test_send_failure_does_not_mark(self, monkeypatch):
         """Wazzup не принял (send=0) → followup НЕ помечается (повтор на след. тике)."""

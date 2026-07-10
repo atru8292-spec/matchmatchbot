@@ -41,6 +41,17 @@ logger = logging.getLogger("matchmatch")
 # Подтверждение при opt-out (лид попросил не писать). Одно тёплое сообщение, дальше тишина.
 _OPTOUT_CONFIRM = "Listo, ya no te voy a escribir más. Te deseo lo mejor 🤍"
 
+
+def _parse_dob(s: str):
+    """Строка даты рождения от AI → date. ISO (AAAA-MM-DD) + пара частых форматов. None если не смог."""
+    s = (s or "").strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
 # Debouncer создаётся в lifespan (склейка серии быстрых сообщений одного лида).
 debouncer: Debouncer | None = None
 # Таск планировщика (блок 13): фоллоу-апы + напоминания об ивенте. Отменяется в shutdown.
@@ -287,13 +298,25 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
     history = await db.get_conversation_history(phone, 15)
     result = await ai.generate_reply(lead, history, combined)
 
-    # 1. Извлечённые поля лида (age/profession/is_single/city/interest) — уже
-    #    провалидированы в ai (только реальные непустые поля из whitelist LEAD_COLUMNS).
+    # 1. Извлечённые поля лида — уже провалидированы в ai (whitelist LEAD_COLUMNS).
+    #    date_of_birth AI отдаёт строкой ISO → конвертируем в date для типизированной колонки.
     if result["extracted"]:
+        extracted = dict(result["extracted"])
+        if isinstance(extracted.get("date_of_birth"), str):
+            dob = _parse_dob(extracted["date_of_birth"])
+            if dob is not None:
+                extracted["date_of_birth"] = dob
+            else:
+                extracted.pop("date_of_birth", None)  # не распарсили — пропускаем, AI переспросит
         try:
-            await db.update_lead_fields(phone, **result["extracted"])
+            await db.update_lead_fields(phone, **extracted)
         except Exception:
-            logger.exception("не смог обновить extracted для %s: %s", phone, result["extracted"])
+            logger.exception("не смог обновить extracted для %s: %s", phone, extracted)
+        # Анкета собрана целиком → пишем в Google Sheet (дедуп внутри; сбой не роняет ответ).
+        try:
+            await actions.save_anketa_if_complete(phone)
+        except Exception:
+            logger.exception("save_anketa_if_complete упал [%s]", phone)
 
     # #53 автозапись видеозвонка: AI распарсил конкретный день+час → бронируем сами
     # (Google-событие + Meet + подтверждение лиду), без участия Ани. Обрабатываем ДО

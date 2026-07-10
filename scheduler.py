@@ -109,9 +109,14 @@ async def run_followups() -> int:
         phone = ld["phone"]
         try:
             count = ld["followup_sent_count"]
-            if count >= len(funnel.FOLLOWUP_LADDER):
+            if count >= funnel.MAX_FOLLOWUPS:
                 continue  # подстраховка (query и так фильтрует < MAX)
-            scenario_id, next_days = funnel.FOLLOWUP_LADDER[count]
+            # Стадийный выбор: какой догон слать зависит от состояния лида (анкета/звонок/
+            # холодный), а не от позиции в лестнице. None → не догоняем (звонок назначен).
+            scenario_id = funnel.followup_scenario_for(ld)
+            if scenario_id is None:
+                continue
+            next_days = funnel.FOLLOWUP_INTERVALS[count]
             tmpl = await db.get_scenario_template(scenario_id)
             if not tmpl:
                 logger.error("followup: нет template сценария %s", scenario_id)
