@@ -19,6 +19,7 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 
+import actions
 import db
 import escalation
 import funnel
@@ -162,17 +163,19 @@ async def run_event_reminders(today=None) -> int:
 
     today = today or datetime.now(timezone.utc).date()
     if today == event_date - timedelta(days=1):
-        return await _send_event_batch("remind_1d", REMIND_1D_SCENARIO, s, date_str)
+        # T-1: разогрев + FOMO-фото атмосферы прошлых ивентов.
+        return await _send_event_batch("remind_1d", REMIND_1D_SCENARIO, s, date_str,
+                                       attach_photos=True)
     if today == event_date:
         return await _send_event_daytime(s, date_str)
     if today == event_date + timedelta(days=1):
-        # Утренний check-in на следующий день после ивента (сценарий 23).
+        # Утренний check-in на следующий день после ивента (сценарий 23) — без медиа (ивент прошёл).
         return await _send_event_batch("checkin_morning", CHECKIN_MORNING_SCENARIO, s, date_str)
     return 0
 
 
 async def _send_event_batch(kind: str, scenario_id: int, settings_map: dict,
-                            date_str: str) -> int:
+                            date_str: str, attach_photos: bool = False) -> int:
     tmpl = await db.get_scenario_template(scenario_id)
     if not tmpl:
         logger.error("event reminder: нет template сценария %s", scenario_id)
@@ -195,6 +198,13 @@ async def _send_event_batch(kind: str, scenario_id: int, settings_map: dict,
                 continue  # Wazzup не принял — не логируем маркер, повторим на след. тике
             await db.log_event_reminder(phone, kind, date_str)
             sent += 1
+            if attach_photos:
+                # FOMO: фото атмосферы после текста. Дедуп по дате ивента (вар. B) — не
+                # повторяем этому лиду в рамках этого ивента. Сбой не роняет напоминание.
+                try:
+                    await actions.send_event_photos(phone, event_date=date_str)
+                except Exception:
+                    logger.exception("FOMO-фото к напоминанию %s упало для %s", kind, phone)
             await _lead_pause(WARM_LEAD_PAUSE)  # антибан-пауза между лидами (без суточного лимита)
         except Exception as e:
             logger.exception("event reminder %s упал для %s", kind, phone)
@@ -236,6 +246,13 @@ async def _send_event_daytime(settings_map: dict, date_str: str) -> int:
                 continue  # Wazzup не принял — маркер не логируем, повторим на след. тике
             await db.log_event_reminder(phone, kind, date_str)
             sent += 1
+            if not paid:
+                # FOMO неоплатившим: до 3 фото атмосферы (EVENT_PHOTO_COUNT), без видео —
+                # второе медиа-место в лестнице, бережём антибан-объём. Дедуп по дате (вар. B).
+                try:
+                    await actions.send_event_photos(phone, event_date=date_str)
+                except Exception:
+                    logger.exception("FOMO-фото день-ивента упало для %s", phone)
             await _lead_pause(WARM_LEAD_PAUSE)  # антибан-пауза между лидами (без суточного лимита)
         except Exception as e:
             logger.exception("day-of reminder упал для %s", phone)

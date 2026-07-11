@@ -199,11 +199,15 @@ async def send_image(phone: str, image_url: str) -> bool:
     return ok
 
 
-async def send_media(phone: str, url: str, media_type: str = "image") -> bool:
-    """Отправить медиа с ивента (фото/видео) лиду. Типовой маркер в messages — дедуп по типу."""
+async def send_media(phone: str, url: str, media_type: str = "image",
+                     event_date: str | None = None) -> bool:
+    """Отправить медиа с ивента (фото/видео) лиду. Маркер в messages — дедуп по типу.
+
+    event_date → дедуп в рамках конкретного ивента (вар. B): маркер с датой."""
     ok = await _send_content_uri(phone, url, "send_media")
     if ok:
-        await db.save_outbound(phone, db.MEDIA_MARKERS.get(media_type, "[media ивента отправлено]"))
+        marker = db.media_marker(media_type, event_date) or "[media ивента отправлено]"
+        await db.save_outbound(phone, marker)
         logger.info("media ивента (%s) отправлено лиду %s", media_type, phone)
     return ok
 

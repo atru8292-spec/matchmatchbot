@@ -516,3 +516,28 @@ class TestLinkPlaceholdersTwoPass:
                             AsyncMock(return_value={"course_link": "https://c", "event_link": "https://e"}))
         out = await sender._fill_link_placeholders("cursos [course_link] pago [event_link]")
         assert out == "cursos https://c pago https://e"
+
+
+class TestSendMediaMarker:
+    """send_media пишет маркер дедупа: с event_date — привязан к ивенту (вар. B)."""
+
+    async def test_dated_marker_written(self, monkeypatch):
+        monkeypatch.setattr(sender, "_send_content_uri", AsyncMock(return_value=True))
+        save = AsyncMock(); monkeypatch.setattr(sender.db, "save_outbound", save)
+        ok = await sender.send_media("wa_1", "https://s/1.jpg", "image", "2026-08-15")
+        assert ok is True
+        assert save.call_args.args == ("wa_1", "[foto ивента отправлено 2026-08-15]")
+
+    async def test_legacy_marker_without_date(self, monkeypatch):
+        monkeypatch.setattr(sender, "_send_content_uri", AsyncMock(return_value=True))
+        save = AsyncMock(); monkeypatch.setattr(sender.db, "save_outbound", save)
+        await sender.send_media("wa_1", "https://s/v.mp4", "video")
+        assert save.call_args.args == ("wa_1", "[video ивента отправлено]")
+
+    async def test_no_marker_on_send_failure(self, monkeypatch):
+        """Wazzup не принял → маркер не пишем (повторим позже)."""
+        monkeypatch.setattr(sender, "_send_content_uri", AsyncMock(return_value=False))
+        save = AsyncMock(); monkeypatch.setattr(sender.db, "save_outbound", save)
+        ok = await sender.send_media("wa_1", "https://s/1.jpg", "image", "2026-08-15")
+        assert ok is False
+        save.assert_not_called()

@@ -790,11 +790,23 @@ async def delete_event_media(media_id: int) -> bool:
 MEDIA_MARKERS = {"image": "[foto ивента отправлено]", "video": "[video ивента отправлено]"}
 
 
-async def event_media_sent(lead_phone: str, media_type: str) -> bool:
-    """Слали ли уже этому лиду медиа этого типа (дедуп по типу — не повторяем).
+def media_marker(media_type: str, event_date: str | None = None) -> str | None:
+    """Маркер отправленного медиа для дедупа. С event_date — дедуп в рамках КОНКРЕТНОГО
+    ивента (вариант B): новый ивент = свежая атмосфера заново, даже если лид получал медиа
+    на прошлом. Без даты — легаси-глобальный маркер. None если тип неизвестен."""
+    base = MEDIA_MARKERS.get(media_type)
+    if not base:
+        return None
+    return f"{base[:-1]} {event_date}]" if event_date else base  # ...отправлено 2026-08-15]
 
+
+async def event_media_sent(lead_phone: str, media_type: str,
+                           event_date: str | None = None) -> bool:
+    """Слали ли уже этому лиду медиа этого типа для ЭТОГО ивента (дедуп — не повторяем).
+
+    event_date задаёт ивент (вар. B): маркер с датой → на новый ивент шлём заново.
     Ищем типовой маркер в исходящих. Сбой → False (лучше отправить, чем молчать по ошибке)."""
-    marker = MEDIA_MARKERS.get(media_type)
+    marker = media_marker(media_type, event_date)
     if not marker:
         return False
     try:

@@ -51,24 +51,31 @@ EVENT_PHOTO_COUNT = 3  # фото за раз (антибан)
 EVENT_VIDEO_COUNT = 1  # видео за раз (тяжёлое — одного достаточно)
 
 
-async def send_event_photos(phone: str) -> int:
+async def send_event_photos(phone: str, event_date: str | None = None) -> int:
     """Прислать лиду до 3 случайных ФОТО с ивентов (если фото ещё не слали). Вернуть число."""
-    return await _send_event_media(phone, "image", EVENT_PHOTO_COUNT)
+    return await _send_event_media(phone, "image", EVENT_PHOTO_COUNT, event_date)
 
 
-async def send_event_video(phone: str) -> int:
+async def send_event_video(phone: str, event_date: str | None = None) -> int:
     """Прислать лиду 1 случайное ВИДЕО с ивента (если видео ещё не слали). Вернуть число."""
-    return await _send_event_media(phone, "video", EVENT_VIDEO_COUNT)
+    return await _send_event_media(phone, "video", EVENT_VIDEO_COUNT, event_date)
 
 
-async def _send_event_media(phone: str, media_type: str, count: int) -> int:
-    """Отправить медиа заданного типа с пер-типовым дедупом (не повторяем тип лиду).
+async def _send_event_media(phone: str, media_type: str, count: int,
+                            event_date: str | None = None) -> int:
+    """Отправить медиа заданного типа с дедупом в рамках ивента (не повторяем тип лиду).
 
-    Уже слали этот тип → 0 (пропуск). Нет медиа типа → 0. Отдельными сообщениями с
+    event_date задаёт ивент (вар. B): на новый ивент шлём заново. Если не передан —
+    берём активный event_date из настроек (одинаковый ключ у chat-reply и планировщика).
+    Уже слали этот тип на этот ивент → 0. Нет медиа типа → 0. Отдельными сообщениями с
     антибан-паузой (внутри send_media). Сбой не роняет основной ответ (ловит вызывающий).
     """
-    if await db.event_media_sent(phone, media_type):
-        logger.info("медиа ивента (%s) уже слалось %s — пропуск (дедуп)", media_type, phone)
+    if event_date is None:
+        s = await db.get_settings(["event_date"])
+        event_date = s.get("event_date") or None
+    if await db.event_media_sent(phone, media_type, event_date):
+        logger.info("медиа ивента (%s) уже слалось %s (ивент %s) — пропуск (дедуп)",
+                    media_type, phone, event_date)
         return 0
     items = await db.random_event_media(media_type, count)
     if not items:
@@ -76,7 +83,8 @@ async def _send_event_media(phone: str, media_type: str, count: int) -> int:
         return 0
     sent = 0
     for m in items:
-        if await sender.send_media(phone, m["storage_url"], m.get("media_type", media_type)):
+        if await sender.send_media(phone, m["storage_url"], m.get("media_type", media_type),
+                                   event_date):
             sent += 1
     logger.info("медиа ивента (%s): отправлено %d/%d %s", media_type, sent, len(items), phone)
     return sent

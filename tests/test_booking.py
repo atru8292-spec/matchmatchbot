@@ -245,7 +245,8 @@ class TestMainBookingFlow:
 class TestEventMediaActions:
     async def test_photos_sends_up_to_3_if_not_sent(self, monkeypatch):
         import actions, sender
-        monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
+        ems = AsyncMock(return_value=False); monkeypatch.setattr(db, "event_media_sent", ems)
         monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
             {"storage_url": "https://s/1.jpg", "media_type": "image"},
             {"storage_url": "https://s/2.jpg", "media_type": "image"}]))
@@ -254,9 +255,13 @@ class TestEventMediaActions:
         assert n == 2 and sm.await_count == 2
         # запрошен именно тип image, count = EVENT_PHOTO_COUNT
         assert db.random_event_media.call_args.args == ("image", actions.EVENT_PHOTO_COUNT)
+        # дедуп и отправка получили активную дату ивента (вар. B, резолв из настроек)
+        assert ems.call_args.args == ("wa_1", "image", "2026-08-15")
+        assert sm.call_args.args[3] == "2026-08-15"  # event_date проброшен в send_media
 
     async def test_video_sends_one_if_not_sent(self, monkeypatch):
         import actions, sender
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
         monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
             {"storage_url": "https://s/v.mp4", "media_type": "video"}]))
@@ -265,9 +270,24 @@ class TestEventMediaActions:
         assert n == 1
         assert db.random_event_media.call_args.args == ("video", actions.EVENT_VIDEO_COUNT)
 
-    async def test_dedup_per_type_skips(self, monkeypatch):
-        """Тип уже слали → пропуск, в пул даже не ходим."""
+    async def test_explicit_event_date_skips_settings_lookup(self, monkeypatch):
+        """Явный event_date (путь планировщика) → в настройки не ходим, дату пробрасываем."""
         import actions, sender
+        gs = AsyncMock(); monkeypatch.setattr(db, "get_settings", gs)
+        ems = AsyncMock(return_value=False); monkeypatch.setattr(db, "event_media_sent", ems)
+        monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
+            {"storage_url": "https://s/1.jpg", "media_type": "image"}]))
+        sm = AsyncMock(return_value=True); monkeypatch.setattr(sender, "send_media", sm)
+        n = await actions.send_event_photos("wa_1", event_date="2026-09-20")
+        assert n == 1
+        gs.assert_not_called()  # дату передали явно — settings не трогаем
+        assert ems.call_args.args == ("wa_1", "image", "2026-09-20")
+        assert sm.call_args.args[3] == "2026-09-20"
+
+    async def test_dedup_per_type_skips(self, monkeypatch):
+        """Тип уже слали на этот ивент → пропуск, в пул даже не ходим."""
+        import actions, sender
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
         monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=True))
         rnd = AsyncMock(); monkeypatch.setattr(db, "random_event_media", rnd)
         sm = AsyncMock(); monkeypatch.setattr(sender, "send_media", sm)
@@ -277,11 +297,20 @@ class TestEventMediaActions:
 
     async def test_no_media_of_type_sends_nothing(self, monkeypatch):
         import actions, sender
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
         monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[]))
         sm = AsyncMock(); monkeypatch.setattr(sender, "send_media", sm)
         assert await actions.send_event_video("wa_1") == 0
         sm.assert_not_called()
+
+    def test_media_marker_dated_vs_legacy(self):
+        """Вар. B: с датой — маркер привязан к ивенту; без даты — легаси-глобальный."""
+        assert db.media_marker("image", "2026-08-15") == "[foto ивента отправлено 2026-08-15]"
+        assert db.media_marker("video", "2026-08-15") == "[video ивента отправлено 2026-08-15]"
+        assert db.media_marker("image") == "[foto ивента отправлено]"  # легаси
+        assert db.media_marker("image", None) == "[foto ивента отправлено]"
+        assert db.media_marker("bogus", "2026-08-15") is None
 
     def test_ai_contract_two_tools(self):
         import ai

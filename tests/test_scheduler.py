@@ -180,10 +180,13 @@ class TestRunEventReminders:
         monkeypatch.setattr(db, "event_reminder_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
+        ph = AsyncMock(); monkeypatch.setattr(scheduler.actions, "send_event_photos", ph)
         n = await scheduler.run_event_reminders(today=date(2026, 8, 14))  # за день
         assert n == 1
         assert tmpl.call_args.args[0] == scheduler.REMIND_1D_SCENARIO
         send.assert_awaited_once()
+        # FOMO: T-1 прикрепляет фото с датой этого ивента (дедуп вар. B)
+        ph.assert_awaited_once_with("wa_1", event_date="2026-08-15")
 
     async def test_day_of_unpaid_uses_54_with_link(self, monkeypatch):
         """День ивента, неоплативший (обычная стадия) → Шаблон B (#54), ссылка разрешена."""
@@ -197,12 +200,15 @@ class TestRunEventReminders:
         monkeypatch.setattr(db, "event_reminder_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
+        ph = AsyncMock(); monkeypatch.setattr(scheduler.actions, "send_event_photos", ph)
         n = await scheduler.run_event_reminders(today=date(2026, 8, 15))  # день ивента
         assert n == 1
         # неоплатившему: Шаблон B + ссылка разрешена к повтору
         args, kwargs = send.call_args
         assert kwargs.get("allow_repeat_links") is True
         assert "con" in args[1][0]  # текст из Шаблона B
+        # FOMO: неоплатившему в день ивента прикрепляем фото (с датой ивента)
+        ph.assert_awaited_once_with("wa_1", event_date="2026-08-15")
 
     async def test_day_of_paid_uses_47_no_repeat(self, monkeypatch):
         """День ивента, оплативший (event_attended) → Шаблон A (#47), ссылку не повторяем."""
@@ -216,11 +222,13 @@ class TestRunEventReminders:
         monkeypatch.setattr(db, "event_reminder_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
+        ph = AsyncMock(); monkeypatch.setattr(scheduler.actions, "send_event_photos", ph)
         n = await scheduler.run_event_reminders(today=date(2026, 8, 15))  # день ивента
         assert n == 1
         args, kwargs = send.call_args
         assert kwargs.get("allow_repeat_links") is False
         assert "sin" in args[1][0]  # текст из Шаблона A
+        ph.assert_not_awaited()  # оплатившему медиа НЕ шлём (без лишнего спама)
 
     async def test_morning_after_sends_scenario_23(self, monkeypatch):
         """Следующее утро после ивента (event_date+1) → check-in, сценарий 23."""
@@ -232,10 +240,12 @@ class TestRunEventReminders:
         monkeypatch.setattr(db, "event_reminder_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
+        ph = AsyncMock(); monkeypatch.setattr(scheduler.actions, "send_event_photos", ph)
         n = await scheduler.run_event_reminders(today=date(2026, 8, 16))  # утро после ивента
         assert n == 1
         assert tmpl.call_args.args[0] == scheduler.CHECKIN_MORNING_SCENARIO
         send.assert_awaited_once()
+        ph.assert_not_awaited()  # ивент прошёл — FOMO неприменим, медиа не шлём
 
     async def test_idempotent_skips_already_sent(self, monkeypatch):
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=_event_settings()))
