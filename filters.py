@@ -140,20 +140,25 @@ def _manual_active(lead: dict) -> bool:
 
 
 def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
-           bypass_phones: frozenset = frozenset()) -> Decision:
+           bypass_phones: frozenset = frozenset(),
+           whitelist_no_alert: bool = False) -> Decision:
     """Принять детерминированное решение по лиду и склеенному тексту залпа.
 
     lead — строка leads (dict) или {} для нового. Порядок приоритетов фиксирован.
     phone — 'wa_<digits>' (для проверки региона); по умолчанию '' (совместимость).
     bypass_phones — номера-исключения silent-фильтра (тестовые/доверенные).
+    whitelist_no_alert — whitelist-запись это личный контакт Anna (reason personal_contact):
+        бот молчит БЕЗ алерта Ане. VIP-клиент (False) — алерт остаётся.
     """
     lead = lead or {}
     text = user_text or ""
     name = lead.get("whatsapp_name") or lead.get("name") or "лид"
 
-    # 1) Whitelist → бот молчит + алерт «написал клиент из списка» (Аня ведёт лично).
+    # 1) Whitelist → бот молчит. VIP-клиент: + алерт «написал клиент». personal_contact
+    #    (личная база Anna): без алерта — она и так ведёт эти чаты в WhatsApp вручную.
     if is_whitelisted:
-        return Decision("silent_whitelist", f"whitelist: написал {name}", alert_manager=True)
+        return Decision("silent_whitelist", f"whitelist: написал {name}",
+                        alert_manager=not whitelist_no_alert)
     # do_not_contact / manual → бот молчит БЕЗ алерта: заблокированный нарушитель не должен
     # спамить Аню VIP-уведомлением на каждое сообщение; в manual Аня и так в чате WhatsApp.
     if lead.get("do_not_contact"):

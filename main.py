@@ -81,6 +81,8 @@ async def _process_burst_impl(phone: str) -> None:
     content_types = [(m.get("meta") or {}).get("content_type") for m in msgs]
     lead = await db.get_lead_by_phone(phone) or {}
     whitelisted = await db.is_whitelisted(phone)
+    # personal_contact (личная база Anna) — молчим без алерта; VIP-клиент — с алертом.
+    wl_no_alert = await db.whitelist_no_alert(phone) if whitelisted else False
 
     # Голосовые: реальная транскрибация Whisper заменяет плейсхолдер '[voice message]'
     # на распознанный текст (кроме whitelist — там бот молчит, транскрибация не нужна).
@@ -95,7 +97,7 @@ async def _process_burst_impl(phone: str) -> None:
     await db.mark_messages_processed([m["id"] for m in msgs])
 
     decision = filters.decide(lead, whitelisted, combined, phone,
-                              settings.silent_bypass_set)
+                              settings.silent_bypass_set, whitelist_no_alert=wl_no_alert)
 
     # 1) Дисквалификация/тишина текущего залпа приоритетнее фото: whitelist/silent
     #    (молчим) и blocked (escort/агрессия в тексте — блок, даже если в залпе есть фото).
@@ -221,9 +223,12 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
     name = lead.get("whatsapp_name") or lead.get("name") or phone
 
     if decision.action == "silent_whitelist":
-        # Бот молчит; сообщение уже в истории. Алерт Ане: написал клиент/VIP.
-        logger.info("РЕШЕНИЕ silent_whitelist [%s]: %s", phone, decision.reason)
-        await escalation.notify_vip(lead)
+        # Бот молчит; сообщение уже в истории. Алерт «написал клиент/VIP» — только если
+        # decision.alert_manager (VIP). personal_contact (личная база Anna) — без алерта.
+        logger.info("РЕШЕНИЕ silent_whitelist [%s]: %s (alert=%s)",
+                    phone, decision.reason, decision.alert_manager)
+        if decision.alert_manager:
+            await escalation.notify_vip(lead)
         return
 
     if decision.action == "silent":

@@ -597,6 +597,33 @@ class TestIsWhitelisted:
         assert params[0] == phone
 
 
+class TestWhitelistNoAlert:
+    async def test_true_for_personal_contact(self, pool):
+        """reason personal_contact → тишина без алерта."""
+        pool.fetchval.return_value = "personal_contact"
+        assert await db.whitelist_no_alert("wa_1") is True
+
+    async def test_false_for_vip_reason(self, pool):
+        """Прочий reason (VIP-клиент) → алерт остаётся."""
+        pool.fetchval.return_value = "cliente VIP"
+        assert await db.whitelist_no_alert("wa_1") is False
+
+    async def test_false_when_not_whitelisted(self, pool):
+        """Нет записи (reason=None) → False."""
+        pool.fetchval.return_value = None
+        assert await db.whitelist_no_alert("wa_1") is False
+
+    async def test_false_on_db_error(self, pool):
+        """Сбой БД → False (безопаснее оставить алерт, чем проглотить)."""
+        pool.fetchval.side_effect = RuntimeError("boom")
+        assert await db.whitelist_no_alert("wa_1") is False
+
+    async def test_sql_reads_bot_whitelist(self, pool):
+        pool.fetchval.return_value = None
+        await db.whitelist_no_alert("wa_1")
+        assert "bot_whitelist" in pool.fetchval.call_args.args[0]
+
+
 # ---------------------------------------------------------------------------
 # block_lead — транзакционная реализация (acquire → conn.fetchval → conn.execute)
 # ---------------------------------------------------------------------------

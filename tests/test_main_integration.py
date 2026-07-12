@@ -373,6 +373,26 @@ class TestHandleIncoming:
 
 class TestProcessBurst:
 
+    async def test_personal_contact_no_lead_silent_no_alert(self, monkeypatch):
+        """Номер из личной базы Anna (whitelist personal_contact) БЕЗ строки-лида пишет:
+        бот молчит — ни AI, ни отправки, ни алерта Ане. Проверяет, что whitelist работает
+        и для номеров, которых нет в leads (у большинства этих контактов строки нет)."""
+        msgs = [{"id": "uuid-pc1", "text": "Hola Anna", "meta": {"content_type": "text"}}]
+        monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(return_value=msgs))
+        monkeypatch.setattr(db, "mark_messages_processed", AsyncMock())
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=None))  # нет лида
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=True))
+        monkeypatch.setattr(db, "whitelist_no_alert", AsyncMock(return_value=True))
+        gen = AsyncMock(); monkeypatch.setattr(ai, "generate_reply", gen)
+        send = AsyncMock(); monkeypatch.setattr(main.sender, "send", send)
+        vip = AsyncMock(); monkeypatch.setattr(main.escalation, "notify_vip", vip)
+
+        await main._process_burst("wa_5215512345678")
+
+        gen.assert_not_awaited()   # AI не вызываем
+        send.assert_not_awaited()  # ничего не отправляем
+        vip.assert_not_awaited()   # алерта Ане нет (personal_contact)
+
     async def test_non_empty_burst_calls_mark_with_ids(self, monkeypatch):
         """Непустой список сообщений → mark_messages_processed вызван со списком id."""
         msgs = [
@@ -1066,11 +1086,12 @@ class TestEscalationIntegration:
     # 13. silent_whitelist → notify_vip вызван с lead
 
     async def test_silent_whitelist_calls_notify_vip(self, monkeypatch):
-        """_apply_decision action=silent_whitelist → escalation.notify_vip(lead, reason)."""
+        """_apply_decision silent_whitelist + alert_manager (VIP) → notify_vip(lead)."""
         vip_mock, block_mock, esc_mock, err_mock = self._mock_all(monkeypatch)
 
         lead = {"phone": "wa_client1", "whatsapp_name": "Marco"}
-        decision = filters.Decision(action="silent_whitelist", reason="VIP-клиент")
+        decision = filters.Decision(action="silent_whitelist", reason="VIP-клиент",
+                                    alert_manager=True)
 
         await main._apply_decision("wa_client1", decision, lead, "Hola")
 
@@ -1078,6 +1099,21 @@ class TestEscalationIntegration:
         call_lead = vip_mock.call_args.args[0]
         assert call_lead == lead
         # остальные не вызваны
+        block_mock.assert_not_awaited()
+        esc_mock.assert_not_awaited()
+        err_mock.assert_not_awaited()
+
+    async def test_silent_whitelist_personal_contact_no_alert(self, monkeypatch):
+        """silent_whitelist БЕЗ alert_manager (personal_contact) → notify_vip НЕ вызван."""
+        vip_mock, block_mock, esc_mock, err_mock = self._mock_all(monkeypatch)
+
+        lead = {"phone": "wa_pc1", "whatsapp_name": "Diego"}
+        decision = filters.Decision(action="silent_whitelist",
+                                    reason="whitelist: написал Diego", alert_manager=False)
+
+        await main._apply_decision("wa_pc1", decision, lead, "Hola")
+
+        vip_mock.assert_not_awaited()   # личная база Anna — тишина без алерта
         block_mock.assert_not_awaited()
         esc_mock.assert_not_awaited()
         err_mock.assert_not_awaited()

@@ -122,6 +122,17 @@ class TestDecideWhitelist:
         d = decide({}, True, "hola")
         assert d.alert_manager is True
 
+    def test_whitelist_no_alert_silences_without_alert(self):
+        """personal_contact (личная база Anna): silent_whitelist, но БЕЗ алерта Ане."""
+        d = decide({}, True, "hola", whitelist_no_alert=True)
+        assert d.action == "silent_whitelist"
+        assert d.alert_manager is False
+
+    def test_whitelist_no_alert_default_keeps_alert(self):
+        """По умолчанию (VIP-клиент) алерт остаётся."""
+        d = decide({}, True, "hola", whitelist_no_alert=False)
+        assert d.alert_manager is True
+
     def test_whitelist_overrides_escort_text(self):
         """Whitelist проверяется раньше escort — должно быть silent, не blocked."""
         d = decide({}, True, "quiero sexo")

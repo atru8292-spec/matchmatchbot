@@ -940,6 +940,25 @@ async def is_whitelisted(phone: str) -> bool:
     return row is not None
 
 
+# Причины whitelist, при которых бот молчит БЕЗ алерта Ане: это личная база-рассылка
+# Anna (вейтлисты/ручные переписки), а не VIP-клиент агентства. Для VIP (прочий/пустой
+# reason) алерт «написал клиент» остаётся. Так один механизм whitelist обслуживает оба
+# случая, различая их по reason.
+WHITELIST_NO_ALERT_REASONS = frozenset({"personal_contact"})
+
+
+async def whitelist_no_alert(phone: str) -> bool:
+    """True, если номер в whitelist с reason из WHITELIST_NO_ALERT_REASONS (тишина без алерта).
+
+    Сбой → False (безопаснее оставить алерт, чем проглотить его по ошибке БД)."""
+    try:
+        r = await _get_pool().fetchval("SELECT reason FROM bot_whitelist WHERE phone = $1", phone)
+    except Exception:
+        logger.exception("whitelist_no_alert failed: phone=%s", phone)
+        return False
+    return r in WHITELIST_NO_ALERT_REASONS
+
+
 def _wa_phone(phone: str) -> str:
     """Нормализовать телефон в бизнес-ключ 'wa_<digits>' (как в normalize.py).
 
