@@ -116,6 +116,7 @@ export interface EventSettings {
   courseLink: string;
   invitationUrl: string;
   invitationReady: boolean;
+  eventGuestTab: string;
 }
 
 // ===== Медиа с ивентов (галерея фото/видео) =====

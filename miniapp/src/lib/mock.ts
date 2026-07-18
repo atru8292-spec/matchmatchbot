@@ -162,6 +162,7 @@ let mockEventStore: EventSettings = {
   eventLink: "https://matchmatchagency.com/evento",
   courseLink: "https://matchmatchagency.com/cursos",
   invitationUrl: "", invitationReady: false,
+  eventGuestTab: "22 de Julio",
 };
 export function mockGetEvent(): EventSettings { return { ...mockEventStore }; }
 export function mockSetEvent(s: EventSettings): EventSettings {

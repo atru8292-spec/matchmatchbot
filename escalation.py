@@ -197,6 +197,25 @@ async def notify_vip(lead: dict) -> None:
                          text, vip_action_kb(phone) if phone else None)
 
 
+async def notify_guest_list_issue(lead: dict, tab: str, reason: str) -> None:
+    """Гость оплатил ивент, но бот не смог вписать его в лист — Аня вписывает вручную."""
+    why = {
+        "no_tab": f"вкладки «{tab}» нет в книге (агентство ещё не создала лист)",
+        "no_slot": f"во вкладке «{tab}» нет свободных слотов",
+        "bad_layout": f"во вкладке «{tab}» не найден заголовок Men (неожиданный макет)",
+        "no_setting": "не задана вкладка гостевого списка — укажи в настройках ивента (CRM)",
+        "no_data": "нет данных гостя для записи",
+        "error": f"ошибка записи во вкладку «{tab}»",
+    }.get(reason, reason)
+    text = (
+        "📝 Гость не попал в лист ивента\n"
+        f"Причина: {why}\n"
+        f"Гость: {_lead_name(lead)}\n"
+        f"👉 Впиши вручную: {_wa_link((lead or {}).get('phone', ''))}"
+    )
+    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id, text)
+
+
 async def notify_block(lead: dict, reason: str) -> None:
     """Бот прекратил диалог с лидом (escort/агрессия/casual/фото) — Аня в курсе."""
     text = (

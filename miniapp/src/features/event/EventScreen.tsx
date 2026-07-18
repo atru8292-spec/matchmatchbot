@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarHeart, MapPin, CreditCard, GraduationCap, Image as ImageIcon, Check, CloudOff, UploadCloud, Loader2, X, Tag } from "lucide-react";
+import { CalendarHeart, MapPin, CreditCard, GraduationCap, Image as ImageIcon, Check, CloudOff, UploadCloud, Loader2, X, Tag, Table2 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -57,6 +57,7 @@ function EventForm({ initial }: { initial: EventSettings }) {
   const [courseLink, setCourseLink] = useState(initial.courseLink);
   const [invUrl, setInvUrl] = useState(initial.invitationUrl);
   const [invReady, setInvReady] = useState(initial.invitationReady);
+  const [guestTab, setGuestTab] = useState(initial.eventGuestTab);
   const [saved, setSaved] = useState(false);
 
   const saveM = useMutation({
@@ -117,6 +118,7 @@ function EventForm({ initial }: { initial: EventSettings }) {
       eventPriceOld: priceOld.trim(),
       eventLink: eventLink.trim(), courseLink: courseLink.trim(),
       invitationUrl: invUrl.trim(), invitationReady: invReady,
+      eventGuestTab: guestTab.trim(),
     });
   };
 
@@ -165,6 +167,11 @@ function EventForm({ initial }: { initial: EventSettings }) {
             hint="Показывается как «antes X». Пусто — акция скрыта.">
             <Input value={priceOld} onChange={(e) => setPriceOld(e.target.value)}
               placeholder="9,000" inputMode="numeric" leading={<Tag size={18} />} />
+          </Field>
+          <Field label="Вкладка гостевого списка"
+            hint="Точное имя вкладки в книге Ани, куда бот впишет оплативших (напр. «22 de Julio»)">
+            <Input value={guestTab} onChange={(e) => setGuestTab(e.target.value)}
+              placeholder="22 de Julio" leading={<Table2 size={18} />} />
           </Field>
         </Card>
 

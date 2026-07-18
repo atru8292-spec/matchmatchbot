@@ -182,23 +182,66 @@ class TestContractAndSheets:
         out3 = ai._validate_output({"messages": ["ok"]})
         assert out3["proposed_videocall_at"] is None
 
-    async def test_guest_list_appends_on_event_payment(self, monkeypatch):
-        monkeypatch.setattr(actions.settings, "google_sheet_id", "sheet123")
-        monkeypatch.setattr(db, "get_lead_by_phone",
-                            AsyncMock(return_value={"name": "Diego", "interest": "event"}))
-        append = AsyncMock()
-        monkeypatch.setattr(gcal, "append_guest_row", append)
+    async def test_guest_list_writes_to_event_tab(self, monkeypatch):
+        """Оплата ивента → писатель зовётся с вкладкой и данными анкеты; written → без алерта."""
+        monkeypatch.setattr(actions.settings, "google_guest_sheet_id", "guestbook123")
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={
+            "name": "Diego", "last_name": "Herrera", "email": "d@h.com",
+            "profession": "arquitecto", "age": 38}))
+        monkeypatch.setattr(db, "get_settings",
+                            AsyncMock(return_value={"event_guest_tab": "22 de Julio "}))
+        wr = AsyncMock(return_value="written")
+        monkeypatch.setattr(gcal, "append_guest_to_event_tab", wr)
+        alert = AsyncMock(); monkeypatch.setattr(actions.escalation, "notify_guest_list_issue", alert)
         await actions._add_to_guest_list("wa_5215500000004")
-        append.assert_awaited_once()
-        args = append.call_args.args
-        assert args[0] == "Diego" and args[2] == "Pagado"  # name, status
+        wr.assert_awaited_once()
+        args = wr.call_args.args
+        assert args[0] == "22 de Julio"                  # tab застриплен при чтении настройки
+        assert args[1] == "Diego Herrera"                # name = name + last_name
+        assert args[2] == "d@h.com" and args[3] == "+5215500000004"  # email, phone
+        assert args[4] == "38" and args[5] == "arquitecto"          # age, profession
+        alert.assert_not_awaited()
 
-    async def test_guest_list_skipped_when_not_configured(self, monkeypatch):
-        monkeypatch.setattr(actions.settings, "google_sheet_id", "")
-        append = AsyncMock()
-        monkeypatch.setattr(gcal, "append_guest_row", append)
+    async def test_guest_list_no_tab_alerts_anna(self, monkeypatch):
+        """Вкладки нет (no_tab) → алерт Ане, оплата не роняется."""
+        monkeypatch.setattr(actions.settings, "google_guest_sheet_id", "guestbook123")
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"name": "Diego"}))
+        monkeypatch.setattr(db, "get_settings",
+                            AsyncMock(return_value={"event_guest_tab": "22 de Julio"}))
+        monkeypatch.setattr(gcal, "append_guest_to_event_tab", AsyncMock(return_value="no_tab"))
+        alert = AsyncMock(); monkeypatch.setattr(actions.escalation, "notify_guest_list_issue", alert)
         await actions._add_to_guest_list("wa_5215500000004")
-        append.assert_not_called()
+        alert.assert_awaited_once()
+        assert alert.call_args.args[2] == "no_tab"
+
+    async def test_guest_list_no_setting_alerts(self, monkeypatch):
+        """Вкладка не задана в CRM → алерт no_setting, писатель не зовётся."""
+        monkeypatch.setattr(actions.settings, "google_guest_sheet_id", "guestbook123")
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"name": "Diego"}))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_guest_tab": ""}))
+        wr = AsyncMock(); monkeypatch.setattr(gcal, "append_guest_to_event_tab", wr)
+        alert = AsyncMock(); monkeypatch.setattr(actions.escalation, "notify_guest_list_issue", alert)
+        await actions._add_to_guest_list("wa_5215500000004")
+        wr.assert_not_awaited()
+        assert alert.call_args.args[2] == "no_setting"
+
+    async def test_guest_list_skipped_when_book_not_configured(self, monkeypatch):
+        """google_guest_sheet_id пуст → фича выключена, ничего не зовём."""
+        monkeypatch.setattr(actions.settings, "google_guest_sheet_id", "")
+        wr = AsyncMock(); monkeypatch.setattr(gcal, "append_guest_to_event_tab", wr)
+        alert = AsyncMock(); monkeypatch.setattr(actions.escalation, "notify_guest_list_issue", alert)
+        await actions._add_to_guest_list("wa_5215500000004")
+        wr.assert_not_awaited(); alert.assert_not_awaited()
+
+    async def test_guest_list_db_error_alerts_not_raises(self, monkeypatch):
+        """Сбой Supabase (оплата уже подтверждена!) → алерт error, исключение НЕ всплывает."""
+        monkeypatch.setattr(actions.settings, "google_guest_sheet_id", "guestbook123")
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(side_effect=RuntimeError("db down")))
+        alert = AsyncMock(); monkeypatch.setattr(actions.escalation, "notify_guest_list_issue", alert)
+        await actions._add_to_guest_list("wa_5215500000004")  # не должно бросить
+        alert.assert_awaited_once()
+        assert alert.call_args.args[2] == "error"
+        assert alert.call_args.args[0]["phone"] == "wa_5215500000004"  # алерт с номером
 
 
 class TestMainBookingFlow:
@@ -392,3 +435,111 @@ class TestAnketa:
         ex = out["extracted"]
         assert ex["email"] == "d@x.com" and ex["date_of_birth"] == "1988-05-12"
         assert ex["country"] == "México" and ex["last_name"] == "Herrera"
+
+
+# ===== Гостевой список ивента: маппинг колонок по заголовку + запись в свободный слот =====
+
+# Заголовок «нового» макета (Men в C, Women в L; у колонки «#» пустой заголовок).
+_HDR_NEW = ["Pago", "", "Men", "Emails", "Number", "Photos", "Age", "Profession", "Notes",
+            "", "", "Women", "Numbers", "", "Number given at event", "Name", "Number"]
+
+
+class _FakeSS:
+    """Мок googleapiclient spreadsheets(): get/values().get()/values().batchUpdate()."""
+    def __init__(self, titles, values):
+        self._titles = titles
+        self._values = values
+        self.batched = None
+
+    def get(self, spreadsheetId=None):
+        sheets = [{"properties": {"title": t}} for t in self._titles]
+        return _Exec({"sheets": sheets})
+
+    def values(self):
+        outer = self
+        class _V:
+            def get(self, spreadsheetId=None, range=None):
+                return _Exec({"values": outer._values})
+            def batchUpdate(self, spreadsheetId=None, body=None):
+                outer.batched = body
+                return _Exec({})
+        return _V()
+
+
+class _Exec:
+    def __init__(self, res): self._res = res
+    def execute(self): return self._res
+
+
+def _patch_sheets(monkeypatch, titles, values):
+    ss = _FakeSS(titles, values)
+    monkeypatch.setattr(gcal, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(gcal, "_sheets", type("S", (), {"spreadsheets": lambda self: ss})())
+    monkeypatch.setattr(gcal.settings, "google_guest_sheet_id", "book")
+    return ss
+
+
+class TestGuestColumns:
+    def test_new_layout_men_block_only(self):
+        cols = gcal._guest_columns(_HDR_NEW)
+        assert cols == {"men": 2, "emails": 3, "number": 4, "age": 6, "profession": 7}
+        # НЕ подхватил женские Number(16)/Numbers(12) — граница по Women(11)
+        assert cols["number"] == 4
+
+    def test_old_layout_men_at_col_a(self):
+        """Старый макет: Men в колонке A, Women в I — маппинг по имени всё равно верный."""
+        hdr = ["Men", "Emails", "Number", "Age", "Profession", "", "", "", "Women", "Numbers"]
+        cols = gcal._guest_columns(hdr)
+        assert cols == {"men": 0, "emails": 1, "number": 2, "age": 3, "profession": 4}
+
+    def test_no_men_header_returns_none(self):
+        assert gcal._guest_columns(["Foo", "Bar", "Women"]) is None
+
+    def test_first_free_men_row(self):
+        vals = [_HDR_NEW,
+                ["Klar", "1", "Ricardo", "", "55 1", "", "", "", "", "", "", "Анна", "7 9", "", "", "", ""],
+                ["", "2", "", "", "", "", "", "", "", "", "", "Mila", "998", "", "", "", ""]]
+        assert gcal._first_free_men_row(vals, 0, 2) == 2   # первая строка с пустым Men
+        # все заняты → None
+        full = [_HDR_NEW, ["Klar", "1", "Ricardo", "", "55 1", "", "", "", "", "", "", "", "", "", "", "", ""]]
+        assert gcal._first_free_men_row(full, 0, 2) is None
+
+
+class TestWriteGuestSync:
+    def _values(self):
+        return [_HDR_NEW,
+                ["Klar", "1", "Ricardo", "", "55 1", "", "", "", "", "", "", "Анна", "7 9", "", "", "", ""],
+                ["", "2", "", "", "", "", "", "", "", "", "", "Mila", "998", "", "", "", ""]]
+
+    def test_writes_men_block_to_first_free_slot(self, monkeypatch):
+        ss = _patch_sheets(monkeypatch, ["22 de Julio "], self._values())
+        st = gcal._write_guest_sync("22 de Julio", {
+            "men": "Diego Herrera", "emails": "d@h.com", "number": "+52155",
+            "age": "38", "profession": "arquitecto"})
+        assert st == "written"
+        ranges = {d["range"]: d["values"][0][0] for d in ss.batched["data"]}
+        # первый свободный слот = строка 3 листа; колонки C/D/E/G/H
+        assert ranges == {"'22 de Julio '!C3": "Diego Herrera", "'22 de Julio '!D3": "d@h.com",
+                          "'22 de Julio '!E3": "+52155", "'22 de Julio '!G3": "38",
+                          "'22 de Julio '!H3": "arquitecto"}
+        # женский блок (L+) и Pago(A)/Photos(F)/Notes(I) не тронуты
+        assert not any(r.split("!")[1][0] in ("A", "F", "I", "L", "M") for r in ranges)
+
+    def test_tab_matched_with_strip(self, monkeypatch):
+        """В книге вкладка с хвостовым пробелом, в настройке — без; strip → совпало."""
+        ss = _patch_sheets(monkeypatch, ["22 de Julio "], self._values())
+        st = gcal._write_guest_sync("22 de Julio", {"men": "X"})
+        assert st == "written"
+
+    def test_no_tab_when_missing(self, monkeypatch):
+        _patch_sheets(monkeypatch, ["27 de Mayo"], self._values())
+        assert gcal._write_guest_sync("22 de Julio", {"men": "X"}) == "no_tab"
+
+    def test_no_slot_when_full(self, monkeypatch):
+        vals = [_HDR_NEW, ["Klar", "1", "Ricardo", "", "55", "", "", "", "", "", "", "", "", "", "", "", ""]]
+        _patch_sheets(monkeypatch, ["22 de Julio"], vals)
+        assert gcal._write_guest_sync("22 de Julio", {"men": "X"}) == "no_slot"
+
+    def test_bad_layout_no_men_header(self, monkeypatch):
+        _patch_sheets(monkeypatch, ["22 de Julio"], [["Foo", "Bar"], ["", ""]])
+        assert gcal._write_guest_sync("22 de Julio", {"men": "X"}) == "bad_layout"

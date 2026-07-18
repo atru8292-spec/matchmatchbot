@@ -699,6 +699,7 @@ _EVENT_KEYS = [
     "event_address",
     "event_price_member", "event_price_nonmember", "event_price_old",
     "event_link", "course_link", "invitation_url", "invitation_ready",
+    "event_guest_tab",
 ]
 
 
@@ -715,6 +716,7 @@ class EventSettingsIn(BaseModel):
     courseLink: Optional[str] = None
     invitationUrl: Optional[str] = None
     invitationReady: bool = False
+    eventGuestTab: Optional[str] = None  # имя вкладки гостевого списка в книге Ани
     # eventTime не редактируется отдельно — зеркалим из eventStart (см. put_event),
     # чтобы #15/#47/#54 ([event_time]) и #51/#52 ([event_start]) не расходились.
     eventTime: Optional[str] = None
@@ -735,6 +737,7 @@ def _event_out(s: dict) -> dict:
         "courseLink": s.get("course_link") or "",
         "invitationUrl": s.get("invitation_url") or "",
         "invitationReady": s.get("invitation_ready") == "1",
+        "eventGuestTab": s.get("event_guest_tab") or "",
     }
 
 
@@ -832,6 +835,7 @@ async def put_event(body: EventSettingsIn, _: dict = Depends(require_admin)) -> 
         "course_link": course_link,
         "invitation_url": invitation_url,
         "invitation_ready": "1" if body.invitationReady else "0",
+        "event_guest_tab": (body.eventGuestTab or "").strip(),  # strip: у вкладок бывают хвостовые пробелы
     }
     try:
         for key, val in values.items():

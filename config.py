@@ -79,7 +79,8 @@ class Settings(BaseSettings):
     # Один сервис-аккаунт на оба API; JSON-ключ лежит на сервере (права 600).
     google_service_account_file: str = "/opt/matchmatch-bot/google-service-account.json"
     google_calendar_id: str = ""   # id общего календаря (пока тестовый личный)
-    google_sheet_id: str = ""      # id таблицы гостевого списка
+    google_sheet_id: str = ""      # id нашей книги (анкеты «Solicitudes» и пр.)
+    google_guest_sheet_id: str = ""  # id БОЕВОЙ книги гостевого списка Ани (отдельная книга)
 
     @property
     def manager_admin_ids(self) -> frozenset[int]:

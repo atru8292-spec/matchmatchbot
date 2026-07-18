@@ -177,3 +177,107 @@ async def append_anketa_row(name: str, email: str, phone: str, dob: str, city: s
     await asyncio.to_thread(_append_row_sync, ANKETA_SHEET, ANKETA_HEADERS,
                             [name, email, phone, dob, city, country, business, desired_age,
                              interest, extra_json, registered])
+
+
+# ===== Гостевой список ивента (БОЕВАЯ книга Ани, google_guest_sheet_id) =====
+# Пишем в СУЩЕСТВУЮЩУЮ вкладку конкретного ивента (агентство создаёт её сама). Макет между
+# вкладками разный (муж-блок то в C, то в A) → колонки ищем ПО ЗАГОЛОВКУ, а не по букве.
+# Заполняем только мужской блок: Men/Emails/Number/Age/Profession. Pago/Photos/Notes и весь
+# женский блок НЕ трогаем. Вкладку не создаём (если её нет — вызывающий алертит Ане).
+
+# Какое поле гостя → в какой заголовок писать (нормализованные варианты имени заголовка).
+GUEST_FIELD_HEADERS = {
+    "men": ("men",), "emails": ("emails", "email"), "number": ("number",),
+    "age": ("age",), "profession": ("profession",),
+}
+
+
+def _norm_hdr(v) -> str:
+    return str(v).strip().lower() if v is not None else ""
+
+
+def _find_event_tab(ss, sid: str, tab_name: str):
+    """Точное title вкладки, совпавшей по strip (у вкладок бывают хвостовые пробелы), или None."""
+    meta = ss.get(spreadsheetId=sid).execute()
+    want = (tab_name or "").strip()
+    for s in meta.get("sheets", []):
+        if s["properties"]["title"].strip() == want:
+            return s["properties"]["title"]
+    return None
+
+
+def _guest_columns(header_row: list) -> dict | None:
+    """По строке-заголовку → {field: col_index0} для МУЖСКОГО блока.
+
+    Границу справа ставим по колонке Women (второй Number/Emails — женские, их не берём).
+    None если не нашли обязательный заголовок Men."""
+    cells = [_norm_hdr(c) for c in header_row]
+    if "men" not in cells:
+        return None
+    men_i = cells.index("men")
+    bound = len(cells)  # правая граница муж-блока — первая "women" после Men
+    for j in range(men_i + 1, len(cells)):
+        if cells[j] == "women":
+            bound = j
+            break
+    cols = {}
+    for field, names in GUEST_FIELD_HEADERS.items():
+        for j in range(men_i, bound):
+            if cells[j] in names:
+                cols[field] = j
+                break
+    return cols if "men" in cols else None
+
+
+def _first_free_men_row(values: list, header_idx: int, men_col: int):
+    """Индекс (0-based по values) первой строки ниже заголовка с пустым Men. None если нет.
+
+    Опирается на то, что свободные слоты несут номер в колонке «#» (1–25) — иначе Sheets API
+    обрезал бы полностью пустые хвостовые строки и слот бы «пропал» (→ no_slot, безопасно:
+    Аня получит алерт вписать вручную, порчи данных нет)."""
+    for i in range(header_idx + 1, len(values)):
+        row = values[i]
+        cell = row[men_col] if men_col < len(row) else None
+        if cell is None or str(cell).strip() == "":
+            return i
+    return None
+
+
+def _write_guest_sync(tab_name: str, fields: dict) -> str:
+    """Синхронная запись гостя в муж-блок вкладки ивента. Возврат статуса (см. append_...)."""
+    _ensure_clients()
+    sid = settings.google_guest_sheet_id
+    ss = _sheets.spreadsheets()
+    title = _find_event_tab(ss, sid, tab_name)
+    if title is None:
+        return "no_tab"
+    values = ss.values().get(spreadsheetId=sid, range=f"'{title}'").execute().get("values", [])
+    if not values:
+        return "bad_layout"
+    header_idx = 0  # во всех гостевых вкладках заголовок — первая строка
+    cols = _guest_columns(values[header_idx])
+    if not cols:
+        return "bad_layout"
+    free = _first_free_men_row(values, header_idx, cols["men"])
+    if free is None:
+        return "no_slot"
+    row_num = free + 1  # 1-based строка листа
+    # точечные обновления только по нашим полям с непустым значением (Pago/Photos/Notes не трогаем)
+    data = [{"range": f"'{title}'!{_col_letter(cols[f] + 1)}{row_num}", "values": [[v]]}
+            for f, v in fields.items() if f in cols and v not in (None, "")]
+    if not data:
+        return "no_data"
+    ss.values().batchUpdate(spreadsheetId=sid, body={
+        "valueInputOption": "RAW", "data": data}).execute()
+    return "written"
+
+
+async def append_guest_to_event_tab(tab_name: str, name: str, email: str, phone: str,
+                                    age: str, profession: str) -> str:
+    """Вписать гостя в мужской блок вкладки ивента (книга Ани). Колонки по заголовку,
+    первый свободный слот. Возврат: written | no_tab | no_slot | bad_layout | no_data.
+
+    Не создаёт вкладку, не трогает Pago/Photos/Notes и женский блок."""
+    fields = {"men": name, "emails": email, "number": phone,
+              "age": age, "profession": profession}
+    return await asyncio.to_thread(_write_guest_sync, tab_name, fields)

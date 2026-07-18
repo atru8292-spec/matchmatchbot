@@ -12,6 +12,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import db
+import escalation
 import funnel
 import gcal
 import sender
@@ -148,22 +149,57 @@ async def save_anketa_if_complete(phone: str) -> bool:
         return False
 
 
-async def _add_to_guest_list(phone: str) -> None:
-    """Добавить оплатившего ивент в гостевой список (Google Sheets 'Invitados').
+def _guest_age(lead: dict) -> str:
+    """Возраст гостя для листа: из date_of_birth (точнее), фолбэк на поле age. '' если нет."""
+    dob = lead.get("date_of_birth")
+    if hasattr(dob, "year"):
+        today = datetime.now(_CDMX).date()
+        return str(today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day)))
+    a = lead.get("age")
+    return str(a) if a else ""
 
-    Не критично: сбой Sheets (или не настроено) НЕ ломает подтверждение оплаты.
+
+async def _add_to_guest_list(phone: str) -> None:
+    """Вписать оплатившего ивент в гостевой список Ани — вкладку текущего ивента.
+
+    Книга — google_guest_sheet_id (боевая книга Ани); имя вкладки — настройка
+    event_guest_tab (агентство создаёт вкладку сама). Пишем муж-блок Men/Emails/Number/
+    Age/Profession из анкеты; Pago/Photos/Notes и женский блок не трогаем.
+    Не критично: сбой/не настроено НЕ ломает подтверждение оплаты — Аня получает алерт
+    и вписывает вручную.
     """
-    if not settings.google_sheet_id:
-        return
+    if not settings.google_guest_sheet_id:
+        return  # книга гостевого списка не настроена — фича выключена
+    # Всё тело в try/except: оплата УЖЕ подтверждена (стадия сменена ДО этого вызова),
+    # поэтому любой сбой (Supabase/Sheets) не должен всплыть в confirm_payment — только
+    # лог + алерт Ане, чтобы она вписала гостя вручную.
+    lead = None
     try:
         lead = await db.get_lead_by_phone(phone)
         if not lead:
+            logger.warning("гостевой список: лид %s не найден — пропуск", phone)
             return
-        name = lead.get("name") or lead.get("whatsapp_name") or ""
+        s = await db.get_settings(["event_guest_tab"])
+        tab = (s.get("event_guest_tab") or "").strip()
+        name = " ".join(x for x in [lead.get("name"), lead.get("last_name")] if x) \
+            or lead.get("whatsapp_name") or ""
         digits = "".join(c for c in (phone or "") if c.isdigit())
-        registered = datetime.now(_CDMX).strftime("%Y-%m-%d %H:%M")
-        await gcal.append_guest_row(name, ("+" + digits) if digits else "", "Pagado",
-                                    lead.get("interest") or "", registered)
-        logger.info("гостевой список: добавлен %s", phone)
+        phone_disp = ("+" + digits) if digits else ""
+        if not tab:
+            await escalation.notify_guest_list_issue(lead, "", "no_setting")
+            return
+        status = await gcal.append_guest_to_event_tab(
+            tab, name, lead.get("email") or "", phone_disp,
+            _guest_age(lead), lead.get("profession") or "")
+        if status == "written":
+            logger.info("гостевой список ивента: добавлен %s в «%s»", phone, tab)
+        else:
+            logger.warning("гостевой список: гость %s НЕ записан в «%s» (%s)", phone, tab, status)
+            await escalation.notify_guest_list_issue(lead, tab, status)
     except Exception:
-        logger.exception("guest list append failed [%s] (оплата уже подтверждена)", phone)
+        logger.exception("гостевой список: сбой [%s] (оплата уже подтверждена)", phone)
+        # алертим даже если упал сам lead-lookup — Аня получит хотя бы ссылку по номеру
+        try:
+            await escalation.notify_guest_list_issue(lead or {"phone": phone}, "", "error")
+        except Exception:
+            logger.exception("гостевой список: не смог отправить алерт [%s]", phone)
