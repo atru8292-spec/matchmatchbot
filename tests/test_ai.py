@@ -494,6 +494,105 @@ class TestColdLeadEventGuard:
         assert result["used_scenario_id"] == 51
 
 
+class TestEventVideoAnnounce:
+    """Анонс explainer-видео в #51/#52: дописываем в последний баббл, только если видео
+    реально уйдёт (не слали + пул не пуст). Иначе текст кончается как есть (без обещания)."""
+
+    # 4-абзацный шаблон #51 (как в проде — упирается в MAX_MESSAGES=4)
+    _TMPL_51 = "Precio ...\n\nEs único ...\n\nTodos van ...\n\nAquí está el enlace: [event_link]"
+
+    def _patches(self, *, already_sent: bool, pool_video: list):
+        """Общие моки БД для ветки анонса."""
+        return (
+            patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})),
+            patch("ai.db.event_media_sent", AsyncMock(return_value=already_sent)),
+            patch("ai.db.random_event_media", AsyncMock(return_value=pool_video)),
+        )
+
+    async def test_announce_added_when_not_sent_and_pool_nonempty(self):
+        """Видео не слали + в пуле есть активное видео → анонс в последнем баббле."""
+        lead = _make_lead(phone="wa_5215500000001")
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.62, template_es=self._TMPL_51)
+        p_settings, p_sent, p_pool = self._patches(already_sent=False, pool_video=[{"storage_url": "u"}])
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
+             patch("ai._call_openai", AsyncMock()) as mock_openai, \
+             p_settings, p_sent, p_pool:
+            result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
+        assert result["used_scenario_id"] == 51
+        assert result["send_event_video"] is True
+        assert result["messages"][-1].endswith(ai._EVENT_VIDEO_ANNOUNCE)  # анонс в конце
+        assert ai._EVENT_VIDEO_ANNOUNCE not in result["messages"][0]       # только последний баббл
+        assert len(result["messages"]) <= ai.MAX_MESSAGES                  # лимит не превышен
+        mock_openai.assert_not_awaited()
+
+    async def test_no_announce_when_already_sent(self):
+        """Видео этому лиду на этот ивент уже слали → анонса нет, текст кончается на ссылке."""
+        lead = _make_lead(phone="wa_5215500000002")
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.62, template_es=self._TMPL_51)
+        p_settings, p_sent, p_pool = self._patches(already_sent=True, pool_video=[{"storage_url": "u"}])
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
+             patch("ai._call_openai", AsyncMock()), \
+             p_settings, p_sent, p_pool:
+            result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
+        assert ai._EVENT_VIDEO_ANNOUNCE not in "\n".join(result["messages"])
+        assert result["messages"][-1] == "Aquí está el enlace: [event_link]"
+        assert len(result["messages"]) <= ai.MAX_MESSAGES
+
+    async def test_no_announce_when_pool_empty(self):
+        """Пул видео пуст (удалили/сняли is_active) → анонса нет ДАЖЕ если маркера ещё нет."""
+        lead = _make_lead(phone="wa_5215500000003")
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.62, template_es=self._TMPL_51)
+        p_settings, p_sent, p_pool = self._patches(already_sent=False, pool_video=[])
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
+             patch("ai._call_openai", AsyncMock()), \
+             p_settings, p_sent, p_pool:
+            result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
+        assert ai._EVENT_VIDEO_ANNOUNCE not in "\n".join(result["messages"])
+        assert result["messages"][-1] == "Aquí está el enlace: [event_link]"
+        assert len(result["messages"]) <= ai.MAX_MESSAGES
+
+    async def test_announce_also_for_52(self):
+        """#52 (детали без цены) — та же ветка анонса при квалифицированном лиде."""
+        lead = _make_lead(phone="wa_5215500000004")
+        tmpl52 = "Incluye ...\n\nEs único ...\n\nTodos van ...\n\nSi quieres, te paso el enlace."
+        n52 = _make_scenario(id=52, ai_allowed=False, score=0.62, template_es=tmpl52)
+        p_settings, p_sent, p_pool = self._patches(already_sent=False, pool_video=[{"storage_url": "u"}])
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n52])), \
+             patch("ai._call_openai", AsyncMock()), \
+             p_settings, p_sent, p_pool:
+            result = await ai.generate_reply(lead, [], "cuéntame del evento")
+        assert result["messages"][-1].endswith(ai._EVENT_VIDEO_ANNOUNCE)
+        assert len(result["messages"]) <= ai.MAX_MESSAGES
+
+    async def test_no_announce_when_block(self):
+        """#51/#52 с blocks_lead=True (action=block) → анонса нет: main вернётся ДО отправки
+        видео, значит анонс был бы ложью. Гард на action=='block' срабатывает до запросов БД."""
+        lead = _make_lead(phone="wa_5215500000005")
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.70, blocks_lead=True,
+                             mode="bot_then_block", template_es=self._TMPL_51)
+        gs = AsyncMock(return_value={"event_date": "2026-08-15"})
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
+             patch("ai._call_openai", AsyncMock()), \
+             patch("ai.db.get_settings", gs):
+            result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
+        assert result["action"] == "block"
+        gs.assert_not_awaited()  # гард на block отработал до запроса event_date
+        assert ai._EVENT_VIDEO_ANNOUNCE not in "\n".join(result["messages"])
+
+    async def test_no_db_calls_when_no_phone(self):
+        """Лид без phone → ранний выход, БД для анонса не дёргаем (обратная совместимость)."""
+        lead = _make_lead()
+        lead.pop("phone", None)
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.62, template_es=self._TMPL_51)
+        gs = AsyncMock(return_value={"event_date": "2026-08-15"})
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
+             patch("ai._call_openai", AsyncMock()), \
+             patch("ai.db.get_settings", gs):
+            result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
+        gs.assert_not_awaited()  # без phone до запроса event_date не доходим
+        assert ai._EVENT_VIDEO_ANNOUNCE not in "\n".join(result["messages"])
+
+
 class TestGenerateReplyAI:
     """Ветка 2: ai_allowed=True (или нет уверенного матча) → OpenAI вызывается."""
 
