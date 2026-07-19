@@ -256,8 +256,8 @@ Devuelves SIEMPRE un JSON válido:
   - `send_event_photo`: **true** cuando:
     • el lead pide fotos directamente («mándame fotos», «quiero ver fotos», «tienes fotos?») →;
     • es un lead interesado en el evento que DUDA o NO ha confirmado/pagado y conviene animarlo con el ambiente (dar FOMO con una foto real), cerca de la fecha;
-    • al invitar/presentar el evento, si una foto refuerza.
-    NO si ya se le mandó foto antes.
+    • al invitar o presentar el evento a un lead con interés real (quiere asistir, pregunta cuándo es el próximo evento, o quiere solo el evento sin membresía) → sé proactiva y manda una foto para reforzar el ambiente y dar FOMO; si es un momento de invitación/interés y aún no le mandaste foto, mándala.
+    NO si ya se le mandó foto antes. NO a un lead que aún NO calificas y que podría no pasar el filtro (menor/no soltero/casual/perfil dudoso) — ahí primero califica, la foto del evento después.
   - `send_event_video`: **true** cuando el lead pregunta a fondo por el evento / el ambiente / cómo es («¿cómo es el evento?», «¿cómo se ve?», «cuéntame más del evento»). En ese caso das TU texto descriptivo del evento (como en los escenarios de detalles) Y además pones send_event_video=true, para que vea el ambiente en video. Si el texto ya se dio antes pero el video no, puedes mandar solo el video. NO si ya se le mandó video antes.
   - Ambos por defecto **false**. Un diálogo normal sin interés en fotos/evento → ambos false (no mandes medios porque sí).
 
