@@ -665,6 +665,39 @@ class TestGenerateReplyAI:
         assert result["extracted"].get("age") == 35
 
 
+class TestForceEscalateUsesUsedScenario:
+    """Форс-эскалация bot_then_anna должна смотреть на used_scenario_id (реальный выбор
+    LLM), а не на top (топ RAG-рейтинга) — регресс: №15 (event-only, bot_then_anna) не
+    эскалировался, когда top по эмбеддингу был другой сценарий с mode=bot_auto."""
+
+    async def test_llm_picks_non_top_bot_then_anna_scenario(self, lead, history):
+        top_scenario = _make_scenario(id=2, mode="bot_auto", ai_allowed=True, score=0.66)
+        handoff_scenario = _make_scenario(id=15, mode="bot_then_anna", ai_allowed=True,
+                                          score=0.61)
+        ai_response = {**_VALID_AI_RESPONSE, "action": "respond", "needs_escalation": False,
+                       "used_scenario_id": 15}
+        with patch("ai.search_scenarios",
+                   new=AsyncMock(return_value=[top_scenario, handoff_scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "quiero ir al evento")
+
+        assert result["action"] == "escalate"
+        assert result["needs_escalation"] is True
+        assert result["used_scenario_id"] == 15
+
+    async def test_top_bot_auto_no_force_when_llm_stays_on_it(self, lead, history):
+        """Без баг-кейса: LLM использует top (bot_auto) → эскалация НЕ форсится."""
+        top_scenario = _make_scenario(id=2, mode="bot_auto", ai_allowed=True, score=0.66)
+        ai_response = {**_VALID_AI_RESPONSE, "action": "respond", "needs_escalation": False,
+                       "used_scenario_id": 2}
+        with patch("ai.search_scenarios", new=AsyncMock(return_value=[top_scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "hola")
+
+        assert result["action"] == "respond"
+        assert result["needs_escalation"] is False
+
+
 class TestGenerateReplyFallback:
     """Ветки 4 и 5: сбои → fallback, никогда не бросает."""
 

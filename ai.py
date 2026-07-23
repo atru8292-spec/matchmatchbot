@@ -499,12 +499,23 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     # что LLM сам вернёт escalate. Через main (escalate → mode='manual') гарантирует, что
     # дальше лид ведётся Аней, а бот не отвечает повторно. Напр. №48 "no puedo ir" →
     # выпадает из завтрашнего check-in №23; также №14/№19/№24/№26/№41/№42/№53.
-    if top and top.get("mode") == "bot_then_anna" and top.get("score", 0) >= FALLBACK_SCORE:
+    #
+    # Смотрим на сценарий, который РЕАЛЬНО использовал LLM (used_scenario_id), а не на top
+    # (топ RAG-рейтинга) — LLM выбирает из confident свободно, и его выбор может отличаться
+    # от top (напр. top=bot_auto по эмбеддингу, а LLM использовал более подходящий по смыслу
+    # bot_then_anna из того же confident). Проверка top.mode пропускала форс-эскалацию именно
+    # в таком случае.
+    # used_scenario_id=None валиден (LLM не опёрся ни на один сценарий, промпт это разрешает) —
+    # тогда откатываемся на top как перестраховку: если РЕАЛЬНО подходящий по теме сценарий
+    # (top) требует хэндофф, лучше форсировать эскалацию даже без явного подтверждения LLM,
+    # чем рискнуть пропустить лида без единой проверки (см. комментарий выше).
+    used = next((s for s in confident if s.get("id") == result.get("used_scenario_id")), top)
+    if used and used.get("mode") == "bot_then_anna" and used.get("score", 0) >= FALLBACK_SCORE:
         if result["action"] != "escalate":
             logger.info("bot_then_anna #%s → форсирую escalate (LLM вернул %s)",
-                        top["id"], result["action"])
+                        used["id"], result["action"])
         result["action"] = "escalate"
         result["needs_escalation"] = True
         if not result.get("used_scenario_id"):
-            result["used_scenario_id"] = top["id"]
+            result["used_scenario_id"] = used["id"]
     return result
