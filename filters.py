@@ -141,7 +141,7 @@ def _manual_active(lead: dict) -> bool:
 
 def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
            bypass_phones: frozenset = frozenset(),
-           whitelist_no_alert: bool = False) -> Decision:
+           whitelist_no_alert: bool = False, bot_paused: bool = False) -> Decision:
     """Принять детерминированное решение по лиду и склеенному тексту залпа.
 
     lead — строка leads (dict) или {} для нового. Порядок приоритетов фиксирован.
@@ -149,6 +149,8 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     bypass_phones — номера-исключения silent-фильтра (тестовые/доверенные).
     whitelist_no_alert — whitelist-запись это личный контакт Anna (reason personal_contact):
         бот молчит БЕЗ алерта Ане. VIP-клиент (False) — алерт остаётся.
+    bot_paused — глобальная пауза (тумблер в CRM): бот молчит ВСЕМ, кроме bypass_phones
+        (тестовые номера). Для тех-режима: подключаем/правим, отвечаем только на свой номер.
     """
     lead = lead or {}
     text = user_text or ""
@@ -167,6 +169,10 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     # даже если лида вёл менеджер (иначе при возврате в auto догоны возобновятся).
     if is_optout(text):
         return Decision("optout", "лид попросил не писать (opt-out)", alert_manager=True)
+    # Глобальная пауза (тех. режим) — ПОСЛЕ whitelist/opt-out (согласие лида и VIP-алерты чтим
+    #    даже на паузе), молчим всем остальным, кроме тестовых bypass-номеров. Без алерта.
+    if bot_paused and phone not in bypass_phones:
+        return Decision("silent", "бот на паузе (тех. режим) — молчу")
     if _manual_active(lead):
         return Decision("silent", f"manual mode — менеджер ведёт: {name}")
 

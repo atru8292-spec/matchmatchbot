@@ -305,8 +305,20 @@ async def run_videocall_reminders(now=None) -> int:
 
 # ===== Тик и цикл =====
 
+async def _bot_paused() -> bool:
+    """Глобальная пауза (тумблер в CRM). Сбой чтения → False (не паузим, безопасный дефолт)."""
+    try:
+        return (await db.get_settings(["bot_paused"])).get("bot_paused") == "1"
+    except Exception:
+        return False
+
+
 async def tick() -> None:
     """Один проход планировщика. Сбой любой части → лог + technical-алерт, не роняет цикл."""
+    # Глобальная пауза (тех. режим): не шлём НИЧЕГО проактивно (догоны/напоминания) всем лидам.
+    if await _bot_paused():
+        logger.info("scheduler: бот на паузе (тех. режим) — тик пропущен")
+        return
     try:
         await run_followups()
     except Exception as e:

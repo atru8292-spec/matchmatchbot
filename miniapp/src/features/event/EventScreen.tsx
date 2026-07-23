@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarHeart, MapPin, CreditCard, GraduationCap, Image as ImageIcon, Check, CloudOff, UploadCloud, Loader2, X, Tag, Table2 } from "lucide-react";
+import { CalendarHeart, MapPin, CreditCard, GraduationCap, Image as ImageIcon, Check, CloudOff, UploadCloud, Loader2, X, Tag, Table2, Power } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/Switch";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/cn";
-import { fetchEvent, saveEvent, uploadInvitation } from "@/lib/api";
+import { fetchEvent, saveEvent, uploadInvitation, fetchBotPaused, setBotPause } from "@/lib/api";
 import type { EventSettings } from "@/lib/types";
 import { DayOfReminder } from "./DayOfReminder";
 import { EventMediaSection } from "./EventMediaSection";
@@ -25,6 +25,7 @@ export function EventScreen() {
       <header className="sticky top-0 z-10 border-b border-line bg-paper/90 px-4 py-3 backdrop-blur">
         <h1 className="text-xl text-ink">Ивент</h1>
       </header>
+      <BotPauseCard />
       {isPending ? (
         <FormSkeleton />
       ) : isError || !data ? (
@@ -43,6 +44,30 @@ export function EventScreen() {
   );
 }
 
+// Глобальная пауза бота (тех. режим): вкл → бот молчит всем, кроме тестовых номеров.
+// Переключается мгновенно (свой mutation, без «Сохранить» формы ивента).
+function BotPauseCard() {
+  const qc = useQueryClient();
+  const { data: paused } = useQuery({ queryKey: ["botPaused"], queryFn: fetchBotPaused });
+  const m = useMutation({
+    mutationFn: (v: boolean) => setBotPause(v),
+    onSuccess: (res) => qc.setQueryData(["botPaused"], res.botPaused),
+  });
+  return (
+    <div className="px-4 pt-3">
+      <Card className="p-4">
+        <SwitchRow
+          icon={<Power size={18} />}
+          label="Бот на паузе (тех. режим)"
+          hint="Вкл — бот молчит всем лидам, кроме тестовых номеров. Для правок и подключения WhatsApp."
+          checked={!!paused}
+          onChange={(v) => m.mutate(v)}
+        />
+      </Card>
+    </div>
+  );
+}
+
 function EventForm({ initial }: { initial: EventSettings }) {
   const qc = useQueryClient();
   const [active, setActive] = useState(initial.eventActive);
@@ -51,6 +76,7 @@ function EventForm({ initial }: { initial: EventSettings }) {
   const [end, setEnd] = useState(initial.eventEnd);
   const [address, setAddress] = useState(initial.eventAddress);
   const [priceNonmember, setPriceNonmember] = useState(initial.eventPriceNonmember);
+  const [priceOld, setPriceOld] = useState(initial.eventPriceOld);
   const [eventLink, setEventLink] = useState(initial.eventLink);
   const [courseLink, setCourseLink] = useState(initial.courseLink);
   const [invUrl, setInvUrl] = useState(initial.invitationUrl);
@@ -97,6 +123,7 @@ function EventForm({ initial }: { initial: EventSettings }) {
   }
   const priceOk = (v: string) => /^[\d.,\s]+$/.test(v.trim());
   if (priceNonmember.trim() && !priceOk(priceNonmember)) err.priceNonmember = "Только цифры";
+  if (priceOld.trim() && !priceOk(priceOld)) err.priceOld = "Только цифры";
   if (eventLink.trim() && !isUrl(eventLink)) err.eventLink = "Нужен URL (http…)";
   if (courseLink.trim() && !isUrl(courseLink)) err.courseLink = "Нужен URL (http…)";
   if (invUrl.trim() && !isUrl(invUrl)) err.invUrl = "Нужен URL (http…)";
@@ -111,7 +138,7 @@ function EventForm({ initial }: { initial: EventSettings }) {
       eventTime: start.trim(),  // зеркало для #15/#47/#54 (бэк тоже дублирует)
       eventAddress: address.trim(),
       eventPriceMember: "", eventPriceNonmember: priceNonmember.trim(),
-      eventPriceOld: "",
+      eventPriceOld: priceOld.trim(),
       eventLink: eventLink.trim(), courseLink: courseLink.trim(),
       invitationUrl: invUrl.trim(), invitationReady: invReady,
       eventGuestTab: guestTab.trim(),
@@ -151,7 +178,12 @@ function EventForm({ initial }: { initial: EventSettings }) {
           </Field>
           <Field label="Цена билета (MXN)" error={err.priceNonmember} hint="Единая цена для всех">
             <Input value={priceNonmember} onChange={(e) => setPriceNonmember(e.target.value)}
-              placeholder="6,000" inputMode="numeric" leading={<Tag size={18} />} />
+              placeholder="5,000" inputMode="numeric" leading={<Tag size={18} />} />
+          </Field>
+          <Field label="Старая цена (скидка)" error={err.priceOld}
+            hint="Показывается зачёркнутой как «antes X». Пусто — скидка скрыта.">
+            <Input value={priceOld} onChange={(e) => setPriceOld(e.target.value)}
+              placeholder="9,000" inputMode="numeric" leading={<Tag size={18} />} />
           </Field>
           <Field label="Вкладка гостевого списка"
             hint="Точное имя вкладки в книге Ани, куда бот впишет оплативших (напр. «22 de Julio»)">

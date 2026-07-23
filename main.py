@@ -96,8 +96,16 @@ async def _process_burst_impl(phone: str) -> None:
     )
     await db.mark_messages_processed([m["id"] for m in msgs])
 
+    # Глобальная пауза (тумблер в CRM): бот молчит всем, кроме bypass-номеров (тех. режим).
+    # Сбой чтения настройки → НЕ паузим (безопасный дефолт: бот продолжает работать).
+    try:
+        bot_paused = (await db.get_settings(["bot_paused"])).get("bot_paused") == "1"
+    except Exception:
+        bot_paused = False
+
     decision = filters.decide(lead, whitelisted, combined, phone,
-                              settings.silent_bypass_set, whitelist_no_alert=wl_no_alert)
+                              settings.silent_bypass_set, whitelist_no_alert=wl_no_alert,
+                              bot_paused=bot_paused)
 
     # 1) Дисквалификация/тишина текущего залпа приоритетнее фото: whitelist/silent
     #    (молчим) и blocked (escort/агрессия в тексте — блок, даже если в залпе есть фото).

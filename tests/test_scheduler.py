@@ -402,3 +402,23 @@ class TestFollowupAlerts:
         err = AsyncMock(); monkeypatch.setattr(scheduler.escalation, "notify_error", err)
         await scheduler.run_followups()
         err.assert_awaited_once()
+
+
+class TestTickPause:
+    """Глобальная пауза (тех. режим) → tick() ничего не шлёт проактивно."""
+
+    async def test_paused_skips_tick(self, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"bot_paused": "1"}))
+        f = AsyncMock(); monkeypatch.setattr(scheduler, "run_followups", f)
+        e = AsyncMock(); monkeypatch.setattr(scheduler, "run_event_reminders", e)
+        v = AsyncMock(); monkeypatch.setattr(scheduler, "run_videocall_reminders", v)
+        await scheduler.tick()
+        f.assert_not_awaited(); e.assert_not_awaited(); v.assert_not_awaited()
+
+    async def test_not_paused_runs_tick(self, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"bot_paused": "0"}))
+        f = AsyncMock(); monkeypatch.setattr(scheduler, "run_followups", f)
+        e = AsyncMock(); monkeypatch.setattr(scheduler, "run_event_reminders", e)
+        v = AsyncMock(); monkeypatch.setattr(scheduler, "run_videocall_reminders", v)
+        await scheduler.tick()
+        f.assert_awaited_once(); e.assert_awaited_once(); v.assert_awaited_once()

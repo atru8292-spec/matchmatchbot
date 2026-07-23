@@ -176,6 +176,18 @@ export async function saveEvent(s: EventSettings): Promise<EventSettings> {
   return apiSend<EventSettings>("/event", "PUT", s);
 }
 
+// ===== Глобальная пауза бота (тех. режим) =====
+export async function fetchBotPaused(): Promise<boolean> {
+  if (USE_MOCKS) return false;
+  const m = await apiFetch<{ botPaused: boolean }>("/meta");
+  return !!m.botPaused;
+}
+
+export async function setBotPause(paused: boolean): Promise<{ botPaused: boolean }> {
+  if (USE_MOCKS) return { botPaused: paused };
+  return apiSend<{ botPaused: boolean }>("/bot/pause", "POST", { paused });
+}
+
 // ===== Напоминание дня ивента =====
 export async function fetchDayOfPreview(): Promise<DayOfPreview> {
   return apiFetch<DayOfPreview>("/event/day-of/preview");

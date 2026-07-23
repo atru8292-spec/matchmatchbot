@@ -840,6 +840,32 @@ class TestSilentBypass:
         assert r.action == "blocked"
 
 
+class TestBotPaused:
+    """Глобальная пауза (тех. режим): бот молчит всем, кроме bypass-номеров."""
+
+    BYPASS = frozenset({"wa_79635708880"})
+
+    def test_paused_silences_normal_lead(self):
+        # обычный мексиканский лид (в норме needs_ai) при паузе → silent
+        r = decide({}, False, "hola quiero info", "wa_5215551234567", bot_paused=True)
+        assert r.action == "silent"
+
+    def test_paused_silent_no_alert(self):
+        # пауза — осознанный тех-режим, без алерта Ане
+        r = decide({}, False, "hola", "wa_5215551234567", bot_paused=True)
+        assert r.action == "silent" and r.alert_manager is False
+
+    def test_paused_bypass_number_passes(self):
+        # тестовый bypass-номер при паузе проходит к AI (отвечаем только своему номеру)
+        r = decide({}, False, "hola quiero info", "wa_79635708880", self.BYPASS, bot_paused=True)
+        assert r.action == "needs_ai"
+
+    def test_not_paused_normal_lead_ok(self):
+        # без паузы — обычное поведение
+        r = decide({}, False, "hola quiero info", "wa_5215551234567", bot_paused=False)
+        assert r.action == "needs_ai"
+
+
 # ===========================================================================
 # Заявление об оплате (блок 13)
 # ===========================================================================

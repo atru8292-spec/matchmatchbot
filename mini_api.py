@@ -75,12 +75,35 @@ async def me(user: dict = Depends(require_admin)) -> dict:
 
 @router.get("/meta")
 async def meta(_: dict = Depends(require_admin)) -> dict:
-    """Справочники для фильтров фронта: стадии воронки (код+название)."""
+    """Справочники для фильтров фронта: стадии воронки (код+название) + глобальная пауза бота."""
+    paused = False
+    if db.is_ready():
+        try:
+            paused = (await db.get_settings(["bot_paused"])).get("bot_paused") == "1"
+        except Exception:
+            paused = False
     return {
         "stages": [{"code": code, "label": label}
                    for code, label in funnel.FUNNEL_STAGES.items()],
         "activeStages": list(funnel.ACTIVE_STAGES),
+        "botPaused": paused,
     }
+
+
+class BotPauseIn(BaseModel):
+    paused: bool
+
+
+@router.post("/bot/pause")
+async def set_bot_pause(body: BotPauseIn, _: dict = Depends(require_admin)) -> dict:
+    """Глобальная пауза бота (тех. режим): вкл → бот молчит всем, кроме bypass-номеров."""
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    try:
+        await db.set_setting("bot_paused", "1" if body.paused else "0")
+    except Exception as e:
+        await _alert_500("set_bot_pause", e)
+    return {"botPaused": body.paused}
 
 
 @router.get("/leads")

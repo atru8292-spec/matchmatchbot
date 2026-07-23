@@ -143,6 +143,26 @@ class TestAuxEndpoints:
         codes = [s["code"] for s in r.json()["stages"]]
         assert "qualifying" in codes and "client_agency" in codes
 
+    def test_meta_reports_paused(self, client, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"bot_paused": "1"}))
+        assert client.get("/api/mini/meta").json()["botPaused"] is True
+
+    def test_meta_reports_not_paused(self, client, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"bot_paused": "0"}))
+        assert client.get("/api/mini/meta").json()["botPaused"] is False
+
+    def test_bot_pause_on(self, client, monkeypatch):
+        setter = AsyncMock(); monkeypatch.setattr(db, "set_setting", setter)
+        r = client.post("/api/mini/bot/pause", json={"paused": True})
+        assert r.status_code == 200 and r.json()["botPaused"] is True
+        setter.assert_awaited_once_with("bot_paused", "1")
+
+    def test_bot_pause_off(self, client, monkeypatch):
+        setter = AsyncMock(); monkeypatch.setattr(db, "set_setting", setter)
+        r = client.post("/api/mini/bot/pause", json={"paused": False})
+        assert r.status_code == 200 and r.json()["botPaused"] is False
+        setter.assert_awaited_once_with("bot_paused", "0")
+
 
 class TestAuthEnforced:
     """Без override — реальная require_admin должна отклонять анонима."""
