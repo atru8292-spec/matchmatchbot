@@ -52,7 +52,7 @@ CHECKIN_MORNING_SCENARIO = 23  # утренний check-in на следующи
 
 # Стадии «уже оплатил/клиент» → в день ивента шлём Шаблон A без призыва купить билет.
 # Клиенты агентства (whitelist) исключены из выборки отдельно (event_recipients).
-PAID_STAGES = {"event_attended", "client_starter", "client_standard", "client_vip"}
+PAID_STAGES = {"event_attended", "client_agency"}
 
 # Напоминание о видеозвонке (сценарий 49).
 VIDEOCALL_SCENARIO = 49
@@ -218,7 +218,7 @@ async def _send_event_daytime(settings_map: dict, date_str: str) -> int:
     """День ивента: оплатившим/членам — Шаблон A (#47, без ссылки), остальным —
     Шаблон B (#54, призыв + ссылка на билет). Выбор по funnel_stage получателя.
 
-    «Оплатил» = funnel_stage в PAID_STAGES (event_attended/client_*). Клиенты агентства
+    «Оплатил» = funnel_stage в PAID_STAGES (event_attended/client_agency). Клиенты агентства
     (whitelist) в выборку не попадают вовсе (event_recipients фильтрует w.phone IS NULL).
     Неоплатившим ссылку шлём ВСЕГДА (allow_repeat_links=True): факт оплаты важнее дедупа
     по тексту — «видел ссылку» ≠ «оплатил». Один day-of на лида (идемпотентность по kind).

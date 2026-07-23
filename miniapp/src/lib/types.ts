@@ -2,7 +2,7 @@
 
 export type FunnelStage =
   | "new" | "qualifying" | "photo_pending" | "qualified" | "pitched" | "videocall_set"
-  | "client_starter" | "client_standard" | "client_vip" | "event_attended"
+  | "client_agency" | "event_attended"
   | "rejected" | "lost" | "nurture";
 
 export type LeadMode = "auto" | "manual";

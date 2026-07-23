@@ -121,10 +121,10 @@ def payment_action_kb(phone: str) -> dict:
 
 
 def payment_target_kb(phone: str) -> dict:
-    """Уточнение за что оплата (если selected_service неоднозначен): ивент / подписка."""
+    """Уточнение за что оплата (если selected_service неоднозначен): ивент / услуга."""
     return {"inline_keyboard": [
         [_btn("🎟 Оплата за ивент", "payment_event", phone)],
-        [_btn("⭐ Оплата подписки", "payment_sub", phone)],
+        [_btn("⭐ Оплата услуги (клиент)", "payment_client", phone)],
     ]}
 
 

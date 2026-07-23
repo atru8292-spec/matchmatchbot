@@ -485,8 +485,8 @@ class TestNotifyPayment:
         data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
         assert "mb:payment_ok:wa_79635378880" in data
 
-    def test_payment_target_kb_has_event_and_sub(self):
+    def test_payment_target_kb_has_event_and_client(self):
         kb = escalation.payment_target_kb("wa_1")
         data = [b["callback_data"] for row in kb["inline_keyboard"] for b in row]
         assert "mb:payment_event:wa_1" in data
-        assert "mb:payment_sub:wa_1" in data
+        assert "mb:payment_client:wa_1" in data

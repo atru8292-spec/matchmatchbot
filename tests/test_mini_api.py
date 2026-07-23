@@ -141,7 +141,7 @@ class TestAuxEndpoints:
         r = client.get("/api/mini/meta")
         assert r.status_code == 200
         codes = [s["code"] for s in r.json()["stages"]]
-        assert "qualifying" in codes and "client_vip" in codes
+        assert "qualifying" in codes and "client_agency" in codes
 
 
 class TestAuthEnforced:
@@ -795,7 +795,7 @@ class TestDayOf:
         assert any("tix.example" in c.args[1] for c in one.await_args_list)
 
     def test_send_auto_picks_A_for_paid(self, client, monkeypatch):
-        self._mock_send(monkeypatch, stage="client_starter")
+        self._mock_send(monkeypatch, stage="client_agency")
         d = client.post("/api/mini/event/day-of/send",
                         json={"recipients": [{"phone": "wa_5214444444444", "template": "auto"}]}).json()
         assert d["sent"][0]["template"] == "A"

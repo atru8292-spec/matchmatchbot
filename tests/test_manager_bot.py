@@ -592,10 +592,10 @@ class TestPaymentCallbacks:
         await mb.handle_update(_cb("mb:payment_event:wa_1"))
         assert conf.call_args.args[1] == "event_attended"
 
-    async def test_payment_sub(self, _patch_io, monkeypatch):
+    async def test_payment_client(self, _patch_io, monkeypatch):
         conf = AsyncMock(); monkeypatch.setattr(mb.actions, "confirm_payment", conf)
-        await mb.handle_update(_cb("mb:payment_sub:wa_1"))
-        assert conf.call_args.args[1] == "client_starter"
+        await mb.handle_update(_cb("mb:payment_client:wa_1"))
+        assert conf.call_args.args[1] == "client_agency"
 
 
 class TestSetEventValidation:

@@ -10,7 +10,7 @@ import { fetchDayOfPreview, fetchDayOfRecipients, fetchLeads, sendDayOf } from "
 import type { DayOfRecipient, DayOfSendResult } from "@/lib/types";
 
 // Совпадает с scheduler.PAID_STAGES на бэкенде — для расчёта шаблона у найденных лидов.
-const PAID = new Set(["event_attended", "client_starter", "client_standard", "client_vip"]);
+const PAID = new Set(["event_attended", "client_agency"]);
 const defTmpl = (stage: string): "A" | "B" => (PAID.has(stage) ? "A" : "B");
 
 type Mode = "auto" | "A" | "B";

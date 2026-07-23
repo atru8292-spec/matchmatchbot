@@ -20,9 +20,9 @@ from funnel import (
 
 class TestFunnelStagesDict:
 
-    def test_stage_count_is_13(self):
-        """FUNNEL_STAGES содержит ровно 13 стадий."""
-        assert len(FUNNEL_STAGES) == 13
+    def test_stage_count_is_11(self):
+        """FUNNEL_STAGES содержит ровно 11 стадий (клиентские сведены к client_agency + гость ивента)."""
+        assert len(FUNNEL_STAGES) == 11
 
     def test_active_stages_present(self):
         """Все активные стадии воронки присутствуют."""
@@ -31,7 +31,7 @@ class TestFunnelStagesDict:
 
     def test_client_stages_present(self):
         """Стадии клиентов присутствуют."""
-        for code in ("client_starter", "client_standard", "client_vip", "event_attended"):
+        for code in ("client_agency", "event_attended"):
             assert code in FUNNEL_STAGES, f"Клиентская стадия {code!r} отсутствует"
 
     def test_terminal_stages_present(self):
@@ -71,17 +71,11 @@ class TestStageLabel:
     def test_videocall_set(self):
         assert stage_label("videocall_set") == "Записан на звонок"
 
-    def test_client_starter(self):
-        assert stage_label("client_starter") == "Клиент Starter"
-
-    def test_client_standard(self):
-        assert stage_label("client_standard") == "Клиент Standard"
-
-    def test_client_vip(self):
-        assert stage_label("client_vip") == "Клиент VIP"
+    def test_client_agency(self):
+        assert stage_label("client_agency") == "Клиент агентства"
 
     def test_event_attended(self):
-        assert stage_label("event_attended") == "Пришёл на ивент"
+        assert stage_label("event_attended") == "Гость ивента"
 
     def test_rejected(self):
         assert stage_label("rejected") == "Не подошёл"
@@ -136,14 +130,8 @@ class TestNoFollowupStages:
     def test_nurture_in_no_followup(self):
         assert "nurture" in NO_FOLLOWUP_STAGES
 
-    def test_client_starter_in_no_followup(self):
-        assert "client_starter" in NO_FOLLOWUP_STAGES
-
-    def test_client_standard_in_no_followup(self):
-        assert "client_standard" in NO_FOLLOWUP_STAGES
-
-    def test_client_vip_in_no_followup(self):
-        assert "client_vip" in NO_FOLLOWUP_STAGES
+    def test_client_agency_in_no_followup(self):
+        assert "client_agency" in NO_FOLLOWUP_STAGES
 
     def test_event_attended_in_no_followup(self):
         assert "event_attended" in NO_FOLLOWUP_STAGES

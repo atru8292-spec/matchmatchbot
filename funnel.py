@@ -15,10 +15,8 @@ FUNNEL_STAGES: dict[str, str] = {
     "pitched": "Показала цену",
     "videocall_set": "Записан на звонок",
     # клиенты
-    "client_starter": "Клиент Starter",       # $1,400/мес
-    "client_standard": "Клиент Standard",     # $10k/6мес
-    "client_vip": "Клиент VIP",               # $14k/год
-    "event_attended": "Пришёл на ивент",      # 9k или 4k песо
+    "client_agency": "Клиент агентства",      # платит за персональный сервис (тариф — на звонке у Ани)
+    "event_attended": "Гость ивента",         # купил билет на конкретный ивент
     # не сложилось
     "rejected": "Не подошёл",
     "lost": "Отказался",
@@ -30,7 +28,7 @@ DEFAULT_STAGE = "new"
 # Стадии, для которых НЕ ставим next_followup_at (не догоняем фоллоу-апами).
 NO_FOLLOWUP_STAGES: frozenset[str] = frozenset({
     "lost", "rejected", "nurture",
-    "client_starter", "client_standard", "client_vip", "event_attended",
+    "client_agency", "event_attended",
 })
 
 # Активные стадии — лид ещё в работе (не клиент, не отказ). Для /leads менеджер-бота.

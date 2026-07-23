@@ -14,11 +14,14 @@ class TestStageForService:
     def test_event(self):
         assert actions.stage_for_service("event") == "event_attended"
 
-    def test_starter(self):
-        assert actions.stage_for_service("starter") == "client_starter"
+    def test_agency(self):
+        assert actions.stage_for_service("agency") == "client_agency"
 
-    def test_vip(self):
-        assert actions.stage_for_service("vip") == "client_vip"
+    def test_legacy_starter_maps_to_agency(self):
+        assert actions.stage_for_service("starter") == "client_agency"
+
+    def test_legacy_vip_maps_to_agency(self):
+        assert actions.stage_for_service("vip") == "client_agency"
 
     def test_none(self):
         assert actions.stage_for_service(None) is None
@@ -60,9 +63,9 @@ class TestConfirmPayment:
         stage = AsyncMock()
         monkeypatch.setattr(db, "set_funnel_stage", stage)
         monkeypatch.setattr(actions, "maybe_send_invitation", AsyncMock())
-        await actions.confirm_payment("wa_1", "client_starter", source="manual")
+        await actions.confirm_payment("wa_1", "client_agency", source="manual")
         stage.assert_awaited_once()
-        assert stage.call_args.args[1] == "client_starter"
+        assert stage.call_args.args[1] == "client_agency"
 
     async def test_event_stage_sends_invitation(self, monkeypatch):
         monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
@@ -73,7 +76,7 @@ class TestConfirmPayment:
     async def test_non_event_no_invitation(self, monkeypatch):
         monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
         inv = AsyncMock(); monkeypatch.setattr(actions, "maybe_send_invitation", inv)
-        await actions.confirm_payment("wa_1", "client_starter")
+        await actions.confirm_payment("wa_1", "client_agency")
         inv.assert_not_awaited()
 
 

@@ -747,8 +747,8 @@ class TestFunnelStageValidation:
         assert r["funnel_stage"] == "qualifying"
 
     def test_client_stage_passes(self):
-        r = ai._validate_output({"messages": ["x"], "action": "respond", "funnel_stage": "client_starter"})
-        assert r["funnel_stage"] == "client_starter"
+        r = ai._validate_output({"messages": ["x"], "action": "respond", "funnel_stage": "client_agency"})
+        assert r["funnel_stage"] == "client_agency"
 
     def test_invented_stage_becomes_none(self):
         r = ai._validate_output({"messages": ["x"], "action": "respond", "funnel_stage": "client_active"})

@@ -589,7 +589,7 @@ async def _handle_callback(cq: dict) -> None:
         "photo_reject": _cb_photo_reject,
         "payment_ok": _cb_payment_ok,
         "payment_event": _cb_payment_event,
-        "payment_sub": _cb_payment_sub,
+        "payment_client": _cb_payment_client,
     }
     handler = dispatch.get(action)
     if not handler:
@@ -721,7 +721,7 @@ async def _cb_payment_event(chat_id, cb_id, phone, message_id=None) -> None:
     await _reply(chat_id, f"✅ Оплата за ивент подтверждена, {_digits(phone)} → {funnel.stage_label('event_attended')}.")
 
 
-async def _cb_payment_sub(chat_id, cb_id, phone, message_id=None) -> None:
-    await actions.confirm_payment(phone, "client_starter", source="manual")
+async def _cb_payment_client(chat_id, cb_id, phone, message_id=None) -> None:
+    await actions.confirm_payment(phone, "client_agency", source="manual")
     await _answer_callback(cb_id, "Подтверждено")
-    await _reply(chat_id, f"✅ Оплата подписки подтверждена, {_digits(phone)} → {funnel.stage_label('client_starter')}.")
+    await _reply(chat_id, f"✅ Оплата услуги подтверждена, {_digits(phone)} → {funnel.stage_label('client_agency')}.")

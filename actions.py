@@ -25,12 +25,15 @@ INVITATION_URL_KEY = "invitation_url"
 INVITATION_READY_KEY = "invitation_ready"
 
 # selected_service → стадия при подтверждении оплаты. Неоднозначное (None/пусто) →
-# manager_bot спросит Аню кнопками (payment_event / payment_sub).
+# manager_bot спросит Аню кнопками (payment_event / payment_client).
+# Тарифов услуги больше нет: любой «сервис» → общий client_agency (детали — на звонке у Ани).
+# Легаси-значения selected_service (starter/standard/vip) тоже сводим к client_agency.
 SERVICE_TO_STAGE = {
     "event": "event_attended",
-    "starter": "client_starter",
-    "standard": "client_standard",
-    "vip": "client_vip",
+    "agency": "client_agency",
+    "starter": "client_agency",
+    "standard": "client_agency",
+    "vip": "client_agency",
 }
 
 

@@ -48,7 +48,7 @@ const LEADS: Lead[] = [
   },
   {
     phone: "wa_5215544332211", name: "Alejandro Ríos", whatsappName: "Alex",
-    funnelStage: "client_starter", funnelStageLabel: "Клиент Starter", mode: "manual",
+    funnelStage: "client_agency", funnelStageLabel: "Клиент агентства", mode: "manual",
     interest: "agency", age: 50, profession: "Empresario", city: "CDMX",
     isClient: true, lastMessageAt: ago(1450), lastInboundAt: ago(1600),
     lastMessagePreview: "Gracias Anna, quedo atento 🙏",
