@@ -3,6 +3,11 @@
 Бабблы (messages[] от AI, 1-4) шлём ПОСЛЕДОВАТЕЛЬНО, перед каждым — пауза
 clamp(len/25, 2, 8) + рандом 1.5-3.5с (имитация чтения/набора, как WF1). Реального
 typing-статуса у Wazzup нет — только задержка. Успешно отправленное пишем в messages.
+
+Медиа ивента (фото/видео, several в ряд — actions.py _send_event_media) шлётся с
+короткой паузой MEDIA_MIN/MAX_DELAY (0.5-1.2с), а не текстовой: Wazzup не умеет слать
+несколько вложений одним запросом (нет альбома в API), поэтому чтобы WhatsApp визуально
+сгруппировал фото рядом — паузу между ними держим короче, чем между текстовыми бабблами.
 """
 from __future__ import annotations
 
@@ -28,6 +33,12 @@ CHARS_PER_SEC = 25.0     # base = len/25
 RANDOM_MIN = 1.5
 RANDOM_MAX = 3.5
 
+# Пауза между фото/видео ивента (галерея из нескольких медиа подряд, actions.py
+# _send_event_media) — короче обычной текстовой паузы, чтобы WhatsApp визуально
+# группировал их рядом (Wazzup не умеет слать альбом одним запросом — см. sender.py:1).
+MEDIA_MIN_DELAY = 0.5
+MEDIA_MAX_DELAY = 1.2
+
 
 def compute_delay(text: str) -> float:
     """Антибан-задержка перед сообщением (сек): clamp(len/25, 2, 8) + рандом 1.5-3.5."""
@@ -35,6 +46,11 @@ def compute_delay(text: str) -> float:
     base = max(MIN_DELAY, min(MAX_DELAY, base))
     total = base + random.uniform(RANDOM_MIN, RANDOM_MAX)
     return round(total * 10) / 10
+
+
+def compute_media_delay() -> float:
+    """Антибан-задержка между медиа ивента (сек): рандом 0.5-1.2 (см. MEDIA_MIN/MAX_DELAY)."""
+    return round(random.uniform(MEDIA_MIN_DELAY, MEDIA_MAX_DELAY) * 10) / 10
 
 
 async def send_one(chat_id: str, text: str) -> bool:
@@ -158,15 +174,17 @@ async def _fill_link_placeholders(text: str, phone: str | None = None,
     return text
 
 
-async def _send_content_uri(phone: str, url: str, where: str) -> bool:
+async def _send_content_uri(phone: str, url: str, where: str, delay: float) -> bool:
     """Отправить медиа (contentUri) в WhatsApp через Wazzup. Не бросает → bool.
 
     Фото и видео шлются одним и тем же полем contentUri (Wazzup определяет тип по файлу).
+    delay — антибан-пауза перед отправкой, вызывающий сам решает какая (обычная или
+    короткая для галереи, см. compute_media_delay).
     """
     if not url:
         return False
     chat_id = phone.replace("wa_", "", 1)
-    await asyncio.sleep(compute_delay(""))  # антибан-пауза (минимальная для медиа)
+    await asyncio.sleep(delay)
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(
@@ -191,8 +209,11 @@ async def _send_content_uri(phone: str, url: str, where: str) -> bool:
 
 
 async def send_image(phone: str, image_url: str) -> bool:
-    """Отправить картинку-приглашение в WhatsApp через Wazzup (contentUri). Не бросает."""
-    ok = await _send_content_uri(phone, image_url, "send_image")
+    """Отправить картинку-приглашение в WhatsApp через Wazzup (contentUri). Не бросает.
+
+    Одиночное сообщение (не галерея) — обычная антибан-пауза, как у текстовых бабблов.
+    """
+    ok = await _send_content_uri(phone, image_url, "send_image", compute_delay(""))
     if ok:
         await db.save_outbound(phone, "[изображение отправлено]")
         logger.info("картинка отправлена лиду %s", phone)
@@ -203,8 +224,10 @@ async def send_media(phone: str, url: str, media_type: str = "image",
                      event_date: str | None = None) -> bool:
     """Отправить медиа с ивента (фото/видео) лиду. Маркер в messages — дедуп по типу.
 
-    event_date → дедуп в рамках конкретного ивента (вар. B): маркер с датой."""
-    ok = await _send_content_uri(phone, url, "send_media")
+    event_date → дедуп в рамках конкретного ивента (вар. B): маркер с датой.
+    Короткая пауза (compute_media_delay) — шлётся пачкой (галерея), см. actions.py
+    _send_event_media."""
+    ok = await _send_content_uri(phone, url, "send_media", compute_media_delay())
     if ok:
         marker = db.media_marker(media_type, event_date) or "[media ивента отправлено]"
         await db.save_outbound(phone, marker)

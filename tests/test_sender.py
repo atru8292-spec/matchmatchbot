@@ -133,6 +133,28 @@ class TestComputeDelay:
 
 
 # ---------------------------------------------------------------------------
+# compute_media_delay
+# ---------------------------------------------------------------------------
+
+class TestComputeMediaDelay:
+
+    def test_result_in_range(self):
+        """Без мока random — результат всегда в [0.5, 1.2] (MEDIA_MIN/MAX_DELAY)."""
+        for _ in range(50):
+            result = sender.compute_media_delay()
+            assert 0.5 <= result <= 1.2, f"ожидали [0.5, 1.2], получили {result}"
+
+    def test_deterministic_with_fixed_random(self, monkeypatch):
+        monkeypatch.setattr(sender.random, "uniform", lambda a, b: 0.8)
+        assert sender.compute_media_delay() == 0.8
+
+    def test_result_rounded_to_one_decimal(self, monkeypatch):
+        monkeypatch.setattr(sender.random, "uniform", lambda a, b: 0.777777)
+        result = sender.compute_media_delay()
+        assert result == round(result * 10) / 10
+
+
+# ---------------------------------------------------------------------------
 # send_one
 # ---------------------------------------------------------------------------
 
@@ -424,6 +446,16 @@ class TestSendImage:
         assert ok is False
         err.assert_awaited_once()
 
+    async def test_uses_normal_delay_not_media_delay(self, monkeypatch, db_pool):
+        """Одиночное приглашение — обычная антибан-пауза, не короткая (регресс-страховка)."""
+        cls = _make_http_client_cls()
+        monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(sender.asyncio, "sleep", sleep_mock)
+        await sender.send_image("wa_1", "https://x/inv.jpg")
+        delay = sleep_mock.call_args.args[0]
+        assert sender.MIN_DELAY <= delay <= sender.MAX_DELAY + sender.RANDOM_MAX
+
 
 # ---------------------------------------------------------------------------
 # Плейсхолдеры ссылок [course_link]/[event_link] (блок 13)
@@ -520,6 +552,16 @@ class TestLinkPlaceholdersTwoPass:
 
 class TestSendMediaMarker:
     """send_media пишет маркер дедупа: с event_date — привязан к ивенту (вар. B)."""
+
+    async def test_uses_media_delay_not_normal_delay(self, monkeypatch, db_pool):
+        """Медиа ивента (галерея) — короткая пауза, не обычная текстовая (регресс-страховка)."""
+        cls = _make_http_client_cls()
+        monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(sender.asyncio, "sleep", sleep_mock)
+        await sender.send_media("wa_1", "https://s/1.jpg", "image")
+        delay = sleep_mock.call_args.args[0]
+        assert sender.MEDIA_MIN_DELAY <= delay <= sender.MEDIA_MAX_DELAY
 
     async def test_dated_marker_written(self, monkeypatch):
         monkeypatch.setattr(sender, "_send_content_uri", AsyncMock(return_value=True))
