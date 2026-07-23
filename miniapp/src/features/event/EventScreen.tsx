@@ -50,9 +50,7 @@ function EventForm({ initial }: { initial: EventSettings }) {
   const [start, setStart] = useState(initial.eventStart);
   const [end, setEnd] = useState(initial.eventEnd);
   const [address, setAddress] = useState(initial.eventAddress);
-  const [priceMember, setPriceMember] = useState(initial.eventPriceMember);
   const [priceNonmember, setPriceNonmember] = useState(initial.eventPriceNonmember);
-  const [priceOld, setPriceOld] = useState(initial.eventPriceOld);
   const [eventLink, setEventLink] = useState(initial.eventLink);
   const [courseLink, setCourseLink] = useState(initial.courseLink);
   const [invUrl, setInvUrl] = useState(initial.invitationUrl);
@@ -98,9 +96,7 @@ function EventForm({ initial }: { initial: EventSettings }) {
     err.date = "Дата не может быть в прошлом";
   }
   const priceOk = (v: string) => /^[\d.,\s]+$/.test(v.trim());
-  if (priceMember.trim() && !priceOk(priceMember)) err.priceMember = "Только цифры";
   if (priceNonmember.trim() && !priceOk(priceNonmember)) err.priceNonmember = "Только цифры";
-  if (priceOld.trim() && !priceOk(priceOld)) err.priceOld = "Только цифры";
   if (eventLink.trim() && !isUrl(eventLink)) err.eventLink = "Нужен URL (http…)";
   if (courseLink.trim() && !isUrl(courseLink)) err.courseLink = "Нужен URL (http…)";
   if (invUrl.trim() && !isUrl(invUrl)) err.invUrl = "Нужен URL (http…)";
@@ -114,8 +110,8 @@ function EventForm({ initial }: { initial: EventSettings }) {
       eventStart: start.trim(), eventEnd: end.trim(),
       eventTime: start.trim(),  // зеркало для #15/#47/#54 (бэк тоже дублирует)
       eventAddress: address.trim(),
-      eventPriceMember: priceMember.trim(), eventPriceNonmember: priceNonmember.trim(),
-      eventPriceOld: priceOld.trim(),
+      eventPriceMember: "", eventPriceNonmember: priceNonmember.trim(),
+      eventPriceOld: "",
       eventLink: eventLink.trim(), courseLink: courseLink.trim(),
       invitationUrl: invUrl.trim(), invitationReady: invReady,
       eventGuestTab: guestTab.trim(),
@@ -153,20 +149,9 @@ function EventForm({ initial }: { initial: EventSettings }) {
               leading={<MapPin size={18} />}
             />
           </Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Цена не-члена (MXN)" error={err.priceNonmember}>
-              <Input value={priceNonmember} onChange={(e) => setPriceNonmember(e.target.value)}
-                placeholder="6,000" inputMode="numeric" leading={<Tag size={18} />} />
-            </Field>
-            <Field label="Цена члена (MXN)" error={err.priceMember}>
-              <Input value={priceMember} onChange={(e) => setPriceMember(e.target.value)}
-                placeholder="4,000" inputMode="numeric" leading={<Tag size={18} />} />
-            </Field>
-          </div>
-          <Field label="Старая цена (акция)" error={err.priceOld}
-            hint="Показывается как «antes X». Пусто — акция скрыта.">
-            <Input value={priceOld} onChange={(e) => setPriceOld(e.target.value)}
-              placeholder="9,000" inputMode="numeric" leading={<Tag size={18} />} />
+          <Field label="Цена билета (MXN)" error={err.priceNonmember} hint="Единая цена для всех">
+            <Input value={priceNonmember} onChange={(e) => setPriceNonmember(e.target.value)}
+              placeholder="6,000" inputMode="numeric" leading={<Tag size={18} />} />
           </Field>
           <Field label="Вкладка гостевого списка"
             hint="Точное имя вкладки в книге Ани, куда бот впишет оплативших (напр. «22 de Julio»)">
