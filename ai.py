@@ -305,6 +305,21 @@ def _last_anna_text(history: list[dict]) -> str | None:
     return None
 
 
+# whatsapp_name приходит от лида как есть (профиль WhatsApp) — может быть кириллица,
+# эмодзи, ник или что угодно. Показываем AI только похожее на настоящее имя (латиница +
+# европейские диакритики), иначе AI обращается по имени только после явного вопроса
+# анкеты (nombre completo, anna_prompt_v5.md) — не раньше.
+_PLAUSIBLE_NAME_RE = re.compile(r"^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'\-.\s]{1,39}$")
+
+
+def _plausible_name(name: str | None) -> str | None:
+    """whatsapp_name → сам же, если похож на настоящее имя, иначе None."""
+    name = (name or "").strip()
+    if not name or not _PLAUSIBLE_NAME_RE.match(name):
+        return None
+    return name
+
+
 def _build_user_context(lead: dict, history: list[dict], user_text: str,
                         scenarios: list[dict]) -> str:
     """Собрать пользовательский контекст для AI: профиль + история + RAG-сценарии + текст."""
@@ -314,6 +329,7 @@ def _build_user_context(lead: dict, history: list[dict], user_text: str,
                 # анкетные поля — чтобы AI спрашивал только недостающее, не повторялся
                 "name", "last_name", "email", "date_of_birth", "country",
                 "business_link", "desired_partner_age")}
+    profile["whatsapp_name"] = _plausible_name(profile.get("whatsapp_name"))
     hist = [{"sender": m.get("sender"), "text": m.get("text")} for m in history[-10:]]
     if scenarios:
         rag = [{"id": s["id"], "mode": s["mode"], "template_es": s["template_es"],

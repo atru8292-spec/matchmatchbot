@@ -53,6 +53,33 @@ def _make_lead(**kwargs) -> dict:
 # _split_template
 # ---------------------------------------------------------------------------
 
+class TestPlausibleName:
+    """_plausible_name — фильтр whatsapp_name перед показом AI (см. ai.py)."""
+
+    @pytest.mark.parametrize("name", [
+        "Juan", "María José", "Jean-Paul", "O'Brien", "Carlos Ramírez",
+        "Ana", "José Luis",
+    ])
+    def test_plausible_latin_names_pass(self, name):
+        assert ai._plausible_name(name) == name
+
+    @pytest.mark.parametrize("name", [
+        "Арина",           # кириллица
+        "田中",             # CJK
+        "😎🔥",             # только эмодзи
+        "Juan 😎",          # имя + эмодзи
+        "12345",           # цифры
+        "Juan123",         # буквы+цифры
+        None,
+        "",
+        "   ",
+        "a",               # 1 символ — слишком коротко
+        "x" * 41,          # слишком длинно
+    ])
+    def test_implausible_names_rejected(self, name):
+        assert ai._plausible_name(name) is None
+
+
 class TestSplitTemplate:
     def test_basic_split(self):
         """Три части разделённые \\n\\n → список из трёх строк."""
