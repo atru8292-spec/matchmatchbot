@@ -33,9 +33,9 @@ GUEST_HEADERS = ["Nombre", "Teléfono", "Estado de pago", "Interés", "Fecha de 
 # Анкеты лидов (анкета-в-чате). Гибкая схема: базовые колонки + «Extra (JSON)» под будущие
 # поля анкеты, которых мы пока не знаем — новые поля не потребуют менять структуру таблицы.
 ANKETA_SHEET = "Solicitudes"
-ANKETA_HEADERS = ["Nombre completo", "Email", "Teléfono", "Fecha de nacimiento", "Ciudad",
-                  "País de origen", "LinkedIn/Negocio", "Edad deseada pareja", "Interés",
-                  "Extra (JSON)", "Fecha de registro"]
+ANKETA_HEADERS = ["Полное имя", "Email", "Телефон", "Дата рождения", "Город",
+                  "Страна происхождения", "LinkedIn/Бизнес", "Желаемый возраст партнёрши",
+                  "Интерес", "Доп. данные (JSON)", "Дата регистрации"]
 
 _calendar = None
 _sheets = None
