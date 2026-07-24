@@ -9,7 +9,7 @@
 
 Пример:
   venv/bin/python -m scripts.resume_lead_manual 79150981866 \
-    "Perdón la tardanza guapo! Justo esto es lo que quería contarte del evento 🤍" \
+    "Perdón la tardanza! Justo esto es lo que quería contarte del evento 🤍" \
     "Es nuestro Slavic Latino Night, este [event_date] a las [event_time], en [event_address]. El boleto cuesta [event_price_nonmember] MXN[event_promo], incluye bebida de bienvenida, entrantes y la oportunidad de conocer mujeres eslavas solteras que buscan algo serio." \
     "¿Te gustaría el boleto para este evento, o prefieres que platiquemos primero de mi servicio personalizado en una videollamada?"
 """
