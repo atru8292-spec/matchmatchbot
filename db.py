@@ -1205,13 +1205,19 @@ _LEADS_SELECT = (
 )
 
 
-def _leads_where(stages, mode, interest, since, search) -> tuple[str, list]:
+def _leads_where(stages, mode, interest, since, search, exclude_clients=False) -> tuple[str, list]:
     """Собрать WHERE + args для фильтра лидов (общее для листинга и экспорта).
+
+    exclude_clients: не показывать whitelisted-номера (у них свой экран «Клиенты»,
+    не нужно дублировать в списке лидов). По умолчанию False — экспорт CSV как был,
+    со всеми (там есть отдельная колонка «Клиент»).
 
     Возвращает (where_sql, args). Инъекция-безопасно: значения идут параметрами,
     поиск экранирует LIKE-метасимволы (%, _, \\)."""
     where: list[str] = []
     args: list = []
+    if exclude_clients:
+        where.append("NOT EXISTS (SELECT 1 FROM bot_whitelist bw WHERE bw.phone = l.phone)")
     if stages:
         args.append(list(stages))
         where.append(f"l.funnel_stage = ANY(${len(args)}::text[])")
@@ -1258,8 +1264,11 @@ async def list_leads_page(
     sort: 'recent' (по last_message_at, свежие сверху — дефолт) | 'stage'.
     Каждый лид: превью последнего сообщения (LATERAL к messages) и is_client
     (есть ли в bot_whitelist). total — общее число под фильтром (для пагинации).
+
+    Whitelisted-номера (клиенты) в этот список НЕ попадают — у них свой экран
+    «Клиенты» (/api/mini/whitelist), не нужно дублировать.
     """
-    where_sql, args = _leads_where(stages, mode, interest, since, search)
+    where_sql, args = _leads_where(stages, mode, interest, since, search, exclude_clients=True)
     order_sql = _LEADS_SORT_SQL.get(sort, _LEADS_SORT_SQL["recent"])
 
     limit = max(1, min(int(limit), 100))  # жёсткий потолок страницы

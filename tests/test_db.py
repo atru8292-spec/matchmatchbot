@@ -1464,3 +1464,41 @@ class TestEventMediaPool:
     async def test_media_sent_unknown_type_false(self, pool):
         assert await db.event_media_sent("wa_1", "gif") is False
         pool.fetchrow.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _leads_where / list_leads_page / list_leads_for_export — exclude_clients
+# ---------------------------------------------------------------------------
+
+
+class TestLeadsWhereExcludeClients:
+    def test_exclude_clients_true_adds_not_exists(self):
+        where_sql, args = db._leads_where(None, None, None, None, None, exclude_clients=True)
+        assert "NOT EXISTS" in where_sql and "bot_whitelist" in where_sql
+        assert args == []
+
+    def test_exclude_clients_false_by_default(self):
+        where_sql, args = db._leads_where(None, None, None, None, None)
+        assert "bot_whitelist" not in where_sql
+        assert where_sql == ""
+
+
+class TestListLeadsPageExcludesClients:
+    async def test_query_excludes_whitelisted(self, pool):
+        """Список лидов (CRM) не должен показывать whitelisted-номера — у них свой экран."""
+        pool.fetch.return_value = []
+        pool.fetchval.return_value = 0
+        await db.list_leads_page()
+        data_sql = pool.fetch.call_args.args[0]
+        count_sql = pool.fetchval.call_args.args[0]
+        assert "bot_whitelist" in data_sql and "NOT EXISTS" in data_sql
+        assert "bot_whitelist" in count_sql and "NOT EXISTS" in count_sql
+
+
+class TestListLeadsForExportIncludesClients:
+    async def test_export_still_includes_whitelisted(self, pool):
+        """Экспорт CSV — все лиды, включая клиентов (там есть колонка «Клиент»)."""
+        pool.fetch.return_value = []
+        await db.list_leads_for_export()
+        sql = pool.fetch.call_args.args[0]
+        assert "NOT EXISTS (SELECT 1 FROM bot_whitelist" not in sql
