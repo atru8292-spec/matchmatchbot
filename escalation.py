@@ -62,10 +62,18 @@ async def _send_telegram(token: str, chat_id: str, text: str,
         logger.exception("не смог отправить Telegram-алерт")
 
 
+async def _send_business_alert(text: str, reply_markup: dict | None = None) -> None:
+    """Business-алерт всем получателям TG_MANAGER_CHAT_ID (команда, не один человек).
+
+    Каждая отправка независима (_send_telegram сама не бросает) — сбой к одному
+    получателю не мешает остальным."""
+    for chat_id in settings.tg_manager_chat_ids:
+        await _send_telegram(settings.tg_manager_bot_token, chat_id, text, reply_markup)
+
+
 async def send_to_manager(text: str, reply_markup: dict | None = None) -> None:
-    """Публичная отправка боту «Лиды» (Ане) — для ответов менеджер-бота (блок 11)."""
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
-                         text, reply_markup)
+    """Публичная отправка боту «Лиды» (команде) — для ответов менеджер-бота (блок 11)."""
+    await _send_business_alert(text, reply_markup)
 
 
 # ===== Inline-клавиатуры под алертами (действия менеджер-бота, блок 11) =====
@@ -181,8 +189,7 @@ async def notify_escalation(lead: dict, reason: str, last_msg: str) -> None:
         f"👉 Написать: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
-                         text, lead_action_kb(phone) if phone else None)
+    await _send_business_alert(text, lead_action_kb(phone) if phone else None)
 
 
 async def notify_vip(lead: dict) -> None:
@@ -193,8 +200,7 @@ async def notify_vip(lead: dict) -> None:
         f"👉 Открыть чат: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
-                         text, vip_action_kb(phone) if phone else None)
+    await _send_business_alert(text, vip_action_kb(phone) if phone else None)
 
 
 async def notify_guest_list_issue(lead: dict, tab: str, reason: str) -> None:
@@ -213,7 +219,7 @@ async def notify_guest_list_issue(lead: dict, tab: str, reason: str) -> None:
         f"Гость: {_lead_name(lead)}\n"
         f"👉 Впиши вручную: {_wa_link((lead or {}).get('phone', ''))}"
     )
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id, text)
+    await _send_business_alert(text)
 
 
 async def notify_block(lead: dict, reason: str) -> None:
@@ -225,8 +231,7 @@ async def notify_block(lead: dict, reason: str) -> None:
         f"👉 Посмотреть переписку: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
-                         text, block_action_kb(phone) if phone else None)
+    await _send_business_alert(text, block_action_kb(phone) if phone else None)
 
 
 async def notify_photo_review(lead: dict, reason: str) -> None:
@@ -238,8 +243,7 @@ async def notify_photo_review(lead: dict, reason: str) -> None:
         f"👉 Открыть чат: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
-                         text, photo_action_kb(phone) if phone else None)
+    await _send_business_alert(text, photo_action_kb(phone) if phone else None)
 
 
 async def notify_payment(lead: dict) -> None:
@@ -250,8 +254,7 @@ async def notify_payment(lead: dict) -> None:
         f"👉 Проверь и подтверди: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
-                         text, payment_action_kb(phone) if phone else None)
+    await _send_business_alert(text, payment_action_kb(phone) if phone else None)
 
 
 async def notify_optout(lead: dict) -> None:
@@ -264,8 +267,7 @@ async def notify_optout(lead: dict) -> None:
         f"👉 Чат: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
-                         text, block_action_kb(phone) if phone else None)
+    await _send_business_alert(text, block_action_kb(phone) if phone else None)
 
 
 async def notify_videocall_booked(lead: dict, when_text: str) -> None:
@@ -279,8 +281,7 @@ async def notify_videocall_booked(lead: dict, when_text: str) -> None:
         f"👉 Написать: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")
-    await _send_telegram(settings.tg_manager_bot_token, settings.tg_manager_chat_id,
-                         text, videocall_action_kb(phone) if phone else None)
+    await _send_business_alert(text, videocall_action_kb(phone) if phone else None)
 
 
 # ===== Technical (бот «Ошибки») =====

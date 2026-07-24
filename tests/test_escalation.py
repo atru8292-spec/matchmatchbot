@@ -75,6 +75,49 @@ def _lead(
 
 
 # ---------------------------------------------------------------------------
+# _send_business_alert — рассылка business-алертов ВСЕМ получателям (не одному)
+# ---------------------------------------------------------------------------
+
+class TestSendBusinessAlert:
+    async def test_single_recipient_unchanged(self, monkeypatch):
+        """Один chat_id (без запятой) — как раньше, один вызов _send_telegram."""
+        monkeypatch.setattr(escalation.settings, "tg_manager_bot_token", "MGR")
+        monkeypatch.setattr(escalation.settings, "tg_manager_chat_id", "111")
+        send_mock = AsyncMock()
+        monkeypatch.setattr(escalation, "_send_telegram", send_mock)
+
+        await escalation._send_business_alert("текст")
+
+        send_mock.assert_awaited_once_with("MGR", "111", "текст", None)
+
+    async def test_multiple_recipients_all_get_it(self, monkeypatch):
+        """chat_id через запятую → _send_telegram вызван для КАЖДОГО получателя."""
+        monkeypatch.setattr(escalation.settings, "tg_manager_bot_token", "MGR")
+        monkeypatch.setattr(escalation.settings, "tg_manager_chat_id", "111,222,333")
+        send_mock = AsyncMock()
+        monkeypatch.setattr(escalation, "_send_telegram", send_mock)
+
+        await escalation._send_business_alert("текст", {"kb": 1})
+
+        assert send_mock.await_count == 3
+        chat_ids = [c.args[1] for c in send_mock.await_args_list]
+        assert chat_ids == ["111", "222", "333"]
+        for c in send_mock.await_args_list:
+            assert c.args == ("MGR", c.args[1], "текст", {"kb": 1})
+
+    async def test_notify_escalation_reaches_all_recipients(self, monkeypatch):
+        """Реальный business-алерт (notify_escalation) уходит всем получателям списка."""
+        monkeypatch.setattr(escalation.settings, "tg_manager_bot_token", "MGR")
+        monkeypatch.setattr(escalation.settings, "tg_manager_chat_id", "111,222")
+        send_mock = AsyncMock()
+        monkeypatch.setattr(escalation, "_send_telegram", send_mock)
+
+        await escalation.notify_escalation(_lead(), "razón", "hola")
+
+        assert send_mock.await_count == 2
+
+
+# ---------------------------------------------------------------------------
 # Тесты _wa_link
 # ---------------------------------------------------------------------------
 

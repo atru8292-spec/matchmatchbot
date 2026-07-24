@@ -95,6 +95,13 @@ class Settings(BaseSettings):
                 out.add(int(part))
         return frozenset(out)
 
+    @property
+    def tg_manager_chat_ids(self) -> tuple[str, ...]:
+        """Business-алерты (эскалация/VIP/звонки) шлём ВСЕМ получателям через запятую
+        в TG_MANAGER_CHAT_ID (напр. "111,222,333") — вся команда видит одно и то же,
+        а не только один человек. Одно значение без запятой работает как раньше."""
+        return tuple(p.strip() for p in self.tg_manager_chat_id.split(",") if p.strip())
+
     # ===== Мини-CRM (Telegram Mini App, /api/mini/*) =====
     # Dev-режим: обход проверки Telegram initData для локальной разработки.
     # На ПРОДЕ обязан быть false — иначе API /api/mini/* открыт кому угодно.
