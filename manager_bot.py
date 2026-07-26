@@ -384,7 +384,10 @@ async def _cmd_release(chat_id, args, frm) -> None:
     if not phone:
         await _reply(chat_id, "Формат: /release и номер")
         return
-    found = await db.set_auto(phone)
+    # resume_lead (не set_auto!): «Вернуть боту» должна снимать и manual-takeover,
+    # И блокировку (do_not_contact) — этой же кнопкой/командой отменяют оба случая
+    # (card_action_kb и block_action_kb используют один и тот же callback "release").
+    found = await db.resume_lead(phone)
     await _reply(chat_id, f"🤖 Бот снова отвечает {_digits(phone)}."
                  if found else f"Не нашла такого человека: {_digits(phone)}")
 
@@ -615,7 +618,10 @@ async def _cb_takeover(chat_id, cb_id, phone, message_id=None) -> None:
 
 
 async def _cb_release(chat_id, cb_id, phone, message_id=None) -> None:
-    found = await db.set_auto(phone)
+    # resume_lead (не set_auto!): «Вернуть боту» должна снимать и manual-takeover,
+    # И блокировку (do_not_contact) — этой же кнопкой отменяют оба случая
+    # (card_action_kb и block_action_kb используют один и тот же callback "release").
+    found = await db.resume_lead(phone)
     await _answer_callback(cb_id, "Готово" if found else "Не нашла")
     if not found:
         await _reply(chat_id, f"Не нашла такого человека: {_digits(phone)}")

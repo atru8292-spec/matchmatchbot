@@ -1238,6 +1238,37 @@ class TestSetAuto:
         sql = pool.fetchrow.call_args.args[0]
         assert "mode = 'auto'" in sql
 
+    async def test_sql_does_not_clear_do_not_contact(self, pool):
+        """set_auto НЕ трогает do_not_contact — контр-действие к block_lead это
+        resume_lead, не set_auto (регресс: кнопка «Вернуть боту» в manager_bot.py
+        должна звать resume_lead, а не set_auto — иначе заблокированный лид
+        остаётся молчащим даже после «возврата боту»)."""
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+        await db.set_auto("wa_1")
+        sql = pool.fetchrow.call_args.args[0]
+        assert "do_not_contact" not in sql
+
+
+class TestResumeLead:
+    """Контр-действие к block_lead (кнопка «Вернуть боту») — ДОЛЖНА снимать
+    do_not_contact, иначе заблокированный лид остаётся молчащим (см. manager_bot.py
+    _cb_release/_cmd_release)."""
+
+    async def test_returns_true_when_found(self, pool):
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+        assert await db.resume_lead("wa_1") is True
+
+    async def test_returns_false_when_not_found(self, pool):
+        pool.fetchrow.return_value = None
+        assert await db.resume_lead("wa_1") is False
+
+    async def test_sql_clears_do_not_contact_and_sets_auto(self, pool):
+        pool.fetchrow.return_value = {"phone": "wa_1"}
+        await db.resume_lead("wa_1")
+        sql = pool.fetchrow.call_args.args[0]
+        assert "do_not_contact = false" in sql
+        assert "mode = 'auto'" in sql
+
 
 class TestListActiveLeads:
     async def test_no_stage_uses_active_stages_array(self, pool):

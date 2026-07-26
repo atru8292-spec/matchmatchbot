@@ -169,7 +169,7 @@ class TestCommands:
         assert "не нашла" in _patch_io["reply"].call_args.args[1].lower()
 
     async def test_release_found(self, _patch_io, monkeypatch):
-        monkeypatch.setattr(db, "set_auto", AsyncMock(return_value=True))
+        monkeypatch.setattr(db, "resume_lead", AsyncMock(return_value=True))
         await mb.handle_update(_msg("/release wa_1"))
         assert "снова отвечает" in _patch_io["reply"].call_args.args[1].lower()
 
@@ -281,13 +281,13 @@ class TestCallbacks:
         edit_mock.assert_not_awaited()
 
     async def test_release(self, _patch_io, monkeypatch):
-        monkeypatch.setattr(db, "set_auto", AsyncMock(return_value=True))
+        monkeypatch.setattr(db, "resume_lead", AsyncMock(return_value=True))
         await mb.handle_update(_cb("mb:release:wa_1"))
         _patch_io["reply"].assert_awaited()
 
     async def test_release_flips_button_to_takeover(self, _patch_io, monkeypatch):
         """После release кнопка на том же сообщении → «Общаться лично» (takeover)."""
-        monkeypatch.setattr(db, "set_auto", AsyncMock(return_value=True))
+        monkeypatch.setattr(db, "resume_lead", AsyncMock(return_value=True))
         edit_mock = AsyncMock(); monkeypatch.setattr(mb, "_edit_reply_markup", edit_mock)
         await mb.handle_update(_cb("mb:release:wa_1"))
         edit_mock.assert_awaited_once()
