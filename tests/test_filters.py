@@ -408,9 +408,9 @@ class TestDecideAge:
         d = decide({"age": 27}, False, "hola")
         assert d.action == "rejected"
 
-    def test_age_66_rejected(self):
-        """66 лет — больше максимума (65) → rejected."""
-        d = decide({"age": 66}, False, "hola")
+    def test_age_77_rejected(self):
+        """77 лет — больше максимума (76) → rejected."""
+        d = decide({"age": 77}, False, "hola")
         assert d.action == "rejected"
 
     def test_age_28_boundary_not_rejected(self):
@@ -418,9 +418,9 @@ class TestDecideAge:
         d = decide({"age": 28}, False, "hola")
         assert d.action != "rejected"
 
-    def test_age_65_boundary_not_rejected(self):
-        """Граница включительно: 65 → не отказ."""
-        d = decide({"age": 65}, False, "hola")
+    def test_age_76_boundary_not_rejected(self):
+        """Граница включительно: 76 → не отказ."""
+        d = decide({"age": 76}, False, "hola")
         assert d.action != "rejected"
 
     def test_age_40_needs_ai(self):
@@ -553,7 +553,7 @@ class TestDecisionIsEscortField:
 
     def test_rejected_age_is_escort_false(self):
         """rejected по возрасту → is_escort=False."""
-        d = decide({"age": 70}, False, "hola")
+        d = decide({"age": 90}, False, "hola")
         assert d.action == "rejected"
         assert d.is_escort is False
 
@@ -792,9 +792,14 @@ class TestDecideSilentRegression:
         assert d.action == "rejected"
 
     def test_mexico_old_age_rejected(self):
-        """Мексиканский номер + age=70 → rejected (MAX_AGE=65)."""
-        d = decide({"age": 70}, False, "hola", "wa_5215551234567")
+        """Мексиканский номер + age=90 → rejected (MAX_AGE=76)."""
+        d = decide({"age": 90}, False, "hola", "wa_5215551234567")
         assert d.action == "rejected"
+
+    def test_mexico_age_76_not_rejected(self):
+        """age=76 (граница включительно) → НЕ rejected (MAX_AGE=76)."""
+        d = decide({"age": 76}, False, "hola", "wa_5215551234567")
+        assert d.action != "rejected"
 
     def test_no_phone_spanish_text_needs_ai(self):
         """phone не передан (дефолт '') + испанский текст → needs_ai (обратная совместимость)."""

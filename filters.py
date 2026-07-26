@@ -12,9 +12,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# Возрастной фильтр (из CLAUDE.md): 28-65 включительно.
+# Возрастной фильтр (владелец поднял верхнюю границу 2026-07-26): 28-76 включительно.
 MIN_AGE = 28
-MAX_AGE = 65
+MAX_AGE = 76
 
 # Явные дисквалификаторы по ключевым словам (испанский). \b — границы слова:
 # 'sexo' не ловится в 'sexto'/'sexta'. Основа как в BLUEPRINT (force-escalate WF1).
