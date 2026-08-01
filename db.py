@@ -223,10 +223,21 @@ async def insert_message(
 
 
 async def get_conversation_history(phone: str, limit: int = 30) -> list[dict]:
-    """Вернуть историю переписки лида в хронологическом порядке (старые → новые)."""
+    """Вернуть ПОСЛЕДНИЕ limit сообщений лида в хронологическом порядке (старые → новые).
+
+    Баг (нашли 2026-08-01): раньше был плоский `ORDER BY created_at ASC LIMIT $2` —
+    это отдавало САМЫЕ СТАРЫЕ limit сообщений с начала переписки, а не последние.
+    У любого лида с историей длиннее limit (main.py зовёт с 15) AI годами видел только
+    начало диалога и не видел ничего свежего — переспрашивал уже отвеченное, путал
+    контекст. Фикс: берём последние limit по DESC во вложенном запросе, потом
+    пересортировываем ASC для отдачи — контракт функции (хронологический порядок)
+    не меняется, меняется только ВЫБОРКА (последние, не первые)."""
     try:
         rows = await _get_pool().fetch(
-            "SELECT * FROM messages WHERE lead_phone = $1 ORDER BY created_at ASC LIMIT $2",
+            "SELECT * FROM ("
+            "  SELECT * FROM messages WHERE lead_phone = $1"
+            "  ORDER BY created_at DESC LIMIT $2"
+            ") AS recent ORDER BY created_at ASC",
             phone,
             limit,
         )
