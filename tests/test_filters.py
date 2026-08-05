@@ -97,6 +97,17 @@ class TestIsAggression:
     def test_fraude(self):
         assert is_aggression("esto es fraude") is True
 
+    def test_scam_skepticism_not_aggression(self):
+        """Encontrado en test cualitativo 2026-08-06: pregunta legítima, no insulto."""
+        assert is_aggression("como se que esto no es una estafa") is False
+
+    def test_scam_skepticism_variant_no_sea(self):
+        assert is_aggression("espero que no sea fraude") is False
+
+    def test_positive_scam_accusation_still_blocks(self):
+        """La negación NO debe abrir hueco: acusación directa sigue bloqueando."""
+        assert is_aggression("esto no es serio, es una estafa y ya me di cuenta") is True
+
     def test_empty_string_safe(self):
         assert is_aggression("") is False
 

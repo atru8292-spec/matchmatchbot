@@ -27,6 +27,16 @@ _AGGRESSION_RE = re.compile(
     r"\b(idiota|est[uú]pid[oa]|pendej\w*|mierda|cabr[oó]n|est[aá]fa|estafador\w*|fraude)\b",
     re.IGNORECASE,
 )
+# Excepción (2026-08-06, encontrado en test cualitativo): "cómo sé que esto no es una
+# estafa?" es una pregunta de escepticismo NORMAL para un servicio de $10,000 USD por
+# WhatsApp — no es agresión. La regex de arriba solo mira la palabra suelta ("estafa"),
+# así que "no es una estafa" bloqueaba PERMANENTEMENTE a leads legítimos que simplemente
+# preguntaban. Esta negación excluye esa forma reconfortante sin abrir hueco a insultos
+# reales ("que estafa!", "eres un estafador" siguen bloqueando — no tienen "no es/sea").
+_SCAM_NEGATED_RE = re.compile(
+    r"no\s+(sea|es|ser[aá])\s+(un[oa]?\s+)?(estafa|fraude|estafador\w*)",
+    re.IGNORECASE,
+)
 # Кириллица — признак нецелевого лида (агентство работает с мексиканцами по-испански).
 _CYRILLIC_RE = re.compile(r"[а-яёА-ЯЁ]")
 
@@ -87,8 +97,13 @@ def is_escort_mention(text: str) -> bool:
 
 
 def is_aggression(text: str) -> bool:
-    """Явная агрессия/оскорбление."""
-    return bool(_AGGRESSION_RE.search(text or ""))
+    """Явная агрессия/оскорбление. НЕ ловит скептический вопрос вида "no es estafa?"."""
+    text = text or ""
+    if not _AGGRESSION_RE.search(text):
+        return False
+    if _SCAM_NEGATED_RE.search(text):
+        return False
+    return True
 
 
 def is_payment_claim(text: str) -> bool:
