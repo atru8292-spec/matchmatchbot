@@ -177,6 +177,13 @@ def _split_template(template_es: str) -> list[str]:
 # на уровне кода: это ровно «детальный вопрос про ивент» из правила медиа. Дедуп — в actions.
 _EVENT_DETAIL_SCENARIOS = {51, 52}
 
+# Фикс-сценарий #17 «no me interesa / no gracias / paso» — ai_allowed=false, AI не решает,
+# поэтому funnel_stage=None (дефолт _fixed_reply) не двигал лида, и он оставался на активной
+# стадии (напр. 'pitched') → получал обычный фоллоу-ап через 48ч, хотя явно отказался
+# (найдено 2026-08-06, лид тестового диалога). 'nurture' — в NO_FOLLOWUP_STAGES (funnel.py),
+# так что автодогон не сработает; лид остаётся видимым как «лист ожидания», не удаляется.
+_NURTURE_FIXED_SCENARIOS = {17}
+
 # Анонс explainer-видео (Аня лично отвечает на частые вопросы про ивент) — дописывается
 # в ПОСЛЕДНИЙ баббл #51/#52, только когда видео реально уйдёт (не слали + пул не пуст).
 # Так текст не обещает видео, которого не будет (см. _maybe_announce_event_video).
@@ -195,7 +202,9 @@ def _fixed_reply(scenario: dict) -> dict:
         action = _MODE_TO_ACTION.get(mode, "respond")
     return {
         "messages": _split_template(scenario.get("template_es", "")),
-        "funnel_stage": None,  # стадию решит интеграция (block→lost); фикс её не меняет
+        # стадию обычно решит интеграция (block→lost); фикс её не меняет — КРОМЕ
+        # явного "no me interesa" (#17), где сами двигаем в nurture (см. коммент выше).
+        "funnel_stage": "nurture" if scenario.get("id") in _NURTURE_FIXED_SCENARIOS else None,
         "action": action,
         "extracted": {},
         "needs_escalation": action == "escalate",
