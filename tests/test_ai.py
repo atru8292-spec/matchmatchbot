@@ -205,8 +205,14 @@ class TestFixedReply:
         assert result["funnel_stage"] is None
 
     def test_scenario_17_sets_nurture(self):
-        """#17 'no me interesa' — единственное исключение: двигаем в nurture (no-followup)."""
+        """#17 'no me interesa' — двигаем в nurture (no-followup)."""
         scenario = _make_scenario(id=17)
+        result = ai._fixed_reply(scenario)
+        assert result["funnel_stage"] == "nurture"
+
+    def test_scenario_10_sets_nurture(self):
+        """#10 'bajo ingreso' — template dice 'lista de espera 6-12 meses' → nurture."""
+        scenario = _make_scenario(id=10)
         result = ai._fixed_reply(scenario)
         assert result["funnel_stage"] == "nurture"
 
