@@ -1424,7 +1424,16 @@ class TestEventRecipients:
         assert "LIMIT" in sql
         assert "ORDER BY" in sql              # детерминированный порядок между тиками
         assert "NOT EXISTS" in sql            # дедуп уже отправленных — в самом SQL
-        assert params == [["lost", "rejected"], "remind_1d", "2026-08-15", 30]
+        assert "l.phone <> ALL" in sql        # тестовые/bypass-номера исключены
+        assert params == [["lost", "rejected"], "remind_1d", "2026-08-15", 30, []]
+
+    async def test_exclude_phones_passed_through(self, pool):
+        """Тестовые номера (bypass) не должны попадать в реальную рассылку."""
+        pool.fetch.return_value = []
+        await db.event_recipients([], "remind_day", "2026-08-15", limit=10,
+                                  exclude_phones=frozenset({"wa_1", "wa_2"}))
+        params = pool.fetch.call_args.args[1:]
+        assert sorted(params[-1]) == ["wa_1", "wa_2"]
 
     async def test_dedup_and_order_present(self, pool):
         """Регресс 2026-08-06: без ORDER BY+NOT EXISTS LIMIT возвращал одни и те же

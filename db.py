@@ -480,12 +480,17 @@ async def mark_followup_sent(phone: str, next_followup_at) -> None:
 
 
 async def event_recipients(exclude_stages: list[str], kind: str, event_date: str,
-                           limit: int = 30) -> list[dict]:
+                           limit: int = 30,
+                           exclude_phones: frozenset[str] = frozenset()) -> list[dict]:
     """Кому слать напоминания об ивенте: selected_service='event', mode='auto',
     не do_not_contact, стадия не в exclude_stages, НЕ в whitelist (клиенты агентства
     исключаются полностью — их ведёт Аня напрямую), и это напоминание (kind+event_date)
     ЕЩЁ НЕ отправлено (см. events/event_reminder_sent). LIMIT — антибан-порция (остаток
     догонит след. тик).
+
+    exclude_phones — тестовые/bypass-номера (SILENT_BYPASS_PHONES): их тестовые диалоги
+    могут выставить selected_service='event' точно так же, как у реального лида — но
+    в РЕАЛЬНУЮ рассылку они попадать не должны (2026-08-06, явное требование владельца).
 
     ИСПРАВЛЕНО (2026-08-06): раньше LIMIT был БЕЗ ORDER BY и без исключения уже
     отправленных — дедуп по идемпотентности шёл ПОСЛЕ выборки, в Python-цикле
@@ -508,9 +513,10 @@ async def event_recipients(exclude_stages: list[str], kind: str, event_date: str
             "  AND w.phone IS NULL "
             "  AND NOT EXISTS (SELECT 1 FROM events e WHERE e.lead_phone = l.phone "
             "                  AND e.event_type = $2 AND e.meta->>'event_date' = $3) "
+            "  AND l.phone <> ALL($5::text[]) "
             "ORDER BY l.created_at "
             "LIMIT $4",
-            exclude_stages, kind, event_date, limit,
+            exclude_stages, kind, event_date, limit, list(exclude_phones),
         )
     except Exception:
         logger.exception("event_recipients failed: kind=%s event_date=%s", kind, event_date)
