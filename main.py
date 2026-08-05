@@ -306,9 +306,9 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
 
 async def _run_ai(phone: str, lead: dict, combined: str) -> None:
     """Сгенерировать и применить ответ AI: extracted → стадия → action → отправка."""
-    # 15 сообщений — достаточный контекст (диалоги короткие: debounce склеивает залпы),
-    # экономит ~350 токенов/запрос против 30 без потери качества.
-    history = await db.get_conversation_history(phone, 15)
+    # 20 сообщений — контекст с запасом (диалоги короткие: debounce склеивает залпы),
+    # экономит токены/запрос против 30 без потери качества.
+    history = await db.get_conversation_history(phone, 20)
     result = await ai.generate_reply(lead, history, combined)
 
     # 1. Извлечённые поля лида — уже провалидированы в ai (whitelist LEAD_COLUMNS).
