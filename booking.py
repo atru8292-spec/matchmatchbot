@@ -90,17 +90,17 @@ def message_for(res: Result) -> str:
                 f"Te paso el link actualizado en un momento 🤍")
     if res.outcome == Outcome.VAGUE:
         return ("¡Claro! ¿Qué día y a qué hora exacta te queda para la videollamada? "
-                "Atiendo de 8am a 10pm, hora de Ciudad de México 🤍")
+                "Atiendo de 8am a 10pm, hora de Ciudad de México")
     if res.outcome == Outcome.PAST:
-        return "Esa fecha ya pasó 🤍 ¿me das un día y hora a futuro para la videollamada?"
+        return "Esa fecha ya pasó, ¿me das un día y hora a futuro para la videollamada?"
     if res.outcome == Outcome.OUT_OF_HOURS:
-        return ("Atiendo videollamadas de 8am a 10pm, hora de Ciudad de México 🤍 "
+        return ("Atiendo videollamadas de 8am a 10pm, hora de Ciudad de México. "
                 "¿qué hora dentro de ese rango te queda?")
     if res.outcome == Outcome.BUSY:
         if res.alt_when:
-            return (f"Uy, justo esa hora ya está ocupada 🤍 ¿te queda {fmt_es(res.alt_when)}? "
+            return (f"Uy, justo esa hora ya está ocupada, ¿te queda {fmt_es(res.alt_when)}? "
                     "O dime otra hora que te acomode.")
-        return ("Uy, esa hora ya está ocupada 🤍 ¿me das otra hora que te acomode? "
+        return ("Uy, esa hora ya está ocupada, ¿me das otra hora que te acomode? "
                 "(de 8am a 10pm, hora de CDMX)")
     # ERROR — тёплый фолбэк (main дополнительно эскалирует Ане)
     return "Déjame confirmar el horario y te escribo en un ratito 🤍"

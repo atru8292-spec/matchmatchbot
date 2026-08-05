@@ -11,7 +11,7 @@ import asyncio
 import db
 
 NEW_6 = (
-    "Muchas gracias guapo 🤍 mira, te explico cómo te puedo ayudar. Soy matchmaker "
+    "Muchas gracias 🤍 mira, te explico cómo te puedo ayudar. Soy matchmaker "
     "personal: mi trabajo es encontrarte una mujer eslava que de verdad encaje contigo, "
     "elegida a mano según tus valores, tu estilo de vida y también tus preferencias de "
     "físico.\n\n"

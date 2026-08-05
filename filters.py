@@ -23,20 +23,37 @@ _ESCORT_RE = re.compile(
     r"servicios?\s+sexual(es)?)\b",
     re.IGNORECASE,
 )
+# Excepciones (2026-08-06, encontrado en auditoría — mismo patrón que _SCAM_NEGATED_RE):
+# - "¿puedo llevar acompañante al evento?" es pedir traer +1 (política de amigo al evento,
+#   ver anna_prompt_v5.md) — NO es escort. acompañant\w* solo cazamos junto a sexo/servicio,
+#   no en el contexto neutro "llevar/traer a alguien al evento".
+# - "no busco sexo" / "no quiero nada sexual" es la NEGACIÓN — el lead confirmando que
+#   busca algo serio, justo lo contrario de lo que el filtro intenta cazar.
+_ESCORT_NEGATED_RE = re.compile(
+    r"(llevar|traer|venir\s+con|puedo\s+llevar|puedo\s+traer)\s+(un[a]?\s+|mi\s+)?acompañant\w*|"
+    r"no\s+(busco|quiero|me\s+interesa|es)\s+(solo\s+|nada\s+)?(el\s+)?(sexo|sexual)",
+    re.IGNORECASE,
+)
+# 'estafa'/'fraude' sueltos NO están aquí (ver nota abajo) — 'estafador' sí se queda
+# (acusación directa a una persona, más inequívoco que la palabra suelta).
 _AGGRESSION_RE = re.compile(
-    r"\b(idiota|est[uú]pid[oa]|pendej\w*|mierda|cabr[oó]n|est[aá]fa|estafador\w*|fraude)\b",
+    r"\b(idiota|est[uú]pid[oa]|pendej\w*|mierda|cabr[oó]n|estafador\w*)\b",
     re.IGNORECASE,
 )
-# Excepción (2026-08-06, encontrado en test cualitativo): "cómo sé que esto no es una
-# estafa?" es una pregunta de escepticismo NORMAL para un servicio de $10,000 USD por
-# WhatsApp — no es agresión. La regex de arriba solo mira la palabra suelta ("estafa"),
-# así que "no es una estafa" bloqueaba PERMANENTEMENTE a leads legítimos que simplemente
-# preguntaban. Esta negación excluye esa forma reconfortante sin abrir hueco a insultos
-# reales ("que estafa!", "eres un estafador" siguen bloqueando — no tienen "no es/sea").
-_SCAM_NEGATED_RE = re.compile(
-    r"no\s+(sea|es|ser[aá])\s+(un[oa]?\s+)?(estafa|fraude|estafador\w*)",
+# Excepción (2026-08-06): "está cabrón el precio" es modismo mexicano ("está intenso/
+# fuerte"), NO insulto — solo "cabrón" dirigido a una persona (eres/pinche cabrón) es
+# agresión real.
+_AGGRESSION_NEGATED_RE = re.compile(
+    r"est[aá]\s+cabr[oó]n",
     re.IGNORECASE,
 )
+# 'estafa'/'fraude' sueltos SE QUITARON de _AGGRESSION_RE (auditoría 2026-08-06):
+# incluso con la excepción de negación ("no es estafa"), seguían bloqueando NAVEGATE
+# preguntas legítimas de duda sin "no" — "¿esto es estafa o real?", "me da miedo que
+# sea una estafa" (escenario #22 "es seguro/no confío/suena raro" existe justo para
+# esto vía AI, con matices que una regex no puede dar). Bloqueo permanente por duda
+# razonable de un lead sobre un servicio de $10,000 USD es un costo de negocio mucho
+# mayor que dejar pasar una rara queja real ("qué estafa!") al AI en vez de auto-block.
 # Кириллица — признак нецелевого лида (агентство работает с мексиканцами по-испански).
 _CYRILLIC_RE = re.compile(r"[а-яёА-ЯЁ]")
 
@@ -45,6 +62,14 @@ _CYRILLIC_RE = re.compile(r"[а-яёА-ЯЁ]")
 _PAYMENT_RE = re.compile(
     r"\b(pagu[eé]|ya\s+pagu[eé]|pagad[oa]s?|deposit[eé]|transfer[ií]|"
     r"hice\s+el\s+pago|оплати\w*)\b",
+    re.IGNORECASE,
+)
+# Excepción (2026-08-06): negación ("aún no he pagado") — es un aviso de que TODAVÍA
+# no pagó, lo contrario de un claim de pago. La regla del '?' en is_payment_claim cubre
+# además preguntas sin negación ("¿ya están pagados los boletos?").
+_PAYMENT_NEGATED_RE = re.compile(
+    r"(no|a[uú]n\s+no|todav[ií]a\s+no)\s+(lo\s+|la\s+|los\s+|les\s+)?(he\s+|ha\s+|han\s+)?"
+    r"(pagad[oa]s?|pagu[eé]|deposit[eé]|transfer[ií])",
     re.IGNORECASE,
 )
 
@@ -66,8 +91,12 @@ _INSTAGRAM_RE = re.compile(
 # Осторожно с ловушками: «no me molesta» (=«меня не смущает», ПОЗИТИВ) ≠ «no me molestes»
 # (императив, opt-out) — ловим только императивные формы molest(-es/-en/-ar).
 # Голое «baja»/«alto»/«stop» не берём (риск ложных) — только в связке.
+# ИСПРАВЛЕНО (2026-08-06, аудит): 'escrib\w*'/'contact\w*' были жадными — ловили не
+# только императив («no me escribas» = opt-out), но и прошедшее/жалобу («no me
+# escribiste el link» = лид напоминает про обещанное, а его банили навсегда). Сузили
+# до явных повелительных форм (escribas/escriban/contactes/contacten).
 _OPTOUT_RE = re.compile(
-    r"no\s+me\s+(escrib\w*|contact\w*|vuelvas?\s+a\s+escribir|manden?\s+mensajes?)|"
+    r"no\s+me\s+(escribas|escriban|contactes|contacten|vuelvas?\s+a\s+escribir|manden?\s+mensajes?)|"
     r"no\s+me\s+vuelv\w+\s+a\s+(escribir|contactar|molestar)|"
     r"dej[ae]n?\s+de\s+(escribir\w*|molestar\w*|mandar\w*)|"
     r"d[eé]jame\s+(en\s+paz|de\s+escribir\w*)|d[eé]jenme\s+en\s+paz|"
@@ -92,23 +121,37 @@ class Decision:
 
 
 def is_escort_mention(text: str) -> bool:
-    """Явное упоминание интим-услуг (по границам слова)."""
-    return bool(_ESCORT_RE.search(text or ""))
+    """Явное упоминание интим-услуг. НЕ ловит «llevar acompañante al evento» или «no busco sexo»."""
+    text = text or ""
+    if not _ESCORT_RE.search(text):
+        return False
+    if _ESCORT_NEGATED_RE.search(text):
+        return False
+    return True
 
 
 def is_aggression(text: str) -> bool:
-    """Явная агрессия/оскорбление. НЕ ловит скептический вопрос вида "no es estafa?"."""
+    """Явная агрессия/оскорбление. НЕ ловит модизм "está cabrón" (=intenso, no insulto)."""
     text = text or ""
     if not _AGGRESSION_RE.search(text):
         return False
-    if _SCAM_NEGATED_RE.search(text):
+    if _AGGRESSION_NEGATED_RE.search(text):
         return False
     return True
 
 
 def is_payment_claim(text: str) -> bool:
-    """Лид заявляет, что оплатил (claim-форма, не вопрос про оплату)."""
-    return bool(_PAYMENT_RE.search(text or ""))
+    """Лид заявляет, что оплатил (claim-форма). НЕ ловит отрицание или вопрос про оплату."""
+    text = text or ""
+    if not _PAYMENT_RE.search(text):
+        return False
+    if _PAYMENT_NEGATED_RE.search(text):
+        return False
+    if "?" in text:
+        # Реальный claim об оплате почти никогда не вопрос — «¿ya están pagados?»
+        # это сомнение/вопрос, а не заявление «я заплатил».
+        return False
+    return True
 
 
 def is_optout(text: str) -> bool:

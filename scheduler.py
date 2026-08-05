@@ -183,10 +183,10 @@ async def _send_event_batch(kind: str, scenario_id: int, settings_map: dict,
         return 0
     text = _fill_event(tmpl, settings_map)
     bubbles = _bubbles(text)
-    # LIMIT + батч (антибан: не всё разом). Остаток уйдёт на следующих тиках —
-    # идемпотентность (маркер в events) не даст дублей уже отправленным.
+    # LIMIT + батч (антибан: не всё разом). Остаток уйдёт на следующих тиках — дедуп
+    # уже в самом SQL-запросе (event_recipients), LIMIT реально означает «следующие».
     recipients = await db.event_recipients(list(funnel.EVENT_REMINDER_EXCLUDE_STAGES),
-                                           limit=EVENT_REMINDER_BATCH)
+                                           kind, date_str, limit=EVENT_REMINDER_BATCH)
     sent = 0
     for ld in recipients:
         phone = ld["phone"]
@@ -232,7 +232,7 @@ async def _send_event_daytime(settings_map: dict, date_str: str) -> int:
                                       f"нет сценария {REMIND_DAY_SCENARIO}/{REMIND_DAY_UNPAID_SCENARIO}")
         return 0
     recipients = await db.event_recipients(list(funnel.EVENT_REMINDER_EXCLUDE_STAGES),
-                                           limit=EVENT_REMINDER_BATCH)
+                                           kind, date_str, limit=EVENT_REMINDER_BATCH)
     sent = 0
     for ld in recipients:
         phone = ld["phone"]

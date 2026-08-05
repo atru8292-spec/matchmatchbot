@@ -479,13 +479,24 @@ async def mark_followup_sent(phone: str, next_followup_at) -> None:
         raise
 
 
-async def event_recipients(exclude_stages: list[str], limit: int = 30) -> list[dict]:
+async def event_recipients(exclude_stages: list[str], kind: str, event_date: str,
+                           limit: int = 30) -> list[dict]:
     """Кому слать напоминания об ивенте: selected_service='event', mode='auto',
     не do_not_contact, стадия не в exclude_stages, НЕ в whitelist (клиенты агентства
-    исключаются полностью — их ведёт Аня напрямую). LIMIT — антибан-порция (остаток
-    догонит след. тик; идемпотентность не даст дублей). mode='auto' — не пишем тем,
-    кого Аня ведёт вручную (/takeover). funnel_stage — для выбора шаблона в день ивента
-    (оплатившие событие/члены → без ссылки, остальные → со ссылкой)."""
+    исключаются полностью — их ведёт Аня напрямую), и это напоминание (kind+event_date)
+    ЕЩЁ НЕ отправлено (см. events/event_reminder_sent). LIMIT — антибан-порция (остаток
+    догонит след. тик).
+
+    ИСПРАВЛЕНО (2026-08-06): раньше LIMIT был БЕЗ ORDER BY и без исключения уже
+    отправленных — дедуп по идемпотентности шёл ПОСЛЕ выборки, в Python-цикле
+    вызывающего кода. На каждом следующем тике SQL без ORDER BY возвращал ТЕ ЖЕ
+    ≤30 строк (данные не менялись), все они уже были отправлены → цикл их пропускал,
+    sent=0, а лиды после 30-го никогда не попадали в выборку вообще. Теперь дедуп —
+    в SQL (NOT EXISTS), LIMIT реально означает «следующие N ещё не отправленных»;
+    ORDER BY для детерминированности порядка между тиками.
+    mode='auto' — не пишем тем, кого Аня ведёт вручную (/takeover). funnel_stage —
+    для выбора шаблона в день ивента (оплатившие событие/члены → без ссылки, остальные
+    → со ссылкой)."""
     try:
         rows = await _get_pool().fetch(
             "SELECT l.phone, l.whatsapp_name, l.name, l.funnel_stage "
@@ -495,11 +506,14 @@ async def event_recipients(exclude_stages: list[str], limit: int = 30) -> list[d
             "  AND COALESCE(l.do_not_contact, false) = false "
             "  AND l.funnel_stage <> ALL($1::text[]) "
             "  AND w.phone IS NULL "
-            "LIMIT $2",
-            exclude_stages, limit,
+            "  AND NOT EXISTS (SELECT 1 FROM events e WHERE e.lead_phone = l.phone "
+            "                  AND e.event_type = $2 AND e.meta->>'event_date' = $3) "
+            "ORDER BY l.created_at "
+            "LIMIT $4",
+            exclude_stages, kind, event_date, limit,
         )
     except Exception:
-        logger.exception("event_recipients failed")
+        logger.exception("event_recipients failed: kind=%s event_date=%s", kind, event_date)
         raise
     return [dict(r) for r in rows]
 
@@ -1100,16 +1114,24 @@ async def list_active_leads(limit: int = 15, stage: str | None = None) -> list[d
 
 
 async def get_lead_photos(phone: str, limit: int = 10) -> list[dict]:
-    """Фото лида (public URL) для карточки менеджер-бота, старые → новые.
+    """ПОСЛЕДНИЕ limit фото лида (public URL) для карточки менеджер-бота, старые → новые.
 
     Только строки с непустым storage_url (есть что показать). vision_verdict —
     для подписи под фото (ok/reject/manual).
+
+    ИСПРАВЛЕНО (2026-08-06): тот же баг, что был в get_conversation_history — плоский
+    `ORDER BY received_at ASC LIMIT N` при лиде с >N фото отдавал САМЫЕ СТАРЫЕ фото,
+    не последние. Аню звали посмотреть konkретное новое фото (verdict='manual') —
+    а в карточке его не было видно. Подзапрос: берём последние N по DESC, потом
+    пересортировка ASC для отдачи (порядок в ответе не меняется, меняется выборка).
     """
     try:
         rows = await _get_pool().fetch(
-            "SELECT storage_url, vision_verdict, received_at FROM lead_photos "
-            "WHERE lead_phone = $1 AND storage_url IS NOT NULL "
-            "ORDER BY received_at ASC LIMIT $2",
+            "SELECT * FROM ("
+            "  SELECT storage_url, vision_verdict, received_at FROM lead_photos "
+            "  WHERE lead_phone = $1 AND storage_url IS NOT NULL "
+            "  ORDER BY received_at DESC LIMIT $2"
+            ") AS recent ORDER BY received_at ASC",
             phone, limit,
         )
     except Exception:

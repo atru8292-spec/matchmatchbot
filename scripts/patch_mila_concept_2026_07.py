@@ -15,7 +15,7 @@ import sys
 import db
 
 NEW_6 = (
-    "Muchas gracias guapo 🤍 soy matchmaker personal y mi servicio es 100% personalizado: a lo "
+    "Muchas gracias 🤍 soy matchmaker personal y mi servicio es 100% personalizado: a lo "
     "largo de unos 6 meses te presento a 15 mujeres eslavas (hasta 20 según el caso), elegidas "
     "a mano por tus valores, tu personalidad y tus preferencias de físico, de una base de más "
     "de 3,000 solteras que buscan algo serio.\n\n"
@@ -35,7 +35,7 @@ NEW_14 = (
 )
 
 NEW_16 = (
-    "Te entiendo guapo 🤍 pero míralo así: no es un gasto, es una inversión en encontrar a tu "
+    "Te entiendo 🤍 pero míralo así: no es un gasto, es una inversión en encontrar a tu "
     "pareja. Es un servicio premium y 100% personal: a lo largo de 6 meses te presento a 15 "
     "mujeres eslavas (hasta 20) elegidas a mano para ti, con acompañamiento en todo el proceso "
     "— no una lotería como las apps. La inversión es desde $10,000 USD.\n\n"
@@ -52,7 +52,7 @@ NEW_20 = (
 )
 
 NEW_30 = (
-    "Por ahora los eventos son entre semana guapo 🤍 pero lo checo y te aviso si podemos abrir "
+    "Por ahora los eventos son entre semana 🤍 pero lo checo y te aviso si podemos abrir "
     "una fecha en fin de semana.\n\n"
     "En cuanto tengamos fecha te aviso sin falta. Y si quieres, mientras tanto platicamos en "
     "una videollamada de mi servicio personalizado y te empiezo a presentar mujeres compatibles "
@@ -60,7 +60,7 @@ NEW_30 = (
 )
 
 NEW_44 = (
-    "Todavía no tengo fecha exacta del próximo evento guapo, pero te aviso en cuanto la "
+    "Todavía no tengo fecha exacta del próximo evento, pero te aviso en cuanto la "
     "tengamos 🤍\n\n"
     "Mientras, con mi servicio personalizado no tienes que esperar al evento: a lo largo del "
     "proceso te voy presentando mujeres compatibles de nuestra base. ¿Lo vemos en una "
@@ -68,7 +68,7 @@ NEW_44 = (
 )
 
 NEW_48 = (
-    "Ay qué lástima guapo 🤍 gracias por avisar\n\n"
+    "Ay qué lástima 🤍 gracias por avisar\n\n"
     "Te aviso del próximo con tiempo. Y si quieres, mientras tanto vemos mi servicio "
     "personalizado para que empieces a conocer mujeres compatibles sin esperar al evento."
 )

@@ -321,6 +321,15 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
                 extracted["date_of_birth"] = dob
             else:
                 extracted.pop("date_of_birth", None)  # не распарсили — пропускаем, AI переспросит
+        # ИСПРАВЛЕНО (2026-08-06, аудит): selected_service нигде не писался — AI кладёт
+        # интерес в extracted['interest'] (event/agency/both), а event_recipients/
+        # event_lead_candidates (напоминания об ивенте) фильтруют строго по
+        # selected_service='event'. Без этой синхронизации автонапоминания (T-1, day-of)
+        # находили НОЛЬ получателей всегда, даже после фикса дедупа в event_recipients.
+        # 'agency'-интерес НЕ трогаем: подтверждение оплаты там и так спрашивает Аню
+        # кнопками при неоднозначном selected_service (см. actions.stage_for_service).
+        if extracted.get("interest") in ("event", "both"):
+            extracted["selected_service"] = "event"
         try:
             await db.update_lead_fields(phone, **extracted)
         except Exception:
@@ -374,8 +383,17 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
         await db.set_funnel_stage(phone, result["funnel_stage"],
                                   meta={"scenario_id": result["used_scenario_id"]})
 
-    await sender.send(phone, messages,  # messages лиду
-                      allow_repeat_links=sender._is_link_request(combined))
+    sent = await sender.send(phone, messages,  # messages лиду
+                             allow_repeat_links=sender._is_link_request(combined))
+    if sent == 0:
+        # ИСПРАВЛЕНО (2026-08-06, аудит): если render_bubbles дропнул ВСЕ бабблы (напр.
+        # AI вписал [course_link]/[event_link] внутрь фразы вместо отдельного сообщения,
+        # а ссылка пуста/уже отправлена — весь баббл дропается целиком, sender.py:154),
+        # лид получал полную тишину на своё сообщение — молча, без единого алерта.
+        logger.warning("sender.send отправил 0/%d лиду %s — тишина без алерта была багом",
+                       len(messages), phone)
+        await escalation.notify_error(
+            "main._run_ai", f"0 бабблов ушло лиду (были: {messages!r})", phone)
     # Антибан-догон: СБРАСЫВАЕМ таймер тишины на любом ответе лида (он активен → не нудим),
     # а не только когда таймер пуст. Так догон уходит лишь после реального молчания N дней
     # (пробел (а): раньше активный лид в той же стадии всё равно получал догон).
@@ -403,11 +421,17 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
             await actions.send_event_video(phone)
         except Exception:
             logger.exception("send_event_video упал [%s] (ответ лиду уже отправлен)", phone)
-    if action == "escalate":
+    # needs_escalation=True — ИСПРАВЛЕНО (2026-08-06): раньше эскалация проверялась
+    # только по action=='escalate', а промпт в нескольких местах (реагендар видеозвонка,
+    # Instagram вместо фото вне photo_pending) явно велит модели ответить с action:
+    # 'respond' И ОТДЕЛЬНО needs_escalation=true — это поле нигде не читалось, алерт
+    # Ане не уходил, никто не переносил звонок/не проверял профиль, лид зависал.
+    if action == "escalate" or result.get("needs_escalation"):
         # НЕ молчаливо: лид получил messages, плюс алерт Ане (продолжить лично).
         # Причина — название сценария; фолбэк если сценарий не определён.
         title = await db.get_scenario_title(result["used_scenario_id"])
-        logger.info("AI escalate [%s] (scenario=%s)", phone, result["used_scenario_id"])
+        logger.info("AI escalate [%s] (scenario=%s, action=%s)",
+                    phone, result["used_scenario_id"], action)
         try:
             await db.update_lead_fields(phone, mode="manual")
         except Exception:

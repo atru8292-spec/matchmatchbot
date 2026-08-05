@@ -23,7 +23,7 @@ import sys
 import db
 
 NEW_6 = (
-    "Muchas gracias guapo 🤍 soy matchmaker personal y mi servicio es 100% personalizado: a lo "
+    "Muchas gracias 🤍 soy matchmaker personal y mi servicio es 100% personalizado: a lo "
     "largo de unos 6 meses te presento a 15 mujeres eslavas (hasta 20 según el caso), elegidas "
     "a mano por tus valores, tu personalidad y tus preferencias de físico, de una base de más "
     "de 3,000 solteras que buscan algo serio.\n\n"

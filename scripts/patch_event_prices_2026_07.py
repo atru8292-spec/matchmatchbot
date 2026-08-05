@@ -30,7 +30,7 @@ NEW_51 = (
 )
 
 NEW_16 = (
-    "Te entiendo guapo 🤍 pero míralo así: no es un gasto, es una inversión en algo tan "
+    "Te entiendo 🤍 pero míralo así: no es un gasto, es una inversión en algo tan "
     "importante como encontrar a tu pareja.\n\n"
     "Con la membresía de $1,400 USD al mes, cada mes yo misma te presento 3 mujeres eslavas "
     "verificadas, elegidas según lo que buscas en físico, valores y personalidad. Además "

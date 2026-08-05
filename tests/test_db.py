@@ -1416,13 +1416,25 @@ class TestMarkFollowupSent:
 class TestEventRecipients:
     async def test_sql_filters(self, pool):
         pool.fetch.return_value = []
-        await db.event_recipients(["lost", "rejected"], limit=30)
+        await db.event_recipients(["lost", "rejected"], "remind_1d", "2026-08-15", limit=30)
         sql, *params = pool.fetch.call_args.args
         assert "selected_service = 'event'" in sql
         assert "l.mode = 'auto'" in sql       # не пишем тем, кого ведут вручную
         assert "w.phone IS NULL" in sql
         assert "LIMIT" in sql
-        assert params == [["lost", "rejected"], 30]
+        assert "ORDER BY" in sql              # детерминированный порядок между тиками
+        assert "NOT EXISTS" in sql            # дедуп уже отправленных — в самом SQL
+        assert params == [["lost", "rejected"], "remind_1d", "2026-08-15", 30]
+
+    async def test_dedup_and_order_present(self, pool):
+        """Регресс 2026-08-06: без ORDER BY+NOT EXISTS LIMIT возвращал одни и те же
+        строки на каждом тике, если все уже получили это напоминание — рассылка
+        застревала на первых N лидах, остальные не получали ничего никогда."""
+        pool.fetch.return_value = []
+        await db.event_recipients([], "remind_day", "2026-08-15", limit=10)
+        sql = pool.fetch.call_args.args[0]
+        assert "e.event_type = $2" in sql
+        assert "e.meta->>'event_date' = $3" in sql
 
 
 class TestEventReminderIdempotency:

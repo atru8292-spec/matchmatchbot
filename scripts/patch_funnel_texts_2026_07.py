@@ -25,7 +25,7 @@ UPDATES = {
         "¿Te late una videollamada corta? ¿Cuándo te queda? 😊"
     ),
     39: (  # скидки — смягчение (дверь на звонок вместо «jamás»)
-        "Te entiendo guapo 🤍 el precio refleja el trabajo personal que hago contigo: "
+        "Te entiendo 🤍 el precio refleja el trabajo personal que hago contigo: "
         "selección a mano, 3 mujeres al mes y acompañamiento en todo el proceso.\n\n"
         "Sobre precios especiales o alguna promoción, eso lo vemos mejor en la videollamada "
         "según tu caso 😊\n\n¿Te late que agendemos y te explico todo?"
@@ -39,7 +39,7 @@ UPDATES = {
         "Todas buscan relación seria, pareja, familia 🤍"
     ),
     32: (  # догон: согласился на звонок, анкету (чат) не дозаполнил
-        "Hola guapo! 🤍 me faltan solo un par de datos para completar tu perfil antes de la "
+        "Hola! 🤍 me faltan solo un par de datos para completar tu perfil antes de la "
         "videollamada. Cuando tengas un momento me los pasas y agendamos ✨"
     ),
     33: (  # догон: анкета собрана, звонок не назначен
@@ -61,7 +61,7 @@ NEW = [
         "trigger_es": ("puedo pagar en efectivo / cómo puedo pagar en efectivo / aceptan oxxo / "
                        "puedo pagar en oxxo / pago en walmart / puedo hacer transferencia / "
                        "transferencia bancaria / puedo depositar / aceptan deposito / otras formas de pago"),
-        "template_es": ("Claro guapo 🤍 además de tarjeta, puedes pagar en efectivo en Oxxo o "
+        "template_es": ("Claro 🤍 además de tarjeta, puedes pagar en efectivo en Oxxo o "
                         "Walmart, o por transferencia bancaria.\n\nPara asegurar tu lugar te paso "
                         "los datos exactos, cualquier cosa me avisas y te ayudo con el proceso ✨"),
     },
@@ -92,7 +92,7 @@ NEW = [
         "trigger_description": "Лид сообщил что купил/забронировал билет ивента (не подписку)",
         "trigger_es": ("ya compré el boleto / ya reservé mi lugar / compré mi ticket / ya aparté mi "
                        "lugar / ya tengo mi boleto / reservé el boleto / ya adquirí el boleto"),
-        "template_es": ("¡Gracias por reservar tu lugar guapo! 🤍 Te agrego a la lista de invitados.\n\n"
+        "template_es": ("¡Gracias por reservar tu lugar! 🤍 Te agrego a la lista de invitados.\n\n"
                         "¿Ya te llegó el boleto por correo? Si no lo ves, revisa spam y promociones, "
                         "y cualquier cosa me avisas ✨"),
     },

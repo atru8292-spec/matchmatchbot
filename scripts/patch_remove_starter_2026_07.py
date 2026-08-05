@@ -22,7 +22,7 @@ import db
 # ---- Литеральные (фикс/текстовые) сценарии ----
 
 NEW_6 = (
-    "Muchas gracias guapo 🤍 soy matchmaker personal: te encuentro una mujer eslava que de "
+    "Muchas gracias 🤍 soy matchmaker personal: te encuentro una mujer eslava que de "
     "verdad encaje contigo, elegida a mano según tus valores y tus preferencias de físico, "
     "con acceso a una base de más de 3,000 mujeres solteras que buscan algo serio.\n\n"
     "Lo ideal es una videollamada corta: ahí te conozco a fondo y, a partir de ahí, empiezo "
@@ -39,7 +39,7 @@ NEW_14 = (
 )
 
 NEW_16 = (
-    "Te entiendo guapo 🤍 pero míralo así: no es un gasto, es una inversión en encontrar a "
+    "Te entiendo 🤍 pero míralo así: no es un gasto, es una inversión en encontrar a "
     "tu pareja. Es un servicio premium y personal: yo misma te elijo mujeres a mano según "
     "tus valores y tus preferencias de físico, no una lotería como las apps.\n\n"
     "Los planes y precios los vemos en una videollamada según tu caso, y a partir de ahí "
@@ -56,7 +56,7 @@ NEW_20 = (
 )
 
 NEW_30 = (
-    "Por ahora los eventos son entre semana guapo 🤍 pero lo checo y te aviso si podemos "
+    "Por ahora los eventos son entre semana 🤍 pero lo checo y te aviso si podemos "
     "abrir una fecha en fin de semana.\n\n"
     "En cuanto tengamos fecha te aviso sin falta. Y si quieres, mientras tanto platicamos en "
     "una videollamada y te empiezo a presentar mujeres que encajen contigo. ¿Te late?"
@@ -70,21 +70,21 @@ NEW_38 = (
 )
 
 NEW_39 = (
-    "Te entiendo guapo 🤍 el precio refleja el trabajo personal que hago contigo: selección "
+    "Te entiendo 🤍 el precio refleja el trabajo personal que hago contigo: selección "
     "a mano y acompañamiento en todo el proceso.\n\n"
     "Sobre precios especiales o promociones, eso lo vemos mejor en la videollamada según tu "
     "caso. ¿Te late que agendemos y te explico todo? 😊"
 )
 
 NEW_44 = (
-    "Todavía no tengo fecha exacta del próximo evento guapo, pero te aviso en cuanto la "
+    "Todavía no tengo fecha exacta del próximo evento, pero te aviso en cuanto la "
     "tengamos 🤍\n\n"
     "Mientras, con el servicio de matchmaking personal no tienes que esperar: te empiezo a "
     "presentar mujeres de nuestra base según lo que buscas. ¿Lo platicamos en una videollamada?"
 )
 
 NEW_48 = (
-    "Ay qué lástima guapo 🤍 gracias por avisar\n\n"
+    "Ay qué lástima 🤍 gracias por avisar\n\n"
     "Te aviso del próximo con tiempo. Y si quieres, mientras tanto vemos la opción del "
     "servicio de matchmaking personal para que empieces a conocer mujeres sin esperar al evento."
 )

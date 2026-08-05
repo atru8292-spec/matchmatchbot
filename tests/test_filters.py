@@ -76,10 +76,13 @@ class TestIsAggression:
     def test_pendejos_plural(self):
         assert is_aggression("todos son pendejos") is True
 
-    def test_estafa(self):
-        assert is_aggression("que estafa") is True
+    def test_estafa_alone_not_aggression(self):
+        """Auditoría 2026-08-06: 'estafa'/'fraude' sueltos se quitaron de la regex —
+        incluso sin negación, bloqueaban preguntas de duda razonable. Ver #22 (AI)."""
+        assert is_aggression("que estafa") is False
 
-    def test_estafador(self):
+    def test_estafador_still_blocks(self):
+        """'estafador' SÍ se queda — acusación directa a una persona, no palabra suelta."""
         assert is_aggression("eres un estafador") is True
 
     def test_idiota(self):
@@ -94,19 +97,30 @@ class TestIsAggression:
     def test_estupido_without_accent(self):
         assert is_aggression("que estupido") is True
 
-    def test_fraude(self):
-        assert is_aggression("esto es fraude") is True
+    def test_fraude_alone_not_aggression(self):
+        assert is_aggression("esto es fraude") is False
 
     def test_scam_skepticism_not_aggression(self):
         """Encontrado en test cualitativo 2026-08-06: pregunta legítima, no insulto."""
         assert is_aggression("como se que esto no es una estafa") is False
 
-    def test_scam_skepticism_variant_no_sea(self):
-        assert is_aggression("espero que no sea fraude") is False
+    def test_scam_doubt_without_negation_not_aggression(self):
+        """Auditoría 2026-08-06: dudas SIN 'no' tampoco deben banear — '¿esto es
+        estafa o real?', 'me da miedo que sea estafa' son escepticismo legítimo."""
+        assert is_aggression("¿Esto es estafa o real?") is False
+        assert is_aggression("me da miedo que sea una estafa") is False
 
-    def test_positive_scam_accusation_still_blocks(self):
-        """La negación NO debe abrir hueco: acusación directa sigue bloqueando."""
-        assert is_aggression("esto no es serio, es una estafa y ya me di cuenta") is True
+    def test_direct_accusation_via_estafador_still_blocks(self):
+        """Acusación directa a una persona ('estafador') sigue bloqueando — solo la
+        palabra suelta 'estafa'/'fraude' se quitó."""
+        assert is_aggression("esto no es serio, eres un estafador") is True
+
+    def test_cabron_idiom_not_aggression(self):
+        """Auditoría 2026-08-06: 'está cabrón' = modismo mexicano (intenso), no insulto."""
+        assert is_aggression("Está cabrón el precio, pero me interesa") is False
+
+    def test_cabron_as_insult_still_blocks(self):
+        assert is_aggression("eres un cabrón") is True
 
     def test_empty_string_safe(self):
         assert is_aggression("") is False
@@ -370,9 +384,15 @@ class TestDecideAggression:
         d = decide({}, False, "eres un pendejo")
         assert d.alert_manager is True
 
-    def test_estafa_blocked(self):
-        d = decide({}, False, "que estafa")
+    def test_estafador_accusation_blocked(self):
+        """'estafador' (acusación directa) sigue bloqueando; 'estafa' sola ya no (2026-08-06)."""
+        d = decide({}, False, "eres un estafador")
         assert d.action == "blocked"
+
+    def test_bare_estafa_goes_to_ai_not_blocked(self):
+        """'que estafa' sola ahora va a needs_ai (escenario #22), no bloqueo automático."""
+        d = decide({}, False, "que estafa")
+        assert d.action == "needs_ai"
 
     def test_idiota_blocked(self):
         d = decide({}, False, "idiota")

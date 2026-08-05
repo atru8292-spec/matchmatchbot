@@ -792,6 +792,51 @@ class TestRunAI:
 
         update_mock.assert_not_awaited()
 
+    # --- 2b. interest=event/both → selected_service='event' также синхронизируется ---
+
+    async def test_interest_event_syncs_selected_service(self, monkeypatch):
+        """Исправлено 2026-08-06: selected_service нигде не писался → напоминания об
+        ивенте (event_recipients) никогда не находили получателей. interest='event'
+        должно дописывать selected_service='event' в тот же update_lead_fields."""
+        _, update_mock, *_ = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                "messages": ["Hola!"], "funnel_stage": "qualifying", "action": "respond",
+                "extracted": {"interest": "event"}, "needs_escalation": False,
+                "used_scenario_id": 2,
+            },
+        )
+
+        await main._run_ai("wa_test", {}, "quiero ir al evento")
+
+        update_mock.assert_awaited_once_with("wa_test", interest="event", selected_service="event")
+
+    async def test_interest_both_syncs_selected_service(self, monkeypatch):
+        _, update_mock, *_ = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                "messages": ["Hola!"], "funnel_stage": "qualifying", "action": "respond",
+                "extracted": {"interest": "both"}, "needs_escalation": False,
+                "used_scenario_id": 2,
+            },
+        )
+        await main._run_ai("wa_test", {}, "me interesan los dos")
+        update_mock.assert_awaited_once_with("wa_test", interest="both", selected_service="event")
+
+    async def test_interest_agency_does_not_set_selected_service(self, monkeypatch):
+        """interest='agency' NO debe tocar selected_service (fuera de alcance de este fix —
+        la confirmación de pago ya pregunta a Anna por botones si es ambiguo)."""
+        _, update_mock, *_ = self._mock_ai_deps(
+            monkeypatch,
+            result={
+                "messages": ["Hola!"], "funnel_stage": "qualifying", "action": "respond",
+                "extracted": {"interest": "agency"}, "needs_escalation": False,
+                "used_scenario_id": 6,
+            },
+        )
+        await main._run_ai("wa_test", {}, "me interesa la membresia")
+        update_mock.assert_awaited_once_with("wa_test", interest="agency")
+
     # --- 3. respond без funnel_stage → set_funnel_stage НЕ вызван ---
 
     async def test_respond_no_funnel_stage_skips_set_funnel(self, monkeypatch):
@@ -1190,6 +1235,27 @@ class TestEscalationIntegration:
         await main._run_ai("wa_resp", {}, "Hola")
 
         esc_mock.assert_not_awaited()
+        block_mock.assert_not_awaited()
+
+    # 17b. action=respond НО needs_escalation=True → notify_escalation ДОЛЖЕН сработать
+    #      (регресс 2026-08-06: раньше это поле не читалось нигде в main.py — промпт
+    #      явно велит его ставить для реагендара звонка/Instagram вне photo_pending,
+    #      а алерт Ане никогда не уходил, лид зависал без реакции)
+
+    async def test_run_ai_respond_with_needs_escalation_true_calls_notify(self, monkeypatch):
+        vip_mock, block_mock, esc_mock, err_mock = self._mock_all(monkeypatch)
+        monkeypatch.setattr(
+            ai, "generate_reply",
+            AsyncMock(return_value={
+                "messages": ["Claro, déjame revisar y te confirmo en un ratito 🤍"],
+                "funnel_stage": None, "action": "respond",
+                "extracted": {}, "needs_escalation": True, "used_scenario_id": None,
+            }),
+        )
+
+        await main._run_ai("wa_resp2", {}, "podemos mover la videollamada al viernes?")
+
+        esc_mock.assert_awaited_once()
         block_mock.assert_not_awaited()
 
     # 18. needs_ai + _run_ai бросает → notify_error вызван
