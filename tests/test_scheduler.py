@@ -46,9 +46,9 @@ class TestFillEvent:
 
 class TestRunFollowups:
     async def test_stage_based_scenario_and_marks(self, monkeypatch):
-        """Холодный молчун (анкета не начата) → #36; next через 5 дней (1-й интервал)."""
+        """Уже видел pitch (qualified, анкета не начата) → #59; next через 5 дней (1-й интервал)."""
         lead = {"phone": "wa_1", "funnel_stage": "qualified", "followup_sent_count": 0,
-                "whatsapp_name": "X", "name": None}  # без анкета-полей → #36
+                "whatsapp_name": "X", "name": None}  # без анкета-полей, но уже qualified → #59
         monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[lead]))
         monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola 🤍"))
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
@@ -57,8 +57,21 @@ class TestRunFollowups:
         n = await scheduler.run_followups()
         assert n == 1
         send.assert_awaited_once()
-        assert db.get_scenario_template.call_args.args[0] == 36   # стадийный выбор → #36
+        assert db.get_scenario_template.call_args.args[0] == 59   # стадийный выбор → #59
         assert mark.call_args.args[0] == "wa_1" and mark.call_args.args[1] is not None
+
+    async def test_early_stage_gets_36(self, monkeypatch):
+        """Ранний молчун (new/qualifying, анкета не начата, ещё НЕ qualified) → #36."""
+        lead = {"phone": "wa_1", "funnel_stage": "qualifying", "followup_sent_count": 0,
+                "whatsapp_name": "X", "name": None}
+        monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[lead]))
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola 🤍"))
+        monkeypatch.setattr(sender, "send", AsyncMock())
+        monkeypatch.setattr(db, "mark_followup_sent", AsyncMock())
+
+        n = await scheduler.run_followups()
+        assert n == 1
+        assert db.get_scenario_template.call_args.args[0] == 36
 
     async def test_stage_selects_by_anketa_state(self, monkeypatch):
         """Анкета начата → #32; анкета готова → #33; звонок назначен → пропуск."""

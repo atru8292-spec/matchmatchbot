@@ -75,7 +75,12 @@ def followup_scenario_for(lead: dict) -> int | None:
     - звонок назначен (videocall_set) → None
     - анкета готова, звонок не назначен → #33 «agendemos la videollamada»
     - анкета начата, но не полна → #32 «faltan un par de datos»
-    - холодный/ранний молчун (анкета не начата) → #36 «sigues buscando?» + мягкий опт-аут
+    - уже видел pitch (qualified/pitched), анкета не начата → #59 «sigo aquí, dudas?»
+      (НЕ #36 — там переспрашивается «sigues soltero?», а это уже известно и прозвучало
+      бы как будто бот не слушал; найдено 2026-08-06)
+    - ранний молчун (new/qualifying/photo_pending — ещё НЕ прошёл квалификацию) → #36
+      «sigues soltero y buscando algo serio?» + мягкий опт-аут — тут это уместно, это
+      реально то, что ещё не выяснили
     """
     if "old_base" in (lead.get("tags") or []):
         return 38
@@ -85,6 +90,8 @@ def followup_scenario_for(lead: dict) -> int | None:
         return 33
     if any(lead.get(f) for f in ANKETA_CORE_FIELDS):
         return 32
+    if lead.get("funnel_stage") in ("qualified", "pitched"):
+        return 59
     return 36
 
 # Напоминания об ивенте НЕ шлём тем, кто уже в этих стадиях (отказ/не подошёл).

@@ -207,3 +207,46 @@ class TestFollowupFirstDelayHours:
         """Все стадии с фоллоу-апом должны быть в FUNNEL_STAGES."""
         for stage in FOLLOWUP_FIRST_DELAY_HOURS:
             assert stage in FUNNEL_STAGES, f"Стадия {stage!r} нет в FUNNEL_STAGES"
+
+
+# ===========================================================================
+# followup_scenario_for — стадийный выбор догона (2026-08-06)
+# ===========================================================================
+
+
+class TestFollowupScenarioFor:
+
+    def test_old_base_tag_wins(self):
+        """Тег 'old_base' приоритетнее стадии."""
+        assert funnel.followup_scenario_for({"tags": ["old_base"], "funnel_stage": "pitched"}) == 38
+
+    def test_videocall_set_no_followup(self):
+        assert funnel.followup_scenario_for({"funnel_stage": "videocall_set"}) is None
+
+    def test_anketa_complete_gets_33(self):
+        lead = {"funnel_stage": "pitched", "email": "a@b.com", "date_of_birth": "1990-01-01",
+                "country": "MX", "desired_partner_age": "25-35"}
+        assert funnel.followup_scenario_for(lead) == 33
+
+    def test_anketa_started_gets_32(self):
+        lead = {"funnel_stage": "pitched", "email": "a@b.com"}
+        assert funnel.followup_scenario_for(lead) == 32
+
+    def test_qualified_no_anketa_gets_59(self):
+        """Ya vio el pitch pero no empezó anketa → #59, NO #36 (no re-preguntar soltero)."""
+        assert funnel.followup_scenario_for({"funnel_stage": "qualified"}) == 59
+
+    def test_pitched_no_anketa_gets_59(self):
+        assert funnel.followup_scenario_for({"funnel_stage": "pitched"}) == 59
+
+    def test_early_stage_new_gets_36(self):
+        assert funnel.followup_scenario_for({"funnel_stage": "new"}) == 36
+
+    def test_early_stage_qualifying_gets_36(self):
+        assert funnel.followup_scenario_for({"funnel_stage": "qualifying"}) == 36
+
+    def test_early_stage_photo_pending_gets_36(self):
+        assert funnel.followup_scenario_for({"funnel_stage": "photo_pending"}) == 36
+
+    def test_empty_lead_gets_36(self):
+        assert funnel.followup_scenario_for({}) == 36
