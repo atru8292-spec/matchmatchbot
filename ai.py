@@ -54,14 +54,16 @@ FIXED_BLOCK_SCORE = 0.60
 FIXED_SCORE = 0.45
 FALLBACK_SCORE = 0.40
 MAX_MESSAGES = 4
-_FALLBACK_MESSAGE = "Ahorita te contesto guapo 🤍"
+_FALLBACK_MESSAGE = "Ahorita te contesto 🤍"
 
-# mode сценария → действие после ответа.
+# mode сценария → действие после ответа. to_anna_silent → 'silent' (НЕ 'escalate'):
+# по замыслу бот вообще ничего не пишет лиду (клиент агентства, Аня ведёт лично),
+# 'escalate' всё же отправлял бы messages лиду — нарушение замысла (найдено 2026-08-06).
 _MODE_TO_ACTION = {
     "bot_auto": "respond",
     "bot_then_block": "block",
     "bot_then_anna": "escalate",
-    "to_anna_silent": "escalate",
+    "to_anna_silent": "silent",
 }
 
 
@@ -205,13 +207,15 @@ def _fixed_reply(scenario: dict) -> dict:
     else:
         action = _MODE_TO_ACTION.get(mode, "respond")
     return {
-        "messages": _split_template(scenario.get("template_es", "")),
+        # 'silent' → [] всегда, независимо от template_es (полная тишина лиду — весь смысл
+        # to_anna_silent; не доверяем содержимому template гарантировать пустоту сама по себе).
+        "messages": [] if action == "silent" else _split_template(scenario.get("template_es", "")),
         # стадию обычно решит интеграция (block→lost); фикс её не меняет — КРОМЕ
         # явного "no me interesa" (#17), где сами двигаем в nurture (см. коммент выше).
         "funnel_stage": "nurture" if scenario.get("id") in _NURTURE_FIXED_SCENARIOS else None,
         "action": action,
         "extracted": {},
-        "needs_escalation": action == "escalate",
+        "needs_escalation": action in ("escalate", "silent"),
         "used_scenario_id": scenario.get("id"),
         # детали ивента (#51/#52) → прикладываем explainer-видео Ани (дедуп по типу в actions)
         "send_event_photo": False,
@@ -237,27 +241,35 @@ def _fallback_reply() -> dict:
 _EXTRACTED_KEYS = ("age", "profession", "is_single", "city", "interest",
                    "name", "last_name", "email", "date_of_birth", "country",
                    "business_link", "desired_partner_age")
-_VALID_ACTIONS = {"respond", "block", "escalate"}
+# 'silent' — бот НЕ пишет лиду вообще (напр. похоже на существующего клиента агентства,
+# to_anna_silent, ver anna_prompt_v5.md). Единственный action, где messages=[] — законно.
+_VALID_ACTIONS = {"respond", "block", "escalate", "silent"}
 
 
 def _validate_output(data: dict) -> dict:
-    """Привести ответ AI к контракту: messages 1-4, валидный action, чистый extracted."""
+    """Привести ответ AI к контракту: messages 1-4 (кроме action='silent' — там всегда []),
+    валидный action, чистый extracted."""
     if not isinstance(data, dict):
         raise ValueError("ответ AI не dict")
-
-    messages = data.get("messages")
-    if not isinstance(messages, list) or not messages:
-        raise ValueError("messages пуст или не список")
-    messages = [str(m) for m in messages if str(m).strip()]
-    if not messages:
-        raise ValueError("messages пуст после чистки")
-    if len(messages) > MAX_MESSAGES:
-        logger.warning("AI вернул %d сообщений, обрезаю до %d", len(messages), MAX_MESSAGES)
-        messages = messages[:MAX_MESSAGES]
 
     action = data.get("action")
     if action not in _VALID_ACTIONS:
         action = "respond"
+
+    if action == "silent":
+        # Форсируем messages=[] независимо от того, что вернула модель — 'silent' обязан
+        # значить полную тишину лиду, не доверяем тексту модели гарантировать это сама.
+        messages: list[str] = []
+    else:
+        messages = data.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("messages пуст или не список")
+        messages = [str(m) for m in messages if str(m).strip()]
+        if not messages:
+            raise ValueError("messages пуст после чистки")
+        if len(messages) > MAX_MESSAGES:
+            logger.warning("AI вернул %d сообщений, обрезаю до %d", len(messages), MAX_MESSAGES)
+            messages = messages[:MAX_MESSAGES]
 
     raw_extracted = data.get("extracted") or {}
     extracted = {k: raw_extracted.get(k) for k in _EXTRACTED_KEYS if raw_extracted.get(k) is not None}

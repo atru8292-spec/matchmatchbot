@@ -375,35 +375,44 @@ class TestRunVideocallReminders:
 
 class TestPersonalize:
     def test_fills_imya_placeholder(self):
-        assert scheduler._personalize("Hola [имя]!", "Carlos", 2) == "Hola Carlos!"
+        assert scheduler._personalize("Hola [имя]!", "Carlos") == "Hola Carlos!"
 
-    def test_imya_fallback_guapo(self):
-        assert scheduler._personalize("Hola [имя]!", None, 2) == "Hola guapo!"
+    def test_no_name_drops_greeting_placeholder_cleanly(self):
+        """Sin nombre → 'Hola!' limpio, NUNCA 'guapo' ni otro apodo genérico."""
+        assert scheduler._personalize("Hola [имя]! 🤍 texto", None) == "Hola! 🤍 texto"
 
-    def test_guapo_to_name_on_odd_rung(self):
-        # rung 0 (1-я попытка) → по имени
-        assert scheduler._personalize("Hola guapo! 🤍", "Carlos", 0) == "Hola Carlos! 🤍"
+    def test_no_name_never_contains_guapo(self):
+        assert "guapo" not in scheduler._personalize("Hola [имя]! 🤍 texto", None)
 
-    def test_guapo_kept_on_even_rung(self):
-        # rung 1 (2-я попытка) → оставляем guapo
-        assert scheduler._personalize("Hola guapo! 🤍", "Carlos", 1) == "Hola guapo! 🤍"
-
-    def test_no_name_keeps_guapo(self):
-        assert scheduler._personalize("Hola guapo!", None, 0) == "Hola guapo!"
+    def test_name_used_regardless_of_rung(self):
+        """Ya no depende de 'rung' — el nombre se usa siempre que se conoce."""
+        assert scheduler._personalize("Hola [имя]! 🤍", "Carlos") == "Hola Carlos! 🤍"
 
 
 class TestFollowupPersonalized:
-    async def test_followup_uses_name_on_first_rung(self, monkeypatch):
+    async def test_followup_uses_name(self, monkeypatch):
         lead = {"phone": "wa_1", "funnel_stage": "qualified", "followup_sent_count": 0,
                 "whatsapp_name": "Carlos", "name": None}
         monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[lead]))
-        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola guapo! 🤍 sigues?"))
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola [имя]! 🤍 sigues?"))
         send = AsyncMock(return_value=1); monkeypatch.setattr(sender, "send", send)
         monkeypatch.setattr(db, "mark_followup_sent", AsyncMock())
         await scheduler.run_followups()
         bubbles = send.call_args.args[1]
         assert any("Carlos" in b for b in bubbles)
         assert not any("guapo" in b for b in bubbles)
+
+    async def test_followup_no_name_drops_greeting_cleanly(self, monkeypatch):
+        lead = {"phone": "wa_1", "funnel_stage": "qualified", "followup_sent_count": 0,
+                "whatsapp_name": None, "name": None}
+        monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[lead]))
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola [имя]! 🤍 sigues?"))
+        send = AsyncMock(return_value=1); monkeypatch.setattr(sender, "send", send)
+        monkeypatch.setattr(db, "mark_followup_sent", AsyncMock())
+        await scheduler.run_followups()
+        bubbles = send.call_args.args[1]
+        assert not any("guapo" in b for b in bubbles)
+        assert any("Hola! 🤍" in b for b in bubbles)
 
 
 class TestFollowupAlerts:

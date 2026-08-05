@@ -354,6 +354,21 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
         await escalation.notify_block(lead, title or "заблокирован по сценарию")
         return
 
+    if action == "silent":
+        # to_anna_silent (похоже на клиента агентства/известный контакт): бот НЕ пишет
+        # лиду НИЧЕГО (messages уже гарантированно [] — ai._validate_output/_fixed_reply).
+        # mode=manual — бот больше не отвечает сам, Аня ведёт лично; escalation — чтобы
+        # она узнала и подтвердила/поправила при ошибке классификации.
+        try:
+            await db.update_lead_fields(phone, mode="manual")
+        except Exception:
+            logger.exception("не смог поставить manual (silent) для %s", phone)
+        title = await db.get_scenario_title(result["used_scenario_id"])
+        logger.info("AI silent [%s] (scenario=%s) — без ответа лиду", phone, result["used_scenario_id"])
+        await escalation.notify_escalation(
+            lead, title or "Похоже на клиента агентства — бот промолчал", combined)
+        return
+
     # respond / escalate — стадию ставит AI (если вернул валидную).
     if result["funnel_stage"]:
         await db.set_funnel_stage(phone, result["funnel_stage"],

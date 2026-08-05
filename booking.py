@@ -92,7 +92,7 @@ def message_for(res: Result) -> str:
         return ("¡Claro! ¿Qué día y a qué hora exacta te queda para la videollamada? "
                 "Atiendo de 8am a 10pm, hora de Ciudad de México 🤍")
     if res.outcome == Outcome.PAST:
-        return "Esa fecha ya pasó guapo 🤍 ¿me das un día y hora a futuro para la videollamada?"
+        return "Esa fecha ya pasó 🤍 ¿me das un día y hora a futuro para la videollamada?"
     if res.outcome == Outcome.OUT_OF_HOURS:
         return ("Atiendo videollamadas de 8am a 10pm, hora de Ciudad de México 🤍 "
                 "¿qué hora dentro de ese rango te queda?")

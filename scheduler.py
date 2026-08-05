@@ -67,14 +67,14 @@ def _bubbles(template: str) -> list[str]:
     return [p.strip() for p in (template or "").split("\n\n") if p.strip()]
 
 
-def _personalize(text: str, name: str | None, rung: int) -> str:
-    """Подстановка имени в follow-up: [имя] → имя/guapo всегда; 'Hola guapo' → 'Hola {имя}'
-    на 1-й и 3-й попытке (rung 0 и 2), если имя известно — чтобы не долбить 'guapo' каждый раз."""
+def _personalize(text: str, name: str | None) -> str:
+    """Подстановка имени в follow-up: [имя] → имя, если известно; если нет — убираем
+    чисто ('Hola [имя]!' → 'Hola!'). НИКОГДА 'guapo' ни другого обращения-заменителя —
+    та же линия, что и в основном промпте (anna_prompt_v5.md: NUNCA 'guapo')."""
     display = (name or "").strip()
-    text = text.replace("[имя]", display or "guapo")
-    if display and rung in (0, 2):
-        text = text.replace("Hola guapo", f"Hola {display}")
-    return text
+    if display:
+        return text.replace("[имя]", display)
+    return text.replace("Hola [имя]!", "Hola!")
 
 
 def _fill_event(template: str, settings_map: dict) -> str:
@@ -124,7 +124,7 @@ async def run_followups() -> int:
                 await escalation.notify_error("scheduler.followup", f"нет сценария {scenario_id}")
                 continue
             name = ld.get("whatsapp_name") or ld.get("name")
-            bubbles = [_personalize(b, name, count) for b in _bubbles(tmpl)]
+            bubbles = [_personalize(b, name) for b in _bubbles(tmpl)]
             sent = await sender.send(phone, bubbles)
             if sent == 0:
                 # Wazzup не принял (send не бросает, вернул 0) — НЕ жжём ступень лестницы,

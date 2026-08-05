@@ -167,8 +167,8 @@ class TestFixedReply:
         assert result["action"] == "respond"
         assert result["needs_escalation"] is False
 
-    def test_mode_to_anna_silent_gives_escalate(self):
-        """mode='to_anna_silent' → action='escalate'."""
+    def test_mode_to_anna_silent_gives_silent(self):
+        """mode='to_anna_silent' → action='silent' (NO 'escalate' — no debe escribirle al lead)."""
         scenario = _make_scenario(
             id=3,
             mode="to_anna_silent",
@@ -177,7 +177,18 @@ class TestFixedReply:
             template_es="",
         )
         result = ai._fixed_reply(scenario)
-        assert result["action"] == "escalate"
+        assert result["action"] == "silent"
+        assert result["messages"] == []
+        assert result["needs_escalation"] is True
+
+    def test_mode_to_anna_silent_forces_empty_messages_even_with_template(self):
+        """Aunque template_es tenga texto, 'silent' siempre manda messages=[]."""
+        scenario = _make_scenario(
+            id=37, mode="to_anna_silent", blocks_lead=False, ai_allowed=False,
+            template_es="Este texto NUNCA debería llegar al lead.",
+        )
+        result = ai._fixed_reply(scenario)
+        assert result["messages"] == []
         assert result["needs_escalation"] is True
 
     def test_used_scenario_id(self):
@@ -230,7 +241,7 @@ class TestFallbackReply:
 
     def test_messages_content(self):
         result = ai._fallback_reply()
-        assert result["messages"] == ["Ahorita te contesto guapo 🤍"]
+        assert result["messages"] == ["Ahorita te contesto 🤍"]
 
     def test_used_scenario_id_none(self):
         assert ai._fallback_reply()["used_scenario_id"] is None
@@ -359,6 +370,27 @@ class TestValidateOutput:
         """Входной параметр — не dict → ValueError."""
         with pytest.raises(ValueError):
             ai._validate_output("not a dict")
+
+    def test_silent_action_allows_empty_messages(self):
+        """action='silent' — NO requiere messages no vacío (único caso)."""
+        r = ai._validate_output({"messages": [], "action": "silent"})
+        assert r["action"] == "silent"
+        assert r["messages"] == []
+
+    def test_silent_action_forces_empty_even_if_model_sent_text(self):
+        """Si el modelo manda 'silent' pero igual escribió texto — igual forzamos []."""
+        r = ai._validate_output({"messages": ["texto que no debería llegar"], "action": "silent"})
+        assert r["messages"] == []
+
+    def test_silent_action_missing_messages_key_ok(self):
+        """action='silent' sin la clave 'messages' siquiera — no debe romper."""
+        r = ai._validate_output({"action": "silent"})
+        assert r["messages"] == []
+
+    def test_other_actions_still_require_nonempty_messages(self):
+        """No es una excepción general — respond/block/escalate siguen exigiendo messages."""
+        with pytest.raises(ValueError):
+            ai._validate_output({"messages": [], "action": "respond"})
 
 
 # ---------------------------------------------------------------------------
@@ -721,7 +753,7 @@ class TestGenerateReplyFallback:
 
         assert result["action"] == "escalate"
         assert result["needs_escalation"] is True
-        assert result["messages"] == ["Ahorita te contesto guapo 🤍"]
+        assert result["messages"] == ["Ahorita te contesto 🤍"]
         assert result["used_scenario_id"] is None
 
     async def test_rag_exception_goes_to_openai(self, lead, history):
@@ -743,7 +775,7 @@ class TestGenerateReplyFallback:
             result = await ai.generate_reply(lead, history, "texto")
 
         assert result["action"] == "escalate"
-        assert result["messages"] == ["Ahorita te contesto guapo 🤍"]
+        assert result["messages"] == ["Ahorita te contesto 🤍"]
 
     async def test_generate_reply_never_raises(self, lead, history):
         """При любых сбоях generate_reply НЕ бросает исключение."""
