@@ -1388,13 +1388,16 @@ class TestProcessPhoto:
 
     # --- 2. verdict=retry ---
 
-    async def test_verdict_retry_sends_scenario_5(self, monkeypatch):
-        """verdict=retry → _send_scenario(5): get_scenario_template(5) + sender.send вызван; block_lead НЕ вызван."""
+    async def test_verdict_retry_sends_scenario_11(self, monkeypatch):
+        """verdict=retry → _send_scenario(11): get_scenario_template(11) + sender.send вызван;
+        block_lead НЕ вызван. Исправлено 2026-08-10: было #5 (generic 'mándame tu foto',
+        та же реплика что и до отправки — лид получал дословный повтор). #11 — реальный
+        ретрай ('Me mandas otra foto donde estés tú solito...')."""
         mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "retry", "reason": "blurry"})
 
         await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
 
-        mocks["get_scenario_template"].assert_awaited_once_with(5)
+        mocks["get_scenario_template"].assert_awaited_once_with(11)
         mocks["send"].assert_awaited_once()
         mocks["block_lead"].assert_not_awaited()
         mocks["mark_photo_received"].assert_not_awaited()

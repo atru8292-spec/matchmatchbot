@@ -201,8 +201,13 @@ async def _process_photo(phone: str, lead: dict, content_uri: str) -> None:
         await db.set_funnel_stage(phone, "qualified", meta={"photo": "ok"})
         await _run_ai(phone, lead, "[фото одобрено]")
     elif verdict == "retry":
-        # Непригодное (размытое/группа/скрин) → просим другое фото (сценарий 5).
-        await _send_scenario(phone, 5)
+        # ИСПРАВЛЕНО (2026-08-10, реальный баг на живых тестах — Аня/Мила репортили
+        # "опять просит фото"): было #5 — это НЕ ретрай, а generic "mándame tu foto"
+        # (сценарий, до которого AI доходит после квалификации). Лид, чьё фото не
+        # прошло Vision, получал ДОСЛОВНО тот же текст, что и до отправки фото —
+        # выглядело так, будто бот вообще не заметил присланное фото. Правильный
+        # сценарий для retry — #11 ("Me mandas otra foto donde estés tú solito...").
+        await _send_scenario(phone, 11)
     elif verdict == "reject":
         # Неприемлемое (обнажёнка) → блок навсегда + прощание (сценарий 12) + алерт.
         title = await db.get_scenario_title(12)
