@@ -1372,7 +1372,7 @@ class TestProcessPhoto:
         """verdict=ok → mark_photo_received(True) + set_funnel_stage(qualified) + _run_ai("[фото одобрено]"); save_photo вызван."""
         mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "ok", "reason": ""})
 
-        await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
+        await main._process_photos(self.PHONE, self.LEAD, [self.CONTENT_URI])
 
         mocks["mark_photo_received"].assert_awaited_once_with(self.PHONE, True)
         mocks["set_funnel_stage"].assert_awaited_once()
@@ -1395,7 +1395,7 @@ class TestProcessPhoto:
         ретрай ('Me mandas otra foto donde estés tú solito...')."""
         mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "retry", "reason": "blurry"})
 
-        await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
+        await main._process_photos(self.PHONE, self.LEAD, [self.CONTENT_URI])
 
         mocks["get_scenario_template"].assert_awaited_once_with(11)
         mocks["send"].assert_awaited_once()
@@ -1410,7 +1410,7 @@ class TestProcessPhoto:
         """verdict=reject → block_lead вызван + sender.send (сценарий 12) + notify_block вызван."""
         mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "reject", "reason": "nudity"})
 
-        await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
+        await main._process_photos(self.PHONE, self.LEAD, [self.CONTENT_URI])
 
         mocks["block_lead"].assert_awaited_once()
         mocks["get_scenario_template"].assert_awaited_once_with(12)
@@ -1426,7 +1426,7 @@ class TestProcessPhoto:
         """verdict=manual → update_lead_fields(mode="manual") + notify_photo_review (кнопки, блок 11); block_lead НЕ вызван."""
         mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "manual", "reason": "unclear"})
 
-        await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
+        await main._process_photos(self.PHONE, self.LEAD, [self.CONTENT_URI])
 
         mocks["update_lead_fields"].assert_awaited_once_with(self.PHONE, mode="manual")
         mocks["notify_photo_review"].assert_awaited_once()
@@ -1442,7 +1442,7 @@ class TestProcessPhoto:
         """count_recent_photos=6 → update_lead_fields(mode="manual") + notify_escalation; download_media НЕ вызван."""
         mocks = self._mock_all(monkeypatch, count_photos=6)
 
-        await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
+        await main._process_photos(self.PHONE, self.LEAD, [self.CONTENT_URI])
 
         mocks["update_lead_fields"].assert_awaited_once_with(self.PHONE, mode="manual")
         mocks["notify_escalation"].assert_awaited_once()
@@ -1457,7 +1457,7 @@ class TestProcessPhoto:
         mocks = self._mock_all(monkeypatch, download_raises=IOError("network error"))
 
         # не должно бросать
-        await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
+        await main._process_photos(self.PHONE, self.LEAD, [self.CONTENT_URI])
 
         mocks["notify_error"].assert_awaited_once()
         mocks["analyze_photo"].assert_not_awaited()
@@ -1470,7 +1470,7 @@ class TestProcessPhoto:
         """analyze_photo возвращает {"verdict":"manual","reason":"vision failed"} → ветка manual: update_lead_fields + notify_photo_review."""
         mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "manual", "reason": "vision failed"})
 
-        await main._process_photo(self.PHONE, self.LEAD, self.CONTENT_URI)
+        await main._process_photos(self.PHONE, self.LEAD, [self.CONTENT_URI])
 
         mocks["update_lead_fields"].assert_awaited_once_with(self.PHONE, mode="manual")
         mocks["notify_photo_review"].assert_awaited_once()
@@ -1478,13 +1478,95 @@ class TestProcessPhoto:
         mocks["send"].assert_not_awaited()
         mocks["save_photo"].assert_awaited_once()
 
+    # --- 8-10. несколько фото в пачке → приоритет вердиктов (2026-08-12) ---
+
+    async def test_multiple_photos_all_analyzed_and_saved(self, monkeypatch):
+        """3 фото в пачке → analyze_photo и save_photo вызваны по разу на КАЖДОЕ
+        (раньше обрабатывалось только последнее — остальные молча терялись)."""
+        mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "retry", "reason": "blurry"})
+
+        await main._process_photos(self.PHONE, self.LEAD,
+                                   ["https://one.jpg", "https://two.jpg", "https://three.jpg"])
+
+        assert mocks["download_media"].await_count == 3
+        assert mocks["analyze_photo"].await_count == 3
+        assert mocks["save_photo"].await_count == 3
+        # все retry → итог retry (сценарий 11), один раз
+        mocks["get_scenario_template"].assert_awaited_once_with(11)
+
+    async def test_mixed_retry_and_ok_prefers_ok(self, monkeypatch):
+        """Пачка [retry, ok] → хотя бы одно нормальное достаточно, лид квалифицирован."""
+        mocks = self._mock_all(monkeypatch)
+        monkeypatch.setattr(
+            main.vision, "analyze_photo",
+            AsyncMock(side_effect=[
+                {"verdict": "retry", "reason": "blurry"},
+                {"verdict": "ok", "reason": ""},
+            ]),
+        )
+
+        await main._process_photos(self.PHONE, self.LEAD, ["https://one.jpg", "https://two.jpg"])
+
+        mocks["mark_photo_received"].assert_awaited_once_with(self.PHONE, True)
+        mocks["_run_ai"].assert_awaited_once()
+        mocks["update_lead_fields"].assert_not_awaited()
+
+    async def test_mixed_retry_and_manual_prefers_manual(self, monkeypatch):
+        """Пачка [retry, manual] → спорное перевешивает просто плохое качество, эскалируем."""
+        mocks = self._mock_all(monkeypatch)
+        monkeypatch.setattr(
+            main.vision, "analyze_photo",
+            AsyncMock(side_effect=[
+                {"verdict": "retry", "reason": "blurry"},
+                {"verdict": "manual", "reason": "ambiguous"},
+            ]),
+        )
+
+        await main._process_photos(self.PHONE, self.LEAD, ["https://one.jpg", "https://two.jpg"])
+
+        mocks["update_lead_fields"].assert_awaited_once_with(self.PHONE, mode="manual")
+        mocks["notify_photo_review"].assert_awaited_once()
+        mocks["_run_ai"].assert_not_awaited()
+
+    async def test_mixed_ok_and_reject_prefers_reject(self, monkeypatch):
+        """Пачка [ok, reject] → безопасность важнее: блокируем, даже если было нормальное фото."""
+        mocks = self._mock_all(monkeypatch)
+        monkeypatch.setattr(
+            main.vision, "analyze_photo",
+            AsyncMock(side_effect=[
+                {"verdict": "ok", "reason": ""},
+                {"verdict": "reject", "reason": "nudity"},
+            ]),
+        )
+
+        await main._process_photos(self.PHONE, self.LEAD, ["https://one.jpg", "https://two.jpg"])
+
+        mocks["block_lead"].assert_awaited_once()
+        mocks["notify_block"].assert_awaited_once()
+        mocks["mark_photo_received"].assert_not_awaited()
+        mocks["_run_ai"].assert_not_awaited()
+
+    async def test_one_download_fails_others_still_processed(self, monkeypatch):
+        """Одно фото пачки падает на скачивании → остальные всё равно обрабатываются, не тихо."""
+        mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "ok", "reason": ""})
+        monkeypatch.setattr(
+            main.vision, "download_media",
+            AsyncMock(side_effect=[IOError("network"), self.FAKE_IMG]),
+        )
+
+        await main._process_photos(self.PHONE, self.LEAD, ["https://bad.jpg", "https://good.jpg"])
+
+        mocks["notify_error"].assert_awaited_once()
+        mocks["analyze_photo"].assert_awaited_once()  # только для второго фото
+        mocks["mark_photo_received"].assert_awaited_once_with(self.PHONE, True)
+
 
 # ---------------------------------------------------------------------------
 # Часть C: TestProcessBurstPhotoRouting — ветвление _process_burst (фото vs текст vs silent)
 # ---------------------------------------------------------------------------
 
 class TestProcessBurstPhotoRouting:
-    """Проверяем маршрутизацию внутри _process_burst: фото → _process_photo, текст → _apply_decision, silent перехватывает фото."""
+    """Проверяем маршрутизацию внутри _process_burst: фото → _process_photos, текст → _apply_decision, silent перехватывает фото."""
 
     PHONE = "wa_521000001111"
     LEAD = {"phone": "wa_521000001111", "whatsapp_name": "Test"}
@@ -1501,7 +1583,7 @@ class TestProcessBurstPhotoRouting:
         monkeypatch.setattr(filters, "decide", lambda *args, **kwargs: fake_decision)
 
         photo_mock = AsyncMock()
-        monkeypatch.setattr(main, "_process_photo", photo_mock)
+        monkeypatch.setattr(main, "_process_photos", photo_mock)
         apply_mock = AsyncMock()
         monkeypatch.setattr(main, "_apply_decision", apply_mock)
         notify_err_mock = AsyncMock()
@@ -1509,10 +1591,10 @@ class TestProcessBurstPhotoRouting:
 
         return photo_mock, apply_mock, notify_err_mock
 
-    # --- 8. photo msg + decision needs_ai → _process_photo called ---
+    # --- 8. photo msg + decision needs_ai → _process_photos called ---
 
-    async def test_photo_with_uri_and_needs_ai_calls_process_photo(self, monkeypatch):
-        """Залп с photo (content_uri) + decision needs_ai → _process_photo вызван с content_uri, _apply_decision НЕ вызван."""
+    async def test_photo_with_uri_and_needs_ai_calls_process_photos(self, monkeypatch):
+        """Залп с photo (content_uri) + decision needs_ai → _process_photos вызван с [content_uri], _apply_decision НЕ вызван."""
         msgs = [
             {"id": "uuid-photo-1", "text": None,
              "meta": {"content_type": "photo", "content_uri": self.CONTENT_URI}},
@@ -1523,13 +1605,13 @@ class TestProcessBurstPhotoRouting:
 
         await main._process_burst(self.PHONE)
 
-        photo_mock.assert_awaited_once_with(self.PHONE, self.LEAD, self.CONTENT_URI)
+        photo_mock.assert_awaited_once_with(self.PHONE, self.LEAD, [self.CONTENT_URI])
         apply_mock.assert_not_awaited()
 
-    # --- 9. photo msg + decision silent → _apply_decision called, _process_photo NOT ---
+    # --- 9. photo msg + decision silent → _apply_decision called, _process_photos NOT ---
 
     async def test_photo_with_silent_decision_calls_apply_decision(self, monkeypatch):
-        """Залп с photo + decision silent → _apply_decision вызван (молчим), _process_photo НЕ вызван."""
+        """Залп с photo + decision silent → _apply_decision вызван (молчим), _process_photos НЕ вызван."""
         msgs = [
             {"id": "uuid-photo-2", "text": None,
              "meta": {"content_type": "photo", "content_uri": self.CONTENT_URI}},
@@ -1543,10 +1625,10 @@ class TestProcessBurstPhotoRouting:
         apply_mock.assert_awaited_once()
         photo_mock.assert_not_awaited()
 
-    # --- 10. text burst → _apply_decision called, _process_photo NOT ---
+    # --- 10. text burst → _apply_decision called, _process_photos NOT ---
 
     async def test_text_only_burst_calls_apply_decision(self, monkeypatch):
-        """Залп без фото → _apply_decision вызван, _process_photo НЕ вызван."""
+        """Залп без фото → _apply_decision вызван, _process_photos НЕ вызван."""
         msgs = [
             {"id": "uuid-text-1", "text": "Hola", "meta": {"content_type": "text"}},
         ]
@@ -1559,10 +1641,10 @@ class TestProcessBurstPhotoRouting:
         apply_mock.assert_awaited_once()
         photo_mock.assert_not_awaited()
 
-    # --- 11. photo msg без content_uri → notify_error, _process_photo NOT ---
+    # --- 11. photo msg без content_uri → notify_error, _process_photos NOT ---
 
     async def test_photo_without_content_uri_calls_notify_error(self, monkeypatch):
-        """photo msg без content_uri → notify_error вызван, _process_photo НЕ вызван."""
+        """photo msg без content_uri → notify_error вызван, _process_photos НЕ вызван."""
         msgs = [
             {"id": "uuid-photo-3", "text": None,
              "meta": {"content_type": "photo"}},  # нет content_uri
@@ -1593,8 +1675,8 @@ class TestProcessBurstPhotoRouting:
         apply_mock.assert_awaited_once()
         photo_mock.assert_not_awaited()
 
-    async def test_last_photo_no_uri_falls_back_to_earlier(self, monkeypatch):
-        """Последнее фото без content_uri, раннее с — берём раннее (не теряем валидное)."""
+    async def test_photo_without_uri_filtered_out_earlier_kept(self, monkeypatch):
+        """Одно фото без content_uri отфильтровано, фото с uri — передано (не теряем валидное)."""
         msgs = [
             {"id": "p1", "text": None,
              "meta": {"content_type": "photo", "content_uri": "https://early.jpg"}},
@@ -1604,11 +1686,30 @@ class TestProcessBurstPhotoRouting:
             monkeypatch, msgs=msgs, decision_action="needs_ai"
         )
         await main._process_burst(self.PHONE)
-        photo_mock.assert_awaited_once_with(self.PHONE, self.LEAD, "https://early.jpg")
+        photo_mock.assert_awaited_once_with(self.PHONE, self.LEAD, ["https://early.jpg"])
         notify_err_mock.assert_not_awaited()
 
-    async def test_process_photo_raises_calls_notify_error(self, monkeypatch):
-        """_process_photo падает (сообщения уже processed) → notify_error, не тихо."""
+    async def test_multiple_photos_all_passed_through(self, monkeypatch):
+        """ИСПРАВЛЕНО (2026-08-12): раньше бралось только ПОСЛЕДНЕЕ фото пачки, остальные
+        молча терялись. Теперь ВСЕ фото с content_uri передаются в _process_photos."""
+        msgs = [
+            {"id": "p1", "text": None,
+             "meta": {"content_type": "photo", "content_uri": "https://one.jpg"}},
+            {"id": "p2", "text": None,
+             "meta": {"content_type": "photo", "content_uri": "https://two.jpg"}},
+            {"id": "p3", "text": None,
+             "meta": {"content_type": "photo", "content_uri": "https://three.jpg"}},
+        ]
+        photo_mock, _, _ = self._mock_burst_deps(
+            monkeypatch, msgs=msgs, decision_action="needs_ai"
+        )
+        await main._process_burst(self.PHONE)
+        photo_mock.assert_awaited_once_with(
+            self.PHONE, self.LEAD, ["https://one.jpg", "https://two.jpg", "https://three.jpg"]
+        )
+
+    async def test_process_photos_raises_calls_notify_error(self, monkeypatch):
+        """_process_photos падает (сообщения уже processed) → notify_error, не тихо."""
         msgs = [
             {"id": "p", "text": None,
              "meta": {"content_type": "photo", "content_uri": self.CONTENT_URI}},

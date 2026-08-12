@@ -113,24 +113,23 @@ async def _process_burst_impl(phone: str) -> None:
         await _apply_decision(phone, decision, lead, combined)
         return
 
-    # 2) фото в залпе → фото-ветка (Vision). Берём ПОСЛЕДНЕЕ фото С content_uri
-    #    (у последнего медиа может не быть URI, а у раннего быть — не теряем валидное).
+    # 2) фото в залпе → фото-ветка (Vision). ИСПРАВЛЕНО (2026-08-12): раньше брали
+    #    ТОЛЬКО ПОСЛЕДНЕЕ фото пачки — если лид присылал 2-3 фото разом, остальные
+    #    молча терялись без анализа (реальный кейс: 3 фото за секунду → в БД попало
+    #    только 1). Теперь анализируем КАЖДОЕ фото с content_uri.
     photo_msgs = [m for m in msgs if (m.get("meta") or {}).get("content_type") == "photo"]
     if photo_msgs:
-        content_uri = next(
-            (m["meta"]["content_uri"] for m in reversed(photo_msgs)
-             if (m.get("meta") or {}).get("content_uri")),
-            None,
-        )
-        if not content_uri:
+        content_uris = [m["meta"]["content_uri"] for m in photo_msgs
+                        if (m.get("meta") or {}).get("content_uri")]
+        if not content_uris:
             logger.warning("фото без content_uri [%s]", phone)
             await escalation.notify_error("photo", "нет content_uri в meta", phone)
             return
         # Обёртка: сообщения уже processed — сбой фото-обработки не должен быть тихим.
         try:
-            await _process_photo(phone, lead, content_uri)
+            await _process_photos(phone, lead, content_uris)
         except Exception as e:
-            logger.exception("_process_photo упал [%s] — фото уже processed", phone)
+            logger.exception("_process_photos упал [%s] — фото уже processed", phone)
             await escalation.notify_error("main._process_photo", repr(e), phone)
         return
 
@@ -168,9 +167,24 @@ async def _transcribe_voices(phone: str, msgs: list[dict]) -> None:
         logger.info("голосовое [%s] транскрибировано: %r", phone, text[:80])
 
 
-async def _process_photo(phone: str, lead: dict, content_uri: str) -> None:
-    """Фото-ветка: флуд → скачать → Vision → сохранить → действие по вердикту."""
-    # Флуд-защита: >5 фото/час → ручная проверка, без Vision (экономия токенов).
+_VERDICT_PRIORITY = ("reject", "ok", "manual", "retry")
+
+
+async def _process_photos(phone: str, lead: dict, content_uris: list[str]) -> None:
+    """Фото-ветка: флуд → скачать+Vision КАЖДОЕ фото пачки → сохранить каждое →
+    ОДНО итоговое действие по приоритету вердиктов.
+
+    ИСПРАВЛЕНО (2026-08-12): раньше обрабатывалось только последнее фото пачки —
+    если лид присылал 2-3 фото разом, остальные молча терялись без анализа/сохранения
+    (реальный кейс: 3 фото за секунду → в lead_photos попало только 1). Теперь каждое
+    фото реально скачивается, идёт в Vision и сохраняется (db.save_photo).
+
+    Приоритет итогового действия: reject (любое неприемлемое — блок сразу, не важно
+    что в остальных) > ok (хотя бы одно нормальное — этого достаточно, лид
+    квалифицирован) > manual (есть спорное, но нет явного reject/ok) > retry
+    (все плохого качества — просим переслать)."""
+    # Флуд-защита один раз на всю пачку (не за каждое фото) — >5 фото/час → ручная
+    # проверка, без Vision (экономия токенов).
     try:
         if await db.count_recent_photos(phone) > 5:
             logger.warning("photo flood [%s] — mode=manual, без Vision", phone)
@@ -180,23 +194,36 @@ async def _process_photo(phone: str, lead: dict, content_uri: str) -> None:
     except Exception:
         logger.exception("count_recent_photos упал [%s], продолжаю", phone)
 
-    # Скачивание медиа. Сбой → technical-алерт, выходим (лид ответа не получит).
-    try:
-        img = await vision.download_media(content_uri)
-    except Exception as e:
-        logger.exception("download_media упал [%s]", phone)
-        await escalation.notify_error("vision.download_media", repr(e), phone)
+    results: list[dict] = []
+    for content_uri in content_uris:
+        # Скачивание медиа. Сбой ОДНОГО фото → technical-алерт, но остальные фото
+        # пачки всё равно обрабатываем (не роняем всю пачку из-за одного сбоя).
+        try:
+            img = await vision.download_media(content_uri)
+        except Exception as e:
+            logger.exception("download_media упал [%s]", phone)
+            await escalation.notify_error("vision.download_media", repr(e), phone)
+            continue
+
+        res = await vision.analyze_photo(img)         # ошибка внутри → manual-фолбэк
+        verdict = res["verdict"]
+        url, path = await vision.upload_to_storage(phone, img)  # сбой → (None, None)
+        await db.save_photo(phone, url, path, verdict, analysis=res,
+                            reasons=[res.get("reason", "")] if res.get("reason") else [])
+        logger.info("фото [%s]: verdict=%s (%s)", phone, verdict, res.get("reason", ""))
+        results.append(res)
+
+    if not results:
+        # Скачивание упало у всех фото пачки — алерты уже ушли по каждому, лид без
+        # ответа (как и раньше при одиночном сбое download).
         return
 
-    res = await vision.analyze_photo(img)         # ошибка внутри → manual-фолбэк
-    verdict = res["verdict"]
-    url, path = await vision.upload_to_storage(phone, img)  # сбой → (None, None)
-    await db.save_photo(phone, url, path, verdict, analysis=res,
-                        reasons=[res.get("reason", "")] if res.get("reason") else [])
-    logger.info("фото [%s]: verdict=%s (%s)", phone, verdict, res.get("reason", ""))
+    by_verdict = {r["verdict"]: r for r in results}
+    verdict = next(v for v in _VERDICT_PRIORITY if v in by_verdict)
+    res = by_verdict[verdict]
 
     if verdict == "ok":
-        # Фото одобрено → лид квалифицирован, AI переходит к питчу (сценарий 6).
+        # Хотя бы одно фото одобрено → лид квалифицирован, AI переходит к питчу.
         await db.mark_photo_received(phone, True)
         await db.set_funnel_stage(phone, "qualified", meta={"photo": "ok"})
         await _run_ai(phone, lead, "[фото одобрено]")

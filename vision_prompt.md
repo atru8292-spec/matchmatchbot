@@ -27,12 +27,14 @@ a reason to flag a photo — do not judge attractiveness or age by itself.
 
 Classify into exactly ONE verdict:
 
-- "ok": a clear photo where a single person's face is visible, decent quality,
-  appropriate (normal clothed portrait, selfie, or casual photo).
-- "retry": unusable to identify the person but NOT offensive — blurry/too dark,
+- "ok": a clear photo of a MAN (the lead is always male — this agency matches men
+  with women) where a single person's face is visible, decent quality, appropriate
+  (normal clothed portrait, selfie, or casual photo).
+- "retry": unusable to identify the (male) lead but NOT offensive — blurry/too dark,
   a group of people (unclear who the lead is), a meme, a screenshot, a photo of
-  something that is not a person (landscape, car, object, pet), or no visible face.
-  The lead will be politely asked to send another photo.
+  something that is not a person (landscape, car, object, pet), no visible face, OR
+  the person in the photo is CLEARLY a woman (obviously not the male lead — wrong
+  photo, not a judgment call). The lead will be politely asked to send his own photo.
 - "reject": sexually explicit — genitals, nudity, or a clear sexual act depicted.
   A bare/shirtless chest ALONE is never enough for "reject" by itself, no matter the
   pose, facial expression, or framing (close-up, lying down, "flirty" look, etc.) —
@@ -45,7 +47,9 @@ Classify into exactly ONE verdict:
   permanently.
 - "manual": genuinely unsure or borderline — ANY bare/shirtless chest with no
   genitals/nudity visible (regardless of pose or expression), ambiguous
-  content, not clearly a man, OR a possible health/hygiene/appearance issue that is
+  content, gender genuinely AMBIGUOUS/unclear (NOT the same as "retry" above —
+  that's for when it's obviously a woman, no doubt about it; "manual" is only for
+  truly hard-to-tell cases), OR a possible health/hygiene/appearance issue that is
   NOT clearly severe enough to be obvious (you are not fully confident it clears the
   "reject" bar above). This is NOT about being older or plain-looking by itself —
   only when a real presentability concern exists but you are not certain how severe
@@ -78,3 +82,10 @@ Respond STRICTLY as JSON, no markdown:
   «сексуальную манеру» и слать в reject (перм. блок) — баг подтверждён 3/3 воспроизводимо в тесте.
   Теперь reject по наготе требует буквально гениталии/наготу/явный секс-акт — голый торс сам
   по себе такой планки не достигает никогда.
+- ИСПРАВЛЕНО (2026-08-12): раньше «not clearly a man» было только в manual — то есть
+  фото, где ОЧЕВИДНО женщина (не двусмысленно, просто не тот пол), формально могло уйти в
+  "ok" (промпт для "ok" вообще не упоминал пол) или как минимум требовало решения Ани
+  (manual), хотя тут нечего решать — это явно не тот человек. Лиды бота — всегда мужчины
+  (агентство знакомит мужчин с женщинами), поэтому «явно женщина» теперь retry (вежливо
+  просим его собственное фото), а manual остаётся только для реально неоднозначных случаев
+  (не могу разобрать пол по фото). retry не блокирует — это не наказание, просто не то фото.
