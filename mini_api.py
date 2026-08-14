@@ -14,16 +14,20 @@ import base64
 import csv
 import io
 import logging
+import re
 from datetime import datetime, date
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 
 import ai
+import booking
 import db
 import escalation
 import funnel
+import gcal
 import media
 import scheduler
 import sender
@@ -866,6 +870,84 @@ async def put_event(body: EventSettingsIn, _: dict = Depends(require_admin)) -> 
     except Exception as e:
         await _alert_500("put_event", e)
     return _event_out(values)
+
+
+# ===== Расписание троих (Аня/Мила/Рита) — /api/mini/assignees =====
+# Каждой видеозвонок бота (booking.py) достаётся первой по приоритету (Аня→Мила→Рита), кто
+# в этот час свободна ПО СВОЕМУ расписанию (свой часовой пояс, свои часы). Slug/цвет/порядок
+# фиксированы (gcal.ASSIGNEES) — редактируется только tz/start/end, те же ключи app_settings,
+# что читает booking.py (booking.SCHEDULE_KEYS) — один источник правды, без миграции схемы.
+_ASSIGNEE_SLUGS = {"Аня": "anya", "Мила": "mila", "Рита": "rita"}
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class AssigneeScheduleIn(BaseModel):
+    slug: str
+    tz: str
+    start: str
+    end: str
+
+
+class AssigneesIn(BaseModel):
+    assignees: List[AssigneeScheduleIn]
+
+
+def _assignees_out(s: dict) -> dict:
+    out = []
+    for name, color_id in gcal.ASSIGNEES:
+        slug = _ASSIGNEE_SLUGS[name]
+        out.append({
+            "slug": slug,
+            "name": name,
+            "color": gcal.COLOR_HEX.get(color_id, "#999999"),
+            "tz": s.get(f"assignee_{slug}_tz") or booking._DEFAULT_TZ,
+            "start": s.get(f"assignee_{slug}_start") or booking._DEFAULT_START,
+            "end": s.get(f"assignee_{slug}_end") or booking._DEFAULT_END,
+        })
+    return {"assignees": out}
+
+
+@router.get("/assignees")
+async def get_assignees(_: dict = Depends(require_admin)) -> dict:
+    """Текущее расписание троих (из app_settings — тот же источник, что читает booking.py)."""
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    try:
+        s = await db.get_settings(booking.SCHEDULE_KEYS)
+    except Exception as e:
+        await _alert_500("get_assignees", e)
+    return _assignees_out(s)
+
+
+@router.put("/assignees")
+async def put_assignees(body: AssigneesIn, _: dict = Depends(require_admin)) -> dict:
+    """Сохранить расписание троих. slug фиксирован (anya/mila/rita) — лишний/неизвестный
+    slug игнорируем; каждый присланный слот валидируем (tz реальный, HH:MM, end > start)."""
+    known_slugs = set(_ASSIGNEE_SLUGS.values())
+    values: dict[str, str] = {}
+    for item in body.assignees:
+        slug = item.slug.strip().lower()
+        if slug not in known_slugs:
+            continue
+        try:
+            ZoneInfo(item.tz)
+        except Exception:
+            raise HTTPException(status_code=422, detail=f"{slug}: часовой пояс не распознан")
+        start, end = item.start.strip(), item.end.strip()
+        if not (_HHMM_RE.match(start) and _HHMM_RE.match(end)):
+            raise HTTPException(status_code=422, detail=f"{slug}: время в формате ЧЧ:ММ")
+        if end <= start:
+            raise HTTPException(status_code=422, detail=f"{slug}: время окончания должно быть позже начала")
+        values[f"assignee_{slug}_tz"] = item.tz
+        values[f"assignee_{slug}_start"] = start
+        values[f"assignee_{slug}_end"] = end
+    try:
+        for key, val in values.items():
+            await db.set_setting(key, val)
+        s = await db.get_settings(booking.SCHEDULE_KEYS)
+    except Exception as e:
+        await _alert_500("put_assignees", e)
+    return _assignees_out(s)
 
 
 # ===== Напоминание дня ивента (предпросмотр + ручная отправка) =====

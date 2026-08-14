@@ -62,6 +62,16 @@ def _ensure_clients() -> None:
 
 # ===== Calendar =====
 
+# Reparto de llamadas: hasta 3 en paralelo por slot, mismo calendario compartido — se
+# distinguen por color y por el nombre en el título. Orden de prioridad fijo (2026-08-14,
+# pedido directo de la dueña): Аня primero, luego Мила, luego Рита. colorId de Google:
+# 3=Grape(morado), 5=Banana(amarillo), 10=Basil(verde).
+ASSIGNEES: tuple[tuple[str, str], ...] = (("Аня", "3"), ("Мила", "5"), ("Рита", "10"))
+
+# Mismos colores, en hex, para el mini-CRM (Google Calendar colorId → hex de su paleta oficial).
+COLOR_HEX: dict[str, str] = {"3": "#8E24AA", "5": "#F6BF26", "10": "#0B8043"}
+
+
 async def is_slot_free(start: datetime, end: datetime) -> bool:
     """Свободен ли слот [start, end) в календаре (freebusy). tz-aware datetime."""
     return await asyncio.to_thread(_is_slot_free_sync, start, end)
@@ -76,13 +86,43 @@ def _is_slot_free_sync(start: datetime, end: datetime) -> bool:
     return len(busy) == 0
 
 
-async def create_event(summary: str, start: datetime, description: str = "") -> dict:
+async def slot_taken_names(start: datetime, end: datetime) -> set[str]:
+    """Qué nombres de ASSIGNEES ya tienen un evento (no cancelado) en el slot [start, end).
+
+    Identifica por el tag «[Nombre]» en el título (ver booking._pick_assignee) — necesario
+    porque con agendas propias por persona el ORDEN de creación ya no coincide con la
+    prioridad (p.ej. el primer booking del slot puede tocarle a Мила si Аня no cubre esa
+    hora), así que no basta con contar eventos."""
+    return await asyncio.to_thread(_slot_taken_names_sync, start, end)
+
+
+def _slot_taken_names_sync(start: datetime, end: datetime) -> set[str]:
+    _ensure_clients()
+    resp = _calendar.events().list(
+        calendarId=settings.google_calendar_id,
+        timeMin=start.isoformat(), timeMax=end.isoformat(),
+        singleEvents=True, showDeleted=False,
+    ).execute()
+    taken: set[str] = set()
+    for ev in resp.get("items", []):
+        if ev.get("status") == "cancelled":
+            continue
+        summary = ev.get("summary") or ""
+        for name, _color in ASSIGNEES:
+            if f"[{name}]" in summary:
+                taken.add(name)
+    return taken
+
+
+async def create_event(summary: str, start: datetime, description: str = "",
+                       color_id: str | None = None) -> dict:
     """Создать событие (БЕЗ Meet — сервис-аккаунт не может генерить конференцию; ссылку
-    шлёт Аня вручную). Вернуть {event_id, html_link}."""
-    return await asyncio.to_thread(_create_event_sync, summary, start, description)
+    шлёт Аня вручную). color_id — цвет события (см. ASSIGNEES). Вернуть {event_id, html_link}."""
+    return await asyncio.to_thread(_create_event_sync, summary, start, description, color_id)
 
 
-def _create_event_sync(summary: str, start: datetime, description: str) -> dict:
+def _create_event_sync(summary: str, start: datetime, description: str,
+                       color_id: str | None) -> dict:
     _ensure_clients()
     end = start + timedelta(minutes=DURATION_MIN)
     body = {
@@ -91,20 +131,29 @@ def _create_event_sync(summary: str, start: datetime, description: str) -> dict:
         "start": {"dateTime": start.isoformat(), "timeZone": MEET_TZ},
         "end": {"dateTime": end.isoformat(), "timeZone": MEET_TZ},
     }
+    if color_id:
+        body["colorId"] = color_id
     ev = _calendar.events().insert(calendarId=settings.google_calendar_id, body=body).execute()
     return {"event_id": ev["id"], "html_link": ev.get("htmlLink")}
 
 
-async def patch_event(event_id: str, start: datetime) -> dict:
-    """Перенести существующее событие на новое время (кейс «передумал»). Вернуть ссылки."""
-    return await asyncio.to_thread(_patch_event_sync, event_id, start)
+async def patch_event(event_id: str, start: datetime, summary: str | None = None,
+                      color_id: str | None = None) -> dict:
+    """Перенести существующее событие на новое время (кейс «передумал»). Опционально
+    обновить title/color (реассайн ответственного при переносе на другой слот). Вернуть ссылки."""
+    return await asyncio.to_thread(_patch_event_sync, event_id, start, summary, color_id)
 
 
-def _patch_event_sync(event_id: str, start: datetime) -> dict:
+def _patch_event_sync(event_id: str, start: datetime, summary: str | None,
+                      color_id: str | None) -> dict:
     _ensure_clients()
     end = start + timedelta(minutes=DURATION_MIN)
     body = {"start": {"dateTime": start.isoformat(), "timeZone": MEET_TZ},
             "end": {"dateTime": end.isoformat(), "timeZone": MEET_TZ}}
+    if summary:
+        body["summary"] = summary
+    if color_id:
+        body["colorId"] = color_id
     ev = _calendar.events().patch(
         calendarId=settings.google_calendar_id, eventId=event_id, body=body).execute()
     return {"event_id": ev["id"], "html_link": ev.get("htmlLink")}

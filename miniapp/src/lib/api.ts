@@ -8,7 +8,7 @@ import {
   mockClients, mockGetEvent, mockLeadDetail, mockLeads, mockLeadsCsv, mockSetEvent, mockStats, USE_MOCKS,
 } from "./mock";
 import type {
-  DayOfPreview, DayOfRecipientsResponse, DayOfSendResult,
+  AssigneesResponse, DayOfPreview, DayOfRecipientsResponse, DayOfSendResult,
   EventMediaItem, EventSettings, LeadDetail, LeadsPage, LeadsQuery, Stats,
   TestChatRequest, TestChatResponse, TimelineItem, WhitelistClient,
 } from "./types";
@@ -186,6 +186,15 @@ export async function fetchBotPaused(): Promise<boolean> {
 export async function setBotPause(paused: boolean): Promise<{ botPaused: boolean }> {
   if (USE_MOCKS) return { botPaused: paused };
   return apiSend<{ botPaused: boolean }>("/bot/pause", "POST", { paused });
+}
+
+// ===== Расписание звонков (Аня/Мила/Рита) =====
+export async function fetchAssignees(): Promise<AssigneesResponse> {
+  return apiFetch<AssigneesResponse>("/assignees");
+}
+
+export async function saveAssignees(r: AssigneesResponse): Promise<AssigneesResponse> {
+  return apiSend<AssigneesResponse>("/assignees", "PUT", r);
 }
 
 // ===== Напоминание дня ивента =====

@@ -591,6 +591,83 @@ class TestEvent:
         assert TestClient(app).get("/api/mini/event").status_code == 401
 
 
+class TestAssignees:
+    def test_get_assignees_defaults(self, client, monkeypatch):
+        # nada configurado en app_settings → dan los 3 con los valores por defecto
+        monkeypatch.setattr(db, "get_settings", lambda keys: _async({}))
+        d = client.get("/api/mini/assignees").json()
+        assert [a["slug"] for a in d["assignees"]] == ["anya", "mila", "rita"]
+        assert [a["name"] for a in d["assignees"]] == ["Аня", "Мила", "Рита"]
+        for a in d["assignees"]:
+            assert a["tz"] == "America/Mexico_City"
+            assert a["start"] == "07:00" and a["end"] == "14:00"
+        assert d["assignees"][0]["color"] == "#8E24AA"  # Аня → Grape (morado)
+
+    def test_get_assignees_reads_configured_values(self, client, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", lambda keys: _async({
+            "assignee_mila_tz": "Europe/Moscow", "assignee_mila_start": "15:00",
+            "assignee_mila_end": "22:00",
+        }))
+        d = client.get("/api/mini/assignees").json()
+        mila = next(a for a in d["assignees"] if a["slug"] == "mila")
+        assert mila["tz"] == "Europe/Moscow" and mila["start"] == "15:00" and mila["end"] == "22:00"
+        anya = next(a for a in d["assignees"] if a["slug"] == "anya")
+        assert anya["tz"] == "America/Mexico_City"  # no tocada → default
+
+    def test_put_assignees_saves_each(self, client, monkeypatch):
+        saved = {}
+        monkeypatch.setattr(db, "set_setting", lambda k, v: _async(saved.__setitem__(k, v)))
+        monkeypatch.setattr(db, "get_settings", lambda keys: _async(saved))
+        r = client.put("/api/mini/assignees", json={"assignees": [
+            {"slug": "anya", "tz": "America/Mexico_City", "start": "07:00", "end": "14:00"},
+            {"slug": "mila", "tz": "Europe/Moscow", "start": "15:00", "end": "22:00"},
+            {"slug": "rita", "tz": "Europe/Berlin", "start": "09:00", "end": "16:00"},
+        ]})
+        assert r.status_code == 200
+        assert saved["assignee_mila_tz"] == "Europe/Moscow"
+        assert saved["assignee_mila_start"] == "15:00" and saved["assignee_mila_end"] == "22:00"
+        assert saved["assignee_rita_tz"] == "Europe/Berlin"
+        d = r.json()
+        mila = next(a for a in d["assignees"] if a["slug"] == "mila")
+        assert mila["tz"] == "Europe/Moscow"
+
+    def test_put_assignees_bad_timezone_422(self, client, monkeypatch):
+        monkeypatch.setattr(db, "set_setting", AsyncMock())
+        r = client.put("/api/mini/assignees", json={"assignees": [
+            {"slug": "anya", "tz": "No/Existe", "start": "07:00", "end": "14:00"},
+        ]})
+        assert r.status_code == 422
+
+    def test_put_assignees_bad_hhmm_422(self, client, monkeypatch):
+        monkeypatch.setattr(db, "set_setting", AsyncMock())
+        r = client.put("/api/mini/assignees", json={"assignees": [
+            {"slug": "anya", "tz": "America/Mexico_City", "start": "7am", "end": "14:00"},
+        ]})
+        assert r.status_code == 422
+
+    def test_put_assignees_end_before_start_422(self, client, monkeypatch):
+        monkeypatch.setattr(db, "set_setting", AsyncMock())
+        r = client.put("/api/mini/assignees", json={"assignees": [
+            {"slug": "anya", "tz": "America/Mexico_City", "start": "14:00", "end": "07:00"},
+        ]})
+        assert r.status_code == 422
+
+    def test_put_assignees_unknown_slug_ignored(self, client, monkeypatch):
+        saved = {}
+        monkeypatch.setattr(db, "set_setting", lambda k, v: _async(saved.__setitem__(k, v)))
+        monkeypatch.setattr(db, "get_settings", lambda keys: _async(saved))
+        r = client.put("/api/mini/assignees", json={"assignees": [
+            {"slug": "bogus", "tz": "America/Mexico_City", "start": "07:00", "end": "14:00"},
+        ]})
+        assert r.status_code == 200
+        assert saved == {}
+
+    def test_assignees_requires_auth(self, monkeypatch):
+        monkeypatch.setattr(db, "is_ready", lambda: True)
+        monkeypatch.setattr(mini_auth.settings, "mini_dev_mode", False)
+        assert TestClient(app).get("/api/mini/assignees").status_code == 401
+
+
 class TestInvitationUpload:
     def _b64(self, data=b"fake-image-bytes"):
         return base64.b64encode(data).decode()

@@ -270,14 +270,16 @@ async def notify_optout(lead: dict) -> None:
     await _send_business_alert(text, block_action_kb(phone) if phone else None)
 
 
-async def notify_videocall_booked(lead: dict, when_text: str) -> None:
-    """Бот сам забронировал видеозвонок (создал событие в календаре) — Аня отправляет
-    лиду ссылку на звонок вручную (бот Meet-ссылку не генерит)."""
+async def notify_videocall_booked(lead: dict, when_text: str, assignee: str | None = None) -> None:
+    """Бот сам забронировал видеозвонок (создал событие в календаре) — назначенная
+    (Аня/Мила/Рита, распределение по слотам) отправляет лиду ссылку на звонок вручную
+    (бот Meet-ссылку не генерит)."""
     text = (
         "📅 Звонок забронирован ботом\n"
         f"{_lead_name(lead)}\n"
         f"🕐 {when_text}\n"
-        "⚠️ Отправь лиду ссылку на видеозвонок\n"
+        + (f"👤 Ведёт: {assignee}\n" if assignee else "")
+        + "⚠️ Отправь лиду ссылку на видеозвонок\n"
         f"👉 Написать: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")

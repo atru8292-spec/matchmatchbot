@@ -603,11 +603,13 @@ async def set_videocall_at(phone: str, when) -> None:
 
 
 async def set_videocall_booking(phone: str, when, event_id: str, link: str,
-                                conn=None) -> None:
+                                assignee: str | None = None, conn=None) -> None:
     """Сохранить автозабронированный звонок: время + id события Google + ссылка на событие.
 
     videocall_event_id нужен для переноса/отмены (patch/delete). calendar_link — ссылка
-    на само событие в Google Calendar (для Ани; лиду Meet шлёт она вручную).
+    на само событие в Google Calendar (для Ани; лиду Meet шлёт она вручную). assignee —
+    кто из троих (Аня/Мила/Рита) ведёт звонок, для мини-CRM (extra_data.videocall_assignee,
+    без миграции схемы — extra_data уже jsonb).
     videocall_reminded_at сбрасываем → напоминание #49 уйдёт на новое время. conn — опц.
     соединение (когда вызывается внутри транзакции с advisory-lock от гонки).
     """
@@ -615,9 +617,11 @@ async def set_videocall_booking(phone: str, when, event_id: str, link: str,
     try:
         await executor.execute(
             "UPDATE leads SET videocall_at = $2, videocall_event_id = $3, "
-            "calendar_link = $4, videocall_reminded_at = NULL, updated_at = now() "
+            "calendar_link = $4, videocall_reminded_at = NULL, updated_at = now(), "
+            "extra_data = COALESCE(extra_data, '{}'::jsonb) "
+            "  || jsonb_build_object('videocall_assignee', $5::text) "
             "WHERE phone = $1",
-            phone, when, event_id, link,
+            phone, when, event_id, link, assignee,
         )
     except Exception:
         logger.exception("set_videocall_booking failed: phone=%s", phone)

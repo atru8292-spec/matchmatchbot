@@ -51,6 +51,8 @@ def gpatch(monkeypatch):
     monkeypatch.setattr(db, "set_videocall_booking", AsyncMock())
     monkeypatch.setattr(gcal, "is_configured", lambda: True)
     monkeypatch.setattr(gcal, "is_slot_free", AsyncMock(return_value=True))
+    monkeypatch.setattr(gcal, "slot_taken_names", AsyncMock(return_value=set()))
+    monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={}))  # → дефолты (CDMX 7-14 para las 3)
     monkeypatch.setattr(gcal, "create_event", AsyncMock(return_value={
         "event_id": "ev123", "html_link": "https://calendar.google.com/event?eid=abc"}))
     monkeypatch.setattr(gcal, "patch_event", AsyncMock(return_value={
@@ -80,15 +82,60 @@ class TestPureHelpers:
     def test_validate_past(self):
         assert booking.validate(datetime(2026, 7, 7, 10, 0, tzinfo=CDMX), NOW) == booking.Outcome.PAST
 
-    def test_validate_out_of_hours(self):
-        assert booking.validate(datetime(2026, 7, 10, 3, 0, tzinfo=CDMX), NOW) == booking.Outcome.OUT_OF_HOURS
-        # 21:45 старт → конец 22:15 > 22:00 → вне часов
-        assert booking.validate(datetime(2026, 7, 10, 21, 45, tzinfo=CDMX), NOW) == booking.Outcome.OUT_OF_HOURS
+    def test_validate_ok_any_future_time(self):
+        # validate() ya NO checa horario (eso depende de las agendas, ver _covering_names)
+        assert booking.validate(datetime(2026, 7, 10, 10, 0, tzinfo=CDMX), NOW) is None
+        assert booking.validate(datetime(2026, 7, 10, 3, 0, tzinfo=CDMX), NOW) is None
 
-    def test_validate_ok(self):
-        assert booking.validate(datetime(2026, 7, 10, 17, 0, tzinfo=CDMX), NOW) is None
-        assert booking.validate(datetime(2026, 7, 10, 8, 0, tzinfo=CDMX), NOW) is None
-        assert booking.validate(datetime(2026, 7, 10, 21, 30, tzinfo=CDMX), NOW) is None
+    def test_in_window_default_cdmx(self):
+        assert booking._in_window(datetime(2026, 7, 10, 10, 0, tzinfo=CDMX),
+                                  "America/Mexico_City", "07:00", "14:00") is True
+        assert booking._in_window(datetime(2026, 7, 10, 3, 0, tzinfo=CDMX),
+                                  "America/Mexico_City", "07:00", "14:00") is False
+        # конец окна НЕ включается (13:45 старт → конец 14:15 > 14:00)
+        assert booking._in_window(datetime(2026, 7, 10, 14, 0, tzinfo=CDMX),
+                                  "America/Mexico_City", "07:00", "14:00") is False
+
+    def test_in_window_converts_other_timezone(self):
+        # Мила en Moscú 15:00-22:00 (MSK sin horario de verano) — CDMX 10:00 = Moscú 19:00 → dentro
+        assert booking._in_window(datetime(2026, 7, 10, 10, 0, tzinfo=CDMX),
+                                  "Europe/Moscow", "15:00", "22:00") is True
+        # CDMX 14:00 = Moscú 23:00 → fuera
+        assert booking._in_window(datetime(2026, 7, 10, 14, 0, tzinfo=CDMX),
+                                  "Europe/Moscow", "15:00", "22:00") is False
+
+    def test_in_window_bad_tz_or_hhmm_falls_back_safely(self):
+        # tz roto → trata como CDMX; hhmm roto → trata como 07:00 (no revienta)
+        assert booking._in_window(datetime(2026, 7, 10, 10, 0, tzinfo=CDMX),
+                                  "No/Existe", "07:00", "14:00") is True
+        assert booking._in_window(datetime(2026, 7, 10, 8, 0, tzinfo=CDMX),
+                                  "America/Mexico_City", "no-hora", "14:00") is True
+
+    def test_covering_names_filters_by_schedule(self):
+        schedules = {
+            "Аня": ("America/Mexico_City", "07:00", "14:00"),
+            "Мила": ("Europe/Moscow", "15:00", "22:00"),   # = CDMX 06:00-13:00
+            "Рита": ("America/Mexico_City", "07:00", "14:00"),
+        }
+        # CDMX 10:00 → las 3 cubren
+        assert set(booking._covering_names(datetime(2026, 7, 10, 10, 0, tzinfo=CDMX), schedules)) \
+            == {"Аня", "Мила", "Рита"}
+        # CDMX 20:00 → nadie cubre
+        assert booking._covering_names(datetime(2026, 7, 10, 20, 0, tzinfo=CDMX), schedules) == []
+
+    def test_hours_text_union_all_default(self):
+        schedules = {name: ("America/Mexico_City", "07:00", "14:00")
+                    for name in ("Аня", "Мила", "Рита")}
+        assert booking._hours_text(schedules, NOW) == "7am a 2pm"
+
+    def test_hours_text_union_across_timezones(self):
+        schedules = {
+            "Аня": ("America/Mexico_City", "07:00", "14:00"),
+            "Мила": ("Europe/Moscow", "15:00", "22:00"),   # = CDMX 06:00-13:00
+            "Рита": ("America/Mexico_City", "07:00", "14:00"),
+        }
+        # unión: min inicio (Мила, 6am CDMX) a max fin (Аня/Рита, 2pm)
+        assert booking._hours_text(schedules, NOW) == "6am a 2pm"
 
     def test_fmt_es_full(self):
         s = booking.fmt_es(datetime(2026, 7, 10, 17, 0, tzinfo=CDMX))
@@ -123,51 +170,72 @@ class TestResolveAndBook:
         gcal.is_slot_free.assert_not_called()
 
     async def test_out_of_hours_rejected(self, gpatch):
+        # con las agendas por defecto (CDMX 7-14 para las 3), 3am no lo cubre nadie
         r = await booking.resolve_and_book(_lead(), "2026-07-10T03:00:00", NOW)
         assert r.outcome == booking.Outcome.OUT_OF_HOURS
-        gcal.is_slot_free.assert_not_called()
+        assert r.hours_text == "7am a 2pm"
+        gcal.slot_taken_names.assert_not_called()  # ni siquiera tocamos el calendario
 
     async def test_not_configured_error(self, gpatch, monkeypatch):
         monkeypatch.setattr(gcal, "is_configured", lambda: False)
-        r = await booking.resolve_and_book(_lead(), "2026-07-10T17:00:00", NOW)
+        r = await booking.resolve_and_book(_lead(), "2026-07-10T10:00:00", NOW)
         assert r.outcome == booking.Outcome.ERROR
 
     async def test_booked_creates_event_and_saves(self, gpatch):
-        r = await booking.resolve_and_book(_lead(), "2026-07-10T17:00:00", NOW)
+        r = await booking.resolve_and_book(_lead(), "2026-07-10T10:00:00", NOW)
         assert r.outcome == booking.Outcome.BOOKED
         assert r.link and "calendar.google.com" in r.link  # ссылка на событие (для Ани)
+        assert r.assignee == "Аня"  # первый свободный слот → первая в приоритете
         gcal.create_event.assert_awaited_once()
+        assert gcal.create_event.call_args.kwargs["color_id"] == "3"
         db.set_videocall_booking.assert_awaited_once()
+        assert db.set_videocall_booking.call_args.kwargs["assignee"] == "Аня"
         # advisory-lock реально взят
         assert any("pg_advisory_xact_lock" in q for q, _ in gpatch["conn"].executed)
 
+    async def test_booked_assigns_second_slot_to_mila(self, gpatch):
+        # Аня ya tiene evento en ese slot exacto → le toca a la siguiente en prioridad
+        gcal.slot_taken_names.return_value = {"Аня"}
+        r = await booking.resolve_and_book(_lead(), "2026-07-10T10:00:00", NOW)
+        assert r.outcome == booking.Outcome.BOOKED
+        assert r.assignee == "Мила"
+        assert gcal.create_event.call_args.kwargs["color_id"] == "5"
+
     async def test_busy_suggests_alt_no_booking(self, gpatch):
-        # слот занят, следующий свободен
-        gcal.is_slot_free.side_effect = [False, True]
-        r = await booking.resolve_and_book(_lead(), "2026-07-10T17:00:00", NOW)
+        # las 3 (Аня/Мила/Рита) ya ocupadas en ese slot, la próxima hora libre
+        gcal.slot_taken_names.side_effect = [{"Аня", "Мила", "Рита"}, set()]
+        r = await booking.resolve_and_book(_lead(), "2026-07-10T10:00:00", NOW)
         assert r.outcome == booking.Outcome.BUSY
         assert r.alt_when is not None
+        assert r.hours_text == "7am a 2pm"
         gcal.create_event.assert_not_called()
+
+    async def test_busy_no_alt_when_rest_of_day_covered_by_others(self, gpatch):
+        # las 3 ocupadas TODA la ventana restante del día → sin alternativa (alt_when None)
+        gcal.slot_taken_names.return_value = {"Аня", "Мила", "Рита"}
+        r = await booking.resolve_and_book(_lead(), "2026-07-10T13:00:00", NOW)
+        assert r.outcome == booking.Outcome.BUSY
+        assert r.alt_when is None
 
     async def test_reschedule_patches_existing(self, gpatch):
         lead = _lead(videocall_event_id="ev123",
-                     videocall_at=datetime(2026, 7, 10, 17, 0, tzinfo=CDMX))
-        r = await booking.resolve_and_book(lead, "2026-07-11T18:00:00", NOW)
+                     videocall_at=datetime(2026, 7, 10, 10, 0, tzinfo=CDMX))
+        r = await booking.resolve_and_book(lead, "2026-07-11T11:00:00", NOW)
         assert r.outcome == booking.Outcome.RESCHEDULED
         gcal.patch_event.assert_awaited_once()
         gcal.create_event.assert_not_called()
 
     async def test_same_time_idempotent(self, gpatch):
-        when = datetime(2026, 7, 10, 17, 0, tzinfo=CDMX)
+        when = datetime(2026, 7, 10, 10, 0, tzinfo=CDMX)
         lead = _lead(videocall_event_id="ev123", videocall_at=when, calendar_link="https://meet/x")
-        r = await booking.resolve_and_book(lead, "2026-07-10T17:00:00", NOW)
+        r = await booking.resolve_and_book(lead, "2026-07-10T10:00:00", NOW)
         assert r.outcome == booking.Outcome.SAME
         gcal.create_event.assert_not_called()
         gcal.patch_event.assert_not_called()
 
     async def test_google_failure_returns_error(self, gpatch):
         gcal.create_event.side_effect = RuntimeError("Google 503")
-        r = await booking.resolve_and_book(_lead(), "2026-07-10T17:00:00", NOW)
+        r = await booking.resolve_and_book(_lead(), "2026-07-10T10:00:00", NOW)
         assert r.outcome == booking.Outcome.ERROR
 
 

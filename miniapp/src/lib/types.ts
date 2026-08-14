@@ -119,6 +119,20 @@ export interface EventSettings {
   eventGuestTab: string;
 }
 
+// ===== Расписание звонков (Аня/Мила/Рита) =====
+export interface AssigneeSchedule {
+  slug: string;   // "anya" | "mila" | "rita" — фиксирован, не редактируется
+  name: string;   // "Аня" | "Мила" | "Рита"
+  color: string;  // hex, тот же цвет что и в Google Calendar
+  tz: string;     // IANA, напр. "America/Mexico_City"
+  start: string;  // "HH:MM", по своему местному времени
+  end: string;    // "HH:MM"
+}
+
+export interface AssigneesResponse {
+  assignees: AssigneeSchedule[];
+}
+
 // ===== Медиа с ивентов (галерея фото/видео) =====
 export interface EventMediaItem {
   id: number;

@@ -490,8 +490,9 @@ async def _handle_videocall_booking(phone: str, lead: dict, combined: str,
     if res.outcome in (booking.Outcome.BOOKED, booking.Outcome.RESCHEDULED):
         await db.set_funnel_stage(phone, "videocall_set",
                                   meta={"videocall_at": res.when.isoformat()})
-        # Алерт Ане: бот забронировал звонок → она отправляет лиду ссылку вручную.
-        await escalation.notify_videocall_booked(lead, booking.fmt_es(res.when))
+        # Алерт назначенной (Аня/Мила/Рита): бот забронировал звонок → она отправляет
+        # лиду ссылку вручную.
+        await escalation.notify_videocall_booked(lead, booking.fmt_es(res.when), res.assignee)
     elif res.outcome == booking.Outcome.ERROR:
         # Фолбэк как у старого #53: назначает Аня вручную.
         try:
