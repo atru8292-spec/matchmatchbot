@@ -1,17 +1,19 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Clock, CloudOff } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { Select } from "@/components/ui/Select";
+import { Input } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { cn } from "@/lib/cn";
 import { fetchAssignees, saveAssignees } from "@/lib/api";
 import { listTimezones } from "@/lib/timezones";
 import type { AssigneeSchedule, AssigneesResponse } from "@/lib/types";
 
 const KEY = ["assignees"];
 const TIMEZONES = listTimezones();
+const MAX_RESULTS = 40;
 
 export function ScheduleScreen() {
   const { data, isPending, isError, refetch } = useQuery({ queryKey: KEY, queryFn: fetchAssignees });
@@ -20,9 +22,6 @@ export function ScheduleScreen() {
     <div className="flex h-full flex-col">
       <header className="sticky top-0 z-10 border-b border-line bg-paper/90 px-4 py-3 backdrop-blur">
         <h1 className="text-xl text-ink">Расписание звонков</h1>
-        <p className="mt-0.5 text-xs text-muted">
-          Кто из троих и когда доступна — бот ставит звонки по приоритету: Аня → Мила → Рита.
-        </p>
       </header>
       {isPending ? (
         <FormSkeleton />
@@ -86,15 +85,7 @@ function ScheduleForm({ initial }: { initial: AssigneesResponse }) {
               <span className="text-sm font-medium text-ink">{row.name}</span>
             </div>
             <Field label="Часовой пояс">
-              <Select
-                leading={<Clock size={18} />}
-                value={row.tz}
-                onChange={(e) => setRow(row.slug, { tz: e.target.value })}
-              >
-                {TIMEZONES.map((tz) => (
-                  <option key={tz} value={tz}>{tz}</option>
-                ))}
-              </Select>
+              <TimezoneCombobox value={row.tz} onChange={(tz) => setRow(row.slug, { tz })} />
             </Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="Доступна с">
@@ -114,7 +105,6 @@ function ScheduleForm({ initial }: { initial: AssigneesResponse }) {
                 />
               </Field>
             </div>
-            <p className="text-xs text-muted">Время указано по её местному часовому поясу.</p>
           </Card>
         ))}
       </div>
@@ -132,6 +122,65 @@ function ScheduleForm({ initial }: { initial: AssigneesResponse }) {
         </Button>
       </div>
     </>
+  );
+}
+
+function TimezoneCombobox({ value, onChange }: { value: string; onChange: (tz: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState(value);
+  const closeTimer = useRef<number | null>(null);
+
+  useEffect(() => setQuery(value), [value]);
+
+  const q = query.trim().toLowerCase();
+  const results = (q ? TIMEZONES.filter((tz) => tz.toLowerCase().includes(q)) : TIMEZONES)
+    .slice(0, MAX_RESULTS);
+
+  const pick = (tz: string) => {
+    onChange(tz);
+    setQuery(tz);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <Input
+        leading={<Clock size={18} />}
+        value={query}
+        onFocus={() => { setQuery(""); setOpen(true); }}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onBlur={() => {
+          // delay para que el click en una opción (onMouseDown preventDefault) alcance a disparar
+          closeTimer.current = window.setTimeout(() => { setOpen(false); setQuery(value); }, 150);
+        }}
+        placeholder="Поиск: город или регион…"
+      />
+      {open && (
+        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-control border border-line bg-surface shadow-soft">
+          {results.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-muted">Ничего не найдено</div>
+          ) : (
+            results.map((tz) => (
+              <button
+                key={tz}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  if (closeTimer.current) window.clearTimeout(closeTimer.current);
+                  pick(tz);
+                }}
+                className={cn(
+                  "block w-full truncate px-3 py-2 text-left text-sm hover:bg-paper",
+                  tz === value ? "font-medium text-primary" : "text-ink",
+                )}
+              >
+                {tz.replace(/_/g, " ")}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
