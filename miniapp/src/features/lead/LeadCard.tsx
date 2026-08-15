@@ -219,7 +219,7 @@ function LeadCardInner({ detail }: { detail: LeadDetail }) {
 
             <NoteComposer onAdd={(t) => noteM.mutate(t)} saving={noteM.isPending} />
 
-            <Timeline items={detail.timeline} />
+            <Timeline items={detail.timeline} photos={detail.photos} />
           </div>
 
           <ChatComposer

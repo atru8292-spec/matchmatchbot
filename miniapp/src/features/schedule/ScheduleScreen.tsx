@@ -89,20 +89,12 @@ function ScheduleForm({ initial }: { initial: AssigneesResponse }) {
             </Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="Доступна с">
-                <input
-                  type="time"
-                  value={row.start}
-                  onChange={(e) => setRow(row.slug, { start: e.target.value })}
-                  className="h-11 w-full rounded-control border border-line bg-surface px-3 text-[15px] text-ink outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
-                />
+                <Input type="time" value={row.start}
+                  onChange={(e) => setRow(row.slug, { start: e.target.value })} />
               </Field>
               <Field label="До" error={errors[row.slug]}>
-                <input
-                  type="time"
-                  value={row.end}
-                  onChange={(e) => setRow(row.slug, { end: e.target.value })}
-                  className="h-11 w-full rounded-control border border-line bg-surface px-3 text-[15px] text-ink outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
-                />
+                <Input type="time" value={row.end}
+                  onChange={(e) => setRow(row.slug, { end: e.target.value })} />
               </Field>
             </div>
           </Card>

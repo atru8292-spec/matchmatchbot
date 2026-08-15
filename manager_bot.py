@@ -158,6 +158,38 @@ async def _send_photo(chat_id, photo_url: str, caption: str | None = None,
         logger.exception("не смог отправить фото")
 
 
+async def _send_media_group(chat_id, photo_urls: list[str]) -> None:
+    """Показать несколько фото ОДНИМ альбомом (Telegram sendMediaGroup) — вместо N
+    отдельных сообщений подряд (было раньше, читалось как "одно фото + ещё фото,
+    ещё фото..."; прямая просьба владелицы — 2026-08-15).
+
+    Telegram-ограничение: у media group НЕТ inline-кнопок вообще (ни на одном элементе)
+    — поэтому текст карточки с кнопками теперь ВСЕГДА уходит отдельным сообщением
+    (см. _show_card), сюда фото приходят уже без подписи. Группа — 2-10 элементов;
+    больше 10 отправляем несколькими группами. Сбой — лог, не бросает.
+    """
+    token = settings.tg_manager_bot_token
+    if not token or not photo_urls:
+        return
+    for i in range(0, len(photo_urls), 10):
+        chunk = photo_urls[i:i + 10]
+        if len(chunk) == 1:  # sendMediaGroup требует 2-10 элементов
+            await _send_photo(chat_id, chunk[0])
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                media = [{"type": "photo", "media": u} for u in chunk]
+                r = await client.post(
+                    f"https://api.telegram.org/bot{token}/sendMediaGroup",
+                    json={"chat_id": str(chat_id), "media": media},
+                )
+                r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.error("sendMediaGroup вернул %s", e.response.status_code)
+        except Exception:
+            logger.exception("не смог отправить альбом фото")
+
+
 async def _edit_reply_markup(chat_id, message_id, reply_markup: dict) -> None:
     """Обновить кнопки на уже отправленном сообщении (editMessageReplyMarkup).
 
@@ -336,7 +368,15 @@ async def _cmd_leads(chat_id, args, frm) -> None:
 
 
 async def _show_card(chat_id, phone: str) -> None:
-    """Отправить карточку лида + его фото (если присылал). Общее для /lead и кнопки 'Карточка'."""
+    """Отправить карточку лида (текст+кнопки) + его фото ОДНИМ альбомом, если больше
+    одного (2026-08-15, было — N отдельных сообщений "ещё фото"). Общее для /lead и
+    кнопки 'Карточка'.
+
+    Текст всегда отдельным сообщением: у Telegram media group НЕТ inline-кнопок вообще
+    (ограничение API), поэтому карточку+кнопки больше не пытаемся приклеить подписью
+    к первому фото — так альбом остаётся настоящим альбомом (свайп по фото), а кнопки
+    управления никуда не деваются.
+    """
     lead = await db.get_lead_by_phone(phone)
     if not lead:
         await _reply(chat_id, f"Не нашла такого человека: {_digits(phone)}")
@@ -344,18 +384,13 @@ async def _show_card(chat_id, phone: str) -> None:
     history = await db.get_conversation_history(phone, 10)
     whitelisted = await db.is_whitelisted(phone)
     text, kb = format_lead_card(lead, history, whitelisted)
+    await _reply(chat_id, text, kb)
     photos = await db.get_lead_photos(phone)
     urls = [p.get("storage_url") for p in photos if p.get("storage_url")]
-    # Есть фото → карточка идёт ПОДПИСЬЮ к первому фото (кнопки там же), остальные — следом.
-    # Лимит подписи Telegram 1024 симв.: если карточка длиннее — шлём текстом, фото отдельно.
-    if urls and len(text) <= 1024:
-        await _send_photo(chat_id, urls[0], caption=text, reply_markup=kb)
-        for u in urls[1:]:
-            await _send_photo(chat_id, u, caption="📸 ещё фото")
-    else:
-        await _reply(chat_id, text, kb)
-        for u in urls:
-            await _send_photo(chat_id, u, caption="📸 Фото")
+    if len(urls) == 1:
+        await _send_photo(chat_id, urls[0])
+    elif urls:
+        await _send_media_group(chat_id, urls)
 
 
 async def _cmd_lead(chat_id, args, frm) -> None:

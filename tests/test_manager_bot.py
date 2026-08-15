@@ -321,23 +321,38 @@ class TestCallbacks:
         await mb.handle_update(_cb("mb:card:wa_1"))
         assert _patch_io["reply"].call_args.args[2]["inline_keyboard"]
 
-    async def test_card_with_photos_sends_them(self, _patch_io, monkeypatch):
-        """Есть фото → карточка ПОДПИСЬЮ к первому фото (текст+кнопки там), остальные следом."""
+    async def test_card_with_one_photo_sends_it_plain(self, _patch_io, monkeypatch):
+        """1 фото → текст+кнопки отдельным сообщением, фото — обычным sendPhoto без подписи."""
         monkeypatch.setattr(db, "get_lead_by_phone",
                             AsyncMock(return_value={"phone": "wa_1", "mode": "auto", "funnel_stage": "new"}))
         monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
         monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "get_lead_photos", AsyncMock(return_value=[
-            {"storage_url": "https://x/1.jpg"}, {"storage_url": "https://x/2.jpg"}]))
+            {"storage_url": "https://x/1.jpg"}]))
         photo_mock = AsyncMock(); monkeypatch.setattr(mb, "_send_photo", photo_mock)
         await mb.handle_update(_cb("mb:card:wa_1"))
-        assert photo_mock.await_count == 2
-        # первое фото — обложка карточки: несёт подпись (текст) и кнопки
-        first = photo_mock.call_args_list[0]
-        assert first.args[1] == "https://x/1.jpg"
-        assert first.kwargs.get("caption") and first.kwargs.get("reply_markup")
-        # карточка НЕ дублируется отдельным текстом
-        _patch_io["reply"].assert_not_awaited()
+        # карточка (текст+кнопки) — отдельным сообщением
+        assert _patch_io["reply"].call_args.args[2]["inline_keyboard"]
+        photo_mock.assert_awaited_once_with(_patch_io["reply"].call_args.args[0], "https://x/1.jpg")
+
+    async def test_card_with_multiple_photos_sends_album(self, _patch_io, monkeypatch):
+        """2+ фото → ОДИН альбом (sendMediaGroup), не N отдельных "ещё фото"-сообщений."""
+        monkeypatch.setattr(db, "get_lead_by_phone",
+                            AsyncMock(return_value={"phone": "wa_1", "mode": "auto", "funnel_stage": "new"}))
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_lead_photos", AsyncMock(return_value=[
+            {"storage_url": "https://x/1.jpg"}, {"storage_url": "https://x/2.jpg"},
+            {"storage_url": "https://x/3.jpg"}]))
+        album_mock = AsyncMock(); monkeypatch.setattr(mb, "_send_media_group", album_mock)
+        photo_mock = AsyncMock(); monkeypatch.setattr(mb, "_send_photo", photo_mock)
+        await mb.handle_update(_cb("mb:card:wa_1"))
+        # текст+кнопки — отдельным сообщением (карточка не пропала)
+        assert _patch_io["reply"].call_args.args[2]["inline_keyboard"]
+        # все 3 фото — одним вызовом альбома, поштучный _send_photo не звался
+        album_mock.assert_awaited_once_with(_patch_io["reply"].call_args.args[0],
+                                            ["https://x/1.jpg", "https://x/2.jpg", "https://x/3.jpg"])
+        photo_mock.assert_not_awaited()
 
     async def test_photo_ok_full_path(self, _patch_io, monkeypatch):
         """photo_ok = путь ok: set_auto + mark_photo_received + qualified + _run_ai (стадия сменилась)."""
