@@ -66,8 +66,20 @@ ANKETA_CORE_FIELDS = ("name", "email")
 
 
 def anketa_complete(lead: dict) -> bool:
-    """Все ключевые анкетные поля собраны."""
+    """Все ключевые анкетные поля собраны (name+email — lo mínimo antes de agendar)."""
     return all(lead.get(f) for f in ANKETA_CORE_FIELDS)
+
+
+def anketa_ready_to_save(lead: dict) -> bool:
+    """Listo para escribir la fila en el Sheet «Solicitudes» — no solo name+email
+
+    (eso pasa YA antes de agendar, demasiado pronto: country/city/desired_partner_age
+    todavía no existen), sino también que la videollamada YA se agendó (funnel_stage
+    'videocall_set') — así la fila tiene la mejor chance de llevar también esos datos,
+    que se piden justo al confirmarse la cita (ver anna_prompt_v5.md). NO se vuelve a
+    escribir después aunque lleguen más datos (dedup anketa_saved, ver actions.py) —
+    por eso importa escribir en el checkpoint más completo posible, no en el primero."""
+    return anketa_complete(lead) and lead.get("funnel_stage") == "videocall_set"
 
 
 def followup_scenario_for(lead: dict) -> int | None:

@@ -352,6 +352,23 @@ class TestMainBookingFlow:
         assert len(msgs) == 2
         assert "ciudad" in msgs[1].lower() and "originalmente" in msgs[1].lower()
 
+    async def test_booked_asks_when_only_one_of_city_country_known(self, monkeypatch):
+        """ИСПРАВЛЕНО (code-review 2026-08-15): antes era AND (solo preguntaba si
+        faltaban AMBAS) — si el lead ya había dado solo una, la otra nunca se pedía."""
+        import main, escalation, sender
+        when = datetime(2026, 7, 10, 17, 0, tzinfo=CDMX)
+        monkeypatch.setattr(booking, "resolve_and_book", AsyncMock(
+            return_value=booking.Result(booking.Outcome.BOOKED, when=when, link="L")))
+        lead_msg = AsyncMock(); monkeypatch.setattr(sender, "send", lead_msg)
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(escalation, "notify_videocall_booked", AsyncMock())
+
+        await main._handle_videocall_booking(
+            "wa_52155", {"phone": "wa_52155", "name": "Diego", "city": "CDMX"},  # falta country
+            "combined", "2026-07-10T17:00:00")
+
+        assert len(lead_msg.call_args.args[1]) == 2
+
     async def test_booked_skips_city_question_if_already_known(self, monkeypatch):
         """NO REPETIR: si ya tenemos ciudad/país (reagendado), no se vuelve a preguntar."""
         import main, escalation, sender
@@ -482,7 +499,7 @@ class TestAnketa:
                 "email": "d@x.com", "date_of_birth": "1988-05-12", "city": "CDMX",
                 "country": "México", "business_link": "linkedin.com/in/d",
                 "desired_partner_age": "25-35", "is_single": True, "profession": "arquitecto",
-                "interest": "agency"}
+                "interest": "agency", "funnel_stage": "videocall_set"}
         monkeypatch.setattr(actions.settings, "google_sheet_id", "sheet123")
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=lead))
         monkeypatch.setattr(db, "anketa_saved", AsyncMock(return_value=False))
@@ -505,10 +522,23 @@ class TestAnketa:
         assert await actions.save_anketa_if_complete("wa_1") is False
         append.assert_not_called()
 
+    async def test_skips_when_name_email_ready_but_not_booked_yet(self, monkeypatch):
+        """ИСПРАВЛЕНО (code-review 2026-08-15): name+email solos YA no bastan — si aún
+        no se agendó la videollamada, escribir ahora dejaría el Sheet incompleto PARA
+        SIEMPRE (dedup no permite reescribir después con city/country)."""
+        import actions
+        lead = {"phone": "wa_1", "name": "Diego", "email": "d@x.com",
+                "funnel_stage": "pitched"}  # aún no videocall_set
+        monkeypatch.setattr(actions.settings, "google_sheet_id", "s")
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=lead))
+        append = AsyncMock(); monkeypatch.setattr(actions.gcal, "append_anketa_row", append)
+        assert await actions.save_anketa_if_complete("wa_1") is False
+        append.assert_not_called()
+
     async def test_dedup_skips_if_already_saved(self, monkeypatch):
         import actions
-        lead = {"phone": "wa_1", "name": "D", "email": "d@x.com", "date_of_birth": "1988-05-12",
-                "country": "MX", "desired_partner_age": "25-35"}
+        lead = {"phone": "wa_1", "name": "D", "email": "d@x.com",
+                "funnel_stage": "videocall_set"}
         monkeypatch.setattr(actions.settings, "google_sheet_id", "s")
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=lead))
         monkeypatch.setattr(db, "anketa_saved", AsyncMock(return_value=True))  # уже писали
@@ -520,6 +550,13 @@ class TestAnketa:
         import funnel
         assert funnel.anketa_complete({"name": "Carlos", "email": "a"}) is True
         assert funnel.anketa_complete({"email": "a"}) is False  # falta name
+
+    def test_anketa_ready_to_save_requires_booked(self):
+        import funnel
+        base = {"name": "Carlos", "email": "a"}
+        assert funnel.anketa_ready_to_save({**base, "funnel_stage": "videocall_set"}) is True
+        assert funnel.anketa_ready_to_save({**base, "funnel_stage": "pitched"}) is False
+        assert funnel.anketa_ready_to_save({"email": "a", "funnel_stage": "videocall_set"}) is False
 
     def test_parse_dob(self):
         import main

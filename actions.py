@@ -116,7 +116,14 @@ async def confirm_payment(phone: str, target_stage: str, source: str = "manual")
 
 
 async def save_anketa_if_complete(phone: str) -> bool:
-    """Если анкета лида собрана и ещё не записана — добавить строку в Sheet «Solicitudes».
+    """Si la videollamada YA se agendó (no solo name+email) y aún no se guardó — añadir
+    fila al Sheet «Solicitudes».
+
+    ИСПРАВЛЕНО (2026-08-15, найдено code-review): antes usaba funnel.anketa_complete
+    (solo name+email) — con la anketa recortada eso se cumple MUCHO antes de agendar,
+    escribiendo la fila con city/country/desired_partner_age siempre vacíos para
+    SIEMPRE (dedup anketa_saved no permite reescribir). anketa_ready_to_save exige
+    además funnel_stage='videocall_set' — mejor checkpoint, más datos ya recolectados.
 
     Гибрид чат→Sheet: базовые колонки + Extra(JSON) под будущие поля. Дедуп: extra_data.
     anketa_saved (одна строка на лида). Не критично: сбой не роняет ответ (ловит вызывающий).
@@ -125,7 +132,7 @@ async def save_anketa_if_complete(phone: str) -> bool:
     if not settings.google_sheet_id:
         return False
     lead = await db.get_lead_by_phone(phone)
-    if not lead or not funnel.anketa_complete(lead):
+    if not lead or not funnel.anketa_ready_to_save(lead):
         return False
     if await db.anketa_saved(phone):
         return False
