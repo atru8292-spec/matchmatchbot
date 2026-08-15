@@ -484,7 +484,15 @@ async def _handle_videocall_booking(phone: str, lead: dict, combined: str,
     """
     now = datetime.now(booking.CDMX)
     res = await booking.resolve_and_book(lead, proposed_iso, now)
-    await sender.send(phone, [booking.message_for(res)])
+    reply = [booking.message_for(res)]
+    if res.outcome in (booking.Outcome.BOOKED, booking.Outcome.RESCHEDULED):
+        # Ciudad/país se movieron a DESPUÉS de agendar (2026-08-15, menos preguntas antes
+        # de la cita) — se preguntan aquí mismo, determinístico, apenas se confirma la hora.
+        # NO REPETIR: si ya las tenemos (reagendado), no se pregunta de nuevo.
+        if not lead.get("city") and not lead.get("country"):
+            reply.append("Y ya que estamos, para ir preparando todo antes de la llamada: "
+                         "¿en qué ciudad vives y de dónde eres originalmente? 🤍")
+    await sender.send(phone, reply)
     logger.info("booking [%s]: %s → %s", phone, proposed_iso, res.outcome.value)
 
     if res.outcome in (booking.Outcome.BOOKED, booking.Outcome.RESCHEDULED):

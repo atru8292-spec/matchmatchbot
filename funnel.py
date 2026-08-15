@@ -57,9 +57,12 @@ FOLLOWUP_FIRST_DELAY_HOURS: dict[str, int] = {
 FOLLOWUP_INTERVALS: tuple[int | None, ...] = (5, 10, None)
 MAX_FOLLOWUPS = len(FOLLOWUP_INTERVALS)
 
-# Поля, собираемые ТОЛЬКО в анкете-в-чате (не в обычной квалификации) — по ним понимаем,
-# начата/готова ли анкета, чтобы выбрать правильный догон.
-ANKETA_CORE_FIELDS = ("email", "date_of_birth", "country", "desired_partner_age")
+# Поля анкеты-перед-звонком (не путать с полной анкетой) — по ним понимаем, начата/готова
+# ли она, чтобы выбрать правильный догон. ИЗМЕНЕНО (2026-08-15, меньше вопросов до звонка):
+# раньше сюда входили date_of_birth/country/desired_partner_age — их перенесли на ПОСЛЕ
+# записи (см. anna_prompt_v5.md), они больше не блокируют переход к агендару, поэтому здесь
+# остались только name+email (единственное, что реально нужно ДО звонка).
+ANKETA_CORE_FIELDS = ("name", "email")
 
 
 def anketa_complete(lead: dict) -> bool:

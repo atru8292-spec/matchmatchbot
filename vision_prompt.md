@@ -49,15 +49,22 @@ Classify into exactly ONE verdict:
   genitals/nudity visible (regardless of pose or expression), ambiguous
   content, gender genuinely AMBIGUOUS/unclear (NOT the same as "retry" above —
   that's for when it's obviously a woman, no doubt about it; "manual" is only for
-  truly hard-to-tell cases), OR a possible health/hygiene/appearance issue that is
+  truly hard-to-tell cases), a possible health/hygiene/appearance issue that is
   NOT clearly severe enough to be obvious (you are not fully confident it clears the
-  "reject" bar above). This is NOT about being older or plain-looking by itself —
-  only when a real presentability concern exists but you are not certain how severe
-  it is. A human (Anna) will decide. When genuinely torn between two verdicts,
-  prefer "manual" over "reject" — but if you are confident, decide directly.
+  "reject" bar above), OR the photo shows plausible signs of being AI-generated or
+  synthetic (unnatural skin/texture, warped or asymmetric facial features, garbled
+  background details, inconsistent lighting/shadows, "too perfect"/uncanny look,
+  or other AI-generation artifacts) — you are not expected to be certain, just flag
+  it for a human to double-check when something feels visibly off in that way; do
+  NOT flag a photo for this reason just because it is high-quality, professionally
+  shot, or filtered — only real generation artifacts count. This is NOT about being
+  older or plain-looking by itself — only when a real presentability or authenticity
+  concern exists but you are not certain how severe it is. A human (Anna) will
+  decide. When genuinely torn between two verdicts, prefer "manual" over "reject"
+  — but if you are confident, decide directly.
 
 Respond STRICTLY as JSON, no markdown:
-{"verdict":"ok"|"retry"|"reject"|"manual","reason":"<краткое пояснение на русском: что видно и почему такой вердикт>"}
+{"verdict":"ok"|"retry"|"reject"|"manual","reason":"<краткое пояснение на русском: что видно и почему такой вердикт — если manual из-за подозрения на AI-генерацию, явно укажи это>"}
 ```
 
 ## Заметки по формулировке (почему так)
@@ -89,3 +96,10 @@ Respond STRICTLY as JSON, no markdown:
   (агентство знакомит мужчин с женщинами), поэтому «явно женщина» теперь retry (вежливо
   просим его собственное фото), а manual остаётся только для реально неоднозначных случаев
   (не могу разобрать пол по фото). retry не блокирует — это не наказание, просто не то фото.
+- ДОБАВЛЕНО (2026-08-15, прямая просьба владелицы): признаки AI-генерации/synthetic-фото —
+  тоже manual, не reject и не отдельный авто-блок. Vision-модель (gpt-4o-mini) не умеет
+  надёжно детектить дипфейки/AI-фото со 100% уверенностью — ложный reject на реальном
+  живом фото (просто хорошо снятом/отфильтрованном) заблокировал бы честного лида
+  навсегда, это хуже, чем пропустить один сомнительный кейс на ручную проверку Ани.
+  Явно запрещено флагать за одно только высокое качество/профессиональную съёмку —
+  только настоящие артефакты генерации (кожа, асимметрия, фон, освещение).

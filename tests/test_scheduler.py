@@ -76,10 +76,9 @@ class TestRunFollowups:
     async def test_stage_selects_by_anketa_state(self, monkeypatch):
         """Анкета начата → #32; анкета готова → #33; звонок назначен → пропуск."""
         started = {"phone": "wa_1", "funnel_stage": "pitched", "followup_sent_count": 0,
-                   "whatsapp_name": None, "name": None, "email": "a@b.com"}
+                   "whatsapp_name": None, "name": None, "email": "a@b.com"}  # falta name
         complete = {"phone": "wa_2", "funnel_stage": "pitched", "followup_sent_count": 0,
-                    "whatsapp_name": None, "name": None, "email": "a@b.com",
-                    "date_of_birth": "x", "country": "MX", "desired_partner_age": "25-35"}
+                    "whatsapp_name": None, "name": "Carlos", "email": "a@b.com"}
         booked = {"phone": "wa_3", "funnel_stage": "videocall_set", "followup_sent_count": 0,
                   "whatsapp_name": None, "name": None}
         picked = []

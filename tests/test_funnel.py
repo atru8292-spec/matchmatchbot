@@ -224,12 +224,13 @@ class TestFollowupScenarioFor:
         assert funnel.followup_scenario_for({"funnel_stage": "videocall_set"}) is None
 
     def test_anketa_complete_gets_33(self):
-        lead = {"funnel_stage": "pitched", "email": "a@b.com", "date_of_birth": "1990-01-01",
-                "country": "MX", "desired_partner_age": "25-35"}
+        """Anketa pre-cita = name+email (2026-08-15: dob/country/desired_partner_age se
+        movieron a DESPUÉS de agendar, ya no bloquean el paso a #33)."""
+        lead = {"funnel_stage": "pitched", "name": "Carlos", "email": "a@b.com"}
         assert funnel.followup_scenario_for(lead) == 33
 
     def test_anketa_started_gets_32(self):
-        lead = {"funnel_stage": "pitched", "email": "a@b.com"}
+        lead = {"funnel_stage": "pitched", "email": "a@b.com"}  # falta name
         assert funnel.followup_scenario_for(lead) == 32
 
     def test_qualified_no_anketa_gets_59(self):

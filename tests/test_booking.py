@@ -334,6 +334,40 @@ class TestMainBookingFlow:
         alert.assert_awaited_once()             # алерт Ане с датой/временем
         assert "10 de julio" in alert.call_args.args[1]
 
+    async def test_booked_asks_city_country_when_missing(self, monkeypatch):
+        """2026-08-15: menos preguntas ANTES de agendar — ciudad/país se piden DESPUÉS,
+        determinístico, en el mismo turno que la confirmación."""
+        import main, escalation, sender
+        when = datetime(2026, 7, 10, 17, 0, tzinfo=CDMX)
+        monkeypatch.setattr(booking, "resolve_and_book", AsyncMock(
+            return_value=booking.Result(booking.Outcome.BOOKED, when=when, link="L")))
+        lead_msg = AsyncMock(); monkeypatch.setattr(sender, "send", lead_msg)
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(escalation, "notify_videocall_booked", AsyncMock())
+
+        await main._handle_videocall_booking(
+            "wa_52155", {"phone": "wa_52155", "name": "Diego"}, "combined", "2026-07-10T17:00:00")
+
+        msgs = lead_msg.call_args.args[1]
+        assert len(msgs) == 2
+        assert "ciudad" in msgs[1].lower() and "originalmente" in msgs[1].lower()
+
+    async def test_booked_skips_city_question_if_already_known(self, monkeypatch):
+        """NO REPETIR: si ya tenemos ciudad/país (reagendado), no se vuelve a preguntar."""
+        import main, escalation, sender
+        when = datetime(2026, 7, 10, 17, 0, tzinfo=CDMX)
+        monkeypatch.setattr(booking, "resolve_and_book", AsyncMock(
+            return_value=booking.Result(booking.Outcome.RESCHEDULED, when=when, link="L")))
+        lead_msg = AsyncMock(); monkeypatch.setattr(sender, "send", lead_msg)
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(escalation, "notify_videocall_booked", AsyncMock())
+
+        await main._handle_videocall_booking(
+            "wa_52155", {"phone": "wa_52155", "name": "Diego", "city": "CDMX", "country": "México"},
+            "combined", "2026-07-11T17:00:00")
+
+        assert len(lead_msg.call_args.args[1]) == 1
+
     async def test_error_falls_back_to_escalation(self, monkeypatch):
         import main
         import escalation
@@ -484,9 +518,8 @@ class TestAnketa:
 
     def test_anketa_complete_helper(self):
         import funnel
-        assert funnel.anketa_complete({"email": "a", "date_of_birth": "b", "country": "c",
-                                       "desired_partner_age": "d"}) is True
-        assert funnel.anketa_complete({"email": "a"}) is False
+        assert funnel.anketa_complete({"name": "Carlos", "email": "a"}) is True
+        assert funnel.anketa_complete({"email": "a"}) is False  # falta name
 
     def test_parse_dob(self):
         import main
