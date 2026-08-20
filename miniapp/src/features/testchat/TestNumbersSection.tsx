@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FlaskConical, Trash2, RotateCcw, Plus } from "lucide-react";
+import { FlaskConical, Trash2, RotateCcw, Plus, Pencil, Check, X } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -19,6 +19,8 @@ export function TestNumbersSection() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{ kind: "reset" | "remove"; n: TestNumber } | null>(null);
+  const [editingPhone, setEditingPhone] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState("");
 
   const { data, isPending } = useQuery({ queryKey: KEY, queryFn: fetchTestNumbers });
   const numbers = data ?? [];
@@ -30,12 +32,23 @@ export function TestNumbersSection() {
     mutationFn: (phone: string) => testNumberActions.remove(phone),
     onSuccess: (res) => qc.setQueryData(KEY, res.numbers),
   });
+  // Переименование — тот же upsert, что и добавление (add_test_bypass_phone заменяет
+  // label существующего номера, не дублирует), так что отдельный эндпоинт не нужен.
+  const renameM = useMutation({
+    mutationFn: ({ phone, label }: { phone: string; label: string }) => testNumberActions.add(phone, label),
+    onSuccess: (res) => { qc.setQueryData(KEY, res.numbers); setEditingPhone(null); },
+  });
 
   const confirm = () => {
     if (!confirmAction) return;
     if (confirmAction.kind === "reset") resetM.mutate(confirmAction.n.phone);
     else removeM.mutate(confirmAction.n.phone);
     setConfirmAction(null);
+  };
+
+  const startEdit = (n: TestNumber) => { setEditingPhone(n.phone); setEditLabel(n.label); };
+  const saveEdit = () => {
+    if (editingPhone) renameM.mutate({ phone: editingPhone, label: editLabel.trim() });
   };
 
   return (
@@ -50,30 +63,79 @@ export function TestNumbersSection() {
 
       {!isPending && numbers.length > 0 && (
         <div className="divide-y divide-line rounded-control border border-line">
-          {numbers.map((n) => (
-            <div key={n.phone} className="flex items-center gap-2 px-3 py-2">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-ink">{n.label || "Без названия"}</div>
-                <div className="text-xs text-muted tabnums">{formatPhone(n.phone)}</div>
+          {numbers.map((n) => {
+            const editing = editingPhone === n.phone;
+            return (
+              <div key={n.phone} className="flex items-center gap-2 px-3 py-2">
+                {editing ? (
+                  <Input
+                    value={editLabel}
+                    onChange={(e) => setEditLabel(e.target.value)}
+                    placeholder="Имя"
+                    autoFocus
+                    className="h-9 flex-1"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEdit();
+                      if (e.key === "Escape") setEditingPhone(null);
+                    }}
+                  />
+                ) : (
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-ink">{n.label || "Без названия"}</div>
+                    <div className="text-xs text-muted tabnums">{formatPhone(n.phone)}</div>
+                  </div>
+                )}
+                {editing ? (
+                  <>
+                    <button
+                      onClick={saveEdit}
+                      disabled={renameM.isPending}
+                      aria-label="Сохранить имя"
+                      title="Сохранить"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-success-bg hover:text-success disabled:opacity-50"
+                    >
+                      <Check size={16} />
+                    </button>
+                    <button
+                      onClick={() => setEditingPhone(null)}
+                      aria-label="Отменить"
+                      title="Отменить"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-danger-bg hover:text-danger"
+                    >
+                      <X size={16} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => startEdit(n)}
+                      aria-label="Переименовать"
+                      title="Переименовать"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface hover:text-ink"
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      onClick={() => setConfirmAction({ kind: "reset", n })}
+                      aria-label="Сбросить историю"
+                      title="Сбросить историю"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-accent-bg hover:text-accent-ink"
+                    >
+                      <RotateCcw size={16} />
+                    </button>
+                    <button
+                      onClick={() => setConfirmAction({ kind: "remove", n })}
+                      aria-label="Убрать из тестовых"
+                      title="Убрать из тестовых"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-danger-bg hover:text-danger"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </>
+                )}
               </div>
-              <button
-                onClick={() => setConfirmAction({ kind: "reset", n })}
-                aria-label="Сбросить историю"
-                title="Сбросить историю"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-accent-bg hover:text-accent-ink"
-              >
-                <RotateCcw size={16} />
-              </button>
-              <button
-                onClick={() => setConfirmAction({ kind: "remove", n })}
-                aria-label="Убрать из тестовых"
-                title="Убрать из тестовых"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-danger-bg hover:text-danger"
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
