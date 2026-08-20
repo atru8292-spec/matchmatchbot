@@ -3,6 +3,7 @@ import { Send, RotateCcw, Image as ImageIcon, Bot, AlertCircle, ChevronRight } f
 import { cn } from "@/lib/cn";
 import { sendTestChat } from "@/lib/api";
 import type { TestChatProfile, TestChatResponse } from "@/lib/types";
+import { TestNumbersSection } from "./TestNumbersSection";
 
 // Отдельный экран-песочница: гоняем сообщения через реальный пайплайн бота
 // (POST /api/mini/test-chat), НИЧЕГО не пишется в БД. Память диалога (history +
@@ -113,6 +114,7 @@ export function TestChatScreen() {
 
       {/* Лента */}
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
+        <TestNumbersSection />
         {turns.length === 0 && (
           <div className="mt-10 text-center text-sm text-muted">
             Напиши первое сообщение от лица лида —<br />бот ответит по реальному сценарию.

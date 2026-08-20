@@ -103,8 +103,16 @@ async def _process_burst_impl(phone: str) -> None:
     except Exception:
         bot_paused = False
 
+    # bypass = ENV (silent_bypass_phones, требует деплоя) ∪ тестовые номера из мини-CRM
+    # (app_settings, правятся мгновенно без деплоя — см. db.get_test_bypass_phones).
+    try:
+        crm_bypass = {i["phone"] for i in await db.get_test_bypass_phones() if i.get("phone")}
+    except Exception:
+        crm_bypass = set()
+    bypass_phones = settings.silent_bypass_set | crm_bypass
+
     decision = filters.decide(lead, whitelisted, combined, phone,
-                              settings.silent_bypass_set, whitelist_no_alert=wl_no_alert,
+                              bypass_phones, whitelist_no_alert=wl_no_alert,
                               bot_paused=bot_paused)
 
     # 1) Дисквалификация/тишина текущего залпа приоритетнее фото: whitelist/silent

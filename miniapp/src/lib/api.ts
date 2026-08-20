@@ -10,7 +10,7 @@ import {
 import type {
   AssigneesResponse, DayOfPreview, DayOfRecipientsResponse, DayOfSendResult,
   EventMediaItem, EventSettings, LeadDetail, LeadsPage, LeadsQuery, Stats,
-  TestChatRequest, TestChatResponse, TimelineItem, WhitelistClient,
+  TestChatRequest, TestChatResponse, TestNumber, TimelineItem, WhitelistClient,
 } from "./types";
 
 const BASE = (import.meta as any).env?.VITE_API_BASE ?? "/api/mini";
@@ -148,6 +148,21 @@ export async function fetchClients(): Promise<WhitelistClient[]> {
 export const clientActions = {
   add: (phone: string, reason?: string) => post("/whitelist", { phone, reason }),
   remove: (phone: string) => del(`/whitelist/${enc(phone)}`),
+};
+
+// ===== Тестовые bypass-номера (вкладка «Тест») =====
+export async function fetchTestNumbers(): Promise<TestNumber[]> {
+  return (await apiFetch<{ numbers: TestNumber[] }>("/test-numbers")).numbers;
+}
+
+export const testNumberActions = {
+  add: (phone: string, label?: string) =>
+    apiSend<{ numbers: TestNumber[] }>("/test-numbers", "POST", { phone, label }),
+  remove: (phone: string) =>
+    apiSend<{ numbers: TestNumber[] }>(`/test-numbers/${enc(phone)}`, "DELETE"),
+  reset: (phone: string) =>
+    apiSend<{ ok: boolean; phone: string; hadHistory: boolean }>(
+      `/test-numbers/${enc(phone)}/reset`, "POST"),
 };
 
 // ===== Статистика =====

@@ -823,6 +823,61 @@ class TestClientsScreen:
         assert c.get("/api/mini/whitelist").status_code == 401
 
 
+class TestTestNumbers:
+    def test_list(self, client, monkeypatch):
+        monkeypatch.setattr(db, "get_test_bypass_phones",
+                            AsyncMock(return_value=[{"phone": "wa_1", "label": "Мила"}]))
+        r = client.get("/api/mini/test-numbers")
+        assert r.status_code == 200
+        assert r.json()["numbers"] == [{"phone": "wa_1", "label": "Мила"}]
+
+    def test_add(self, client, monkeypatch):
+        add = AsyncMock(return_value=[{"phone": "wa_79635708880", "label": "Мила"}])
+        log = AsyncMock()
+        monkeypatch.setattr(db, "add_test_bypass_phone", add)
+        monkeypatch.setattr(db, "log_manager_action", log)
+        r = client.post("/api/mini/test-numbers", json={"phone": "+7 963 570 8880", "label": "Мила"})
+        assert r.status_code == 200
+        assert r.json()["numbers"][0]["phone"] == "wa_79635708880"
+        add.assert_awaited_once_with("wa_79635708880", "Мила")
+        log.assert_awaited_once()
+
+    def test_add_bad_phone_422(self, client, monkeypatch):
+        monkeypatch.setattr(db, "add_test_bypass_phone", AsyncMock())
+        r = client.post("/api/mini/test-numbers", json={"phone": "нетцифр"})
+        assert r.status_code == 422
+
+    def test_remove(self, client, monkeypatch):
+        rm = AsyncMock(return_value=[])
+        monkeypatch.setattr(db, "remove_test_bypass_phone", rm)
+        monkeypatch.setattr(db, "log_manager_action", AsyncMock())
+        r = client.delete("/api/mini/test-numbers/wa_1")
+        assert r.status_code == 200 and r.json()["numbers"] == []
+        rm.assert_awaited_once_with("wa_1")
+
+    def test_reset(self, client, monkeypatch):
+        reset_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr(db, "reset_lead_history", reset_mock)
+        monkeypatch.setattr(db, "log_manager_action", AsyncMock())
+        r = client.post("/api/mini/test-numbers/wa_1/reset")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["ok"] is True and d["phone"] == "wa_1" and d["hadHistory"] is True
+        reset_mock.assert_awaited_once_with("wa_1")
+
+    def test_reset_no_history_still_ok(self, client, monkeypatch):
+        monkeypatch.setattr(db, "reset_lead_history", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "log_manager_action", AsyncMock())
+        r = client.post("/api/mini/test-numbers/wa_1/reset")
+        assert r.json()["hadHistory"] is False
+
+    def test_test_numbers_requires_auth(self, monkeypatch):
+        monkeypatch.setattr(db, "is_ready", lambda: True)
+        monkeypatch.setattr(mini_auth.settings, "mini_dev_mode", False)
+        c = TestClient(app)
+        assert c.get("/api/mini/test-numbers").status_code == 401
+
+
 class TestDayOf:
     """Напоминание дня ивента: предпросмотр + ручная отправка (mini_api day-of)."""
 

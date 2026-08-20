@@ -180,6 +180,12 @@ export interface LeadsQuery {
 }
 
 // ===== Тест переписки (/api/mini/test-chat) — песочница, не пишет в БД =====
+// ===== Тестовые bypass-номера (отвечает бот даже при глобальной паузе) =====
+export interface TestNumber {
+  phone: string;
+  label: string;
+}
+
 export interface TestChatProfile {
   isSingle: boolean | null;
   age: number | null;

@@ -1058,6 +1058,57 @@ async def list_whitelist(limit: int = 100) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ===== Тестовые bypass-номера (мини-CRM) — управление без деплоя/SSH =====
+# Дополняют settings.silent_bypass_set (ENV, требует рестарта) — этот список живёт в
+# app_settings (JSON), правится через /api/mini/test-numbers и подхватывается СРАЗУ,
+# без рестарта. Объединяются (union), не заменяют друг друга — см. main.py.
+_TEST_BYPASS_KEY = "test_bypass_phones"
+
+
+async def get_test_bypass_phones() -> list[dict]:
+    """[{"phone": "wa_...", "label": "Мила"}, ...]. Сбой/пусто → []."""
+    try:
+        raw = await get_setting(_TEST_BYPASS_KEY)
+        return json.loads(raw) if raw else []
+    except Exception:
+        logger.exception("get_test_bypass_phones failed")
+        return []
+
+
+async def add_test_bypass_phone(phone: str, label: str) -> list[dict]:
+    """Добавить/обновить тестовый номер (по телефону — апсерт). Вернуть новый список."""
+    key = _wa_phone(phone)
+    items = await get_test_bypass_phones()
+    items = [i for i in items if i.get("phone") != key]
+    items.append({"phone": key, "label": (label or "").strip()})
+    await set_setting(_TEST_BYPASS_KEY, json.dumps(items, ensure_ascii=False))
+    return items
+
+
+async def remove_test_bypass_phone(phone: str) -> list[dict]:
+    """Убрать тестовый номер из bypass-списка. Вернуть новый список."""
+    key = _wa_phone(phone)
+    items = [i for i in await get_test_bypass_phones() if i.get("phone") != key]
+    await set_setting(_TEST_BYPASS_KEY, json.dumps(items, ensure_ascii=False))
+    return items
+
+
+async def reset_lead_history(phone: str) -> bool:
+    """Снести лида и ВСЮ его историю (messages/lead_photos/funnel_events/lead_notes/…
+    — ON DELETE CASCADE на leads.phone) — «с чистого листа» для тестового номера.
+    Вернуть True если что-то реально удалили (был лид), False если его и не было
+    (уже чисто — не ошибка)."""
+    key = _wa_phone(phone)
+    try:
+        result = await _get_pool().execute("DELETE FROM leads WHERE phone = $1", key)
+    except Exception:
+        logger.exception("reset_lead_history failed: phone=%s", key)
+        raise
+    deleted = result != "DELETE 0"
+    logger.info("reset_lead_history: %s (deleted=%s)", key, deleted)
+    return deleted
+
+
 # ===== Менеджер-бот: takeover / release / список лидов (блок 11) =====
 
 async def set_manual(phone: str) -> bool:

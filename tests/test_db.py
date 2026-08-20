@@ -1197,6 +1197,71 @@ class TestRemoveFromWhitelist:
 
 
 # ---------------------------------------------------------------------------
+# Тестовые bypass-номера (мини-CRM, 2026-08-19)
+# ---------------------------------------------------------------------------
+
+class TestTestBypassPhones:
+    async def test_get_empty_when_no_setting(self, pool):
+        pool.fetchval.return_value = None
+        assert await db.get_test_bypass_phones() == []
+
+    async def test_get_parses_json(self, pool):
+        pool.fetchval.return_value = '[{"phone": "wa_1", "label": "Мила"}]'
+        assert await db.get_test_bypass_phones() == [{"phone": "wa_1", "label": "Мила"}]
+
+    async def test_get_db_error_returns_empty(self, pool):
+        """Сбой БД → [] (безопасный дефолт, не роняем main.py)."""
+        pool.fetchval.side_effect = RuntimeError("db down")
+        assert await db.get_test_bypass_phones() == []
+
+    async def test_add_normalizes_phone_and_upserts(self, pool):
+        pool.fetchval.return_value = None  # изначально пусто
+        items = await db.add_test_bypass_phone("+7 963 570-88-80", "Мила")
+        assert items == [{"phone": "wa_79635708880", "label": "Мила"}]
+        # записали именно этот JSON в app_settings
+        sql, *params = pool.execute.call_args.args
+        assert "test_bypass_phones" in params
+
+    async def test_add_replaces_existing_same_phone(self, pool):
+        """Повторное добавление того же номера — апсерт (обновляет label), не дублирует."""
+        pool.fetchval.return_value = '[{"phone": "wa_1", "label": "Старое имя"}]'
+        items = await db.add_test_bypass_phone("wa_1", "Новое имя")
+        assert items == [{"phone": "wa_1", "label": "Новое имя"}]
+
+    async def test_remove_filters_out_phone(self, pool):
+        pool.fetchval.return_value = ('[{"phone": "wa_1", "label": "A"}, '
+                                      '{"phone": "wa_2", "label": "B"}]')
+        items = await db.remove_test_bypass_phone("wa_1")
+        assert items == [{"phone": "wa_2", "label": "B"}]
+
+
+class TestResetLeadHistory:
+    async def test_deletes_from_leads_by_phone(self, pool):
+        pool.execute.return_value = "DELETE 1"
+        result = await db.reset_lead_history("wa_79635708880")
+        assert result is True
+        sql, *params = pool.execute.call_args.args
+        assert "DELETE FROM leads" in sql
+        assert params[0] == "wa_79635708880"
+
+    async def test_phone_normalized(self, pool):
+        pool.execute.return_value = "DELETE 1"
+        await db.reset_lead_history("+7 963 570-88-80")
+        params = pool.execute.call_args.args[1:]
+        assert params[0] == "wa_79635708880"
+
+    async def test_no_existing_lead_returns_false_not_error(self, pool):
+        """Номер и так уже 'чистый' (не было лида) — не ошибка, просто False."""
+        pool.execute.return_value = "DELETE 0"
+        assert await db.reset_lead_history("wa_1") is False
+
+    async def test_db_error_raises(self, pool):
+        pool.execute.side_effect = RuntimeError("db down")
+        with pytest.raises(RuntimeError):
+            await db.reset_lead_history("wa_1")
+
+
+# ---------------------------------------------------------------------------
 # set_manual / set_auto / list_active_leads / list_whitelist (блок 11)
 # ---------------------------------------------------------------------------
 

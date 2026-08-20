@@ -659,6 +659,69 @@ async def remove_client(phone: str, user: dict = Depends(require_admin)) -> dict
     return {"ok": True, "phone": p}
 
 
+# ===== Тестовые bypass-номера (/api/mini/test-numbers) =====
+# Номера, для которых бот отвечает даже при глобальной паузе (bot_paused=1) — для ручного
+# тестирования. Хранение — app_settings (db.get/add/remove_test_bypass_phone), подхватывается
+# main.py СРАЗУ, без рестарта (в отличие от ENV silent_bypass_phones).
+
+class TestNumberIn(BaseModel):
+    phone: str
+    label: Optional[str] = None
+
+
+def _serialize_test_numbers(items: list[dict]) -> dict:
+    return {"numbers": [{"phone": i.get("phone"), "label": i.get("label") or ""} for i in items]}
+
+
+@router.get("/test-numbers")
+async def list_test_numbers(_: dict = Depends(require_admin)) -> dict:
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    try:
+        items = await db.get_test_bypass_phones()
+    except Exception as e:
+        await _alert_500("list_test_numbers", e)
+    return _serialize_test_numbers(items)
+
+
+@router.post("/test-numbers")
+async def add_test_number(body: TestNumberIn, user: dict = Depends(require_admin)) -> dict:
+    try:
+        p = db._wa_phone(body.phone)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid phone")
+    try:
+        items = await db.add_test_bypass_phone(p, body.label or "")
+        await db.log_manager_action(p, "test_number_add", _actor(user), {"label": body.label})
+    except Exception as e:
+        await _alert_500("add_test_number", e)
+    return _serialize_test_numbers(items)
+
+
+@router.delete("/test-numbers/{phone}")
+async def remove_test_number(phone: str, user: dict = Depends(require_admin)) -> dict:
+    p = _norm_phone(phone)
+    try:
+        items = await db.remove_test_bypass_phone(p)
+        await db.log_manager_action(p, "test_number_remove", _actor(user))
+    except Exception as e:
+        await _alert_500("remove_test_number", e)
+    return _serialize_test_numbers(items)
+
+
+@router.post("/test-numbers/{phone}/reset")
+async def reset_test_number(phone: str, user: dict = Depends(require_admin)) -> dict:
+    """С чистого листа: снести лида и ВСЮ его историю (messages/фото/стадии/…) — но
+    НЕ убирать сам номер из bypass-списка (чтобы дальше тестировать тем же номером)."""
+    p = _norm_phone(phone)
+    try:
+        deleted = await db.reset_lead_history(p)
+        await db.log_manager_action(p, "test_number_reset", _actor(user), {"had_history": deleted})
+    except Exception as e:
+        await _alert_500("reset_test_number", e)
+    return {"ok": True, "phone": p, "hadHistory": deleted}
+
+
 # ===== Статистика (дашборд, /api/mini/stats) =====
 
 def _serialize_stats(funnel_rows: list, counts: dict, esc: list, esc_count: int) -> dict:
