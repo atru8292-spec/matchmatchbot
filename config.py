@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     # Бот «Ошибки» — technical-алерты разработке (рантайм-сбои).
     tg_alerts_bot_token: str = ""
     tg_alerts_chat_id: str = ""
+    # Отдельный бот-песочница для живого теста AI (scripts/telegram_test_bot.py) —
+    # не для лидов, не для алертов, только ручное тестирование сценариев.
+    tg_test_bot_token: str = ""
 
     # ===== Менеджер-бот (блок 11) =====
     # Секрет в пути вебхука Telegram (как у Wazzup): /webhook/telegram/<secret>.

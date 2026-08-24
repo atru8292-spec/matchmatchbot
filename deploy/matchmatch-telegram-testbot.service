@@ -1,0 +1,20 @@
+[Unit]
+Description=MatchMatch Anna — Telegram test bot (AI sandbox, @matchbottestbot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=matchmatch
+Group=matchmatch
+WorkingDirectory=/opt/matchmatch-bot
+EnvironmentFile=/opt/matchmatch-bot/.env
+ExecStart=/opt/matchmatch-bot/venv/bin/python -m scripts.telegram_test_bot
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
