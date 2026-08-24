@@ -475,6 +475,21 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
                             (top or {}).get("score", 0), ctx[0]["id"], ctx[0]["score"])
                 scenarios, top = ctx, ctx[0]
 
+    # Сценарии, применимые ТОЛЬКО к лиду, который уже был на конкретном ивенте
+    # (funnel_stage='event_attended', ставится при подтверждении оплаты — см. actions.py).
+    # Без этого гейта короткие сообщения вроде «hola evento» от совсем нового лида иногда
+    # матчили по RAG на #24 (там просто много слова «evento» в trigger_es) — а #24 это
+    # bot_then_anna, и лида форсили в эскалацию на Аню/Милу вообще без повода (регресс
+    # найден 2026-08-24 на живом тесте через мини-CRM).
+    _POST_EVENT_ONLY = {24, 25, 57}
+    if lead.get("funnel_stage") != "event_attended":
+        filtered = [s for s in scenarios if s.get("id") not in _POST_EVENT_ONLY]
+        if len(filtered) != len(scenarios):
+            logger.info("не event_attended → убрал post-event сценарии из кандидатов (был top=%s)",
+                        top.get("id") if top else None)
+            scenarios = filtered
+            top = scenarios[0] if scenarios else None
+
     # Холодному/неквалифицированному лиду (is_single != True) роутим по типу вопроса:
     #   • любой ценовой вопрос (cuánto sale / precio / caro …) → контекст-подсказка №2
     #     (мягкий крючок к квалификации). №2 ai_allowed=true, поэтому это не жёсткий гейт —
