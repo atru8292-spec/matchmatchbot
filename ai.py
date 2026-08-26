@@ -328,6 +328,18 @@ def _is_price_question(text: str) -> bool:
     return bool(_PRICE_RE.search(text or ""))
 
 
+# Кодовая фраза из рекламы (CTA в объявлении: «напиши novia rusa») — лид, который пишет
+# это, ОДНОЗНАЧНО имеет в виду ивент, RAG на короткие фразы ненадёжен (см. регрессы выше),
+# поэтому форсим сценарий №2 напрямую по id, не полагаясь на его score вообще
+# (найдено 2026-08-26, прямая инструкция владелицы).
+_AD_KEYWORD_RE = re.compile(r"novia\s+rusa", re.IGNORECASE)
+
+
+def _is_ad_keyword(text: str) -> bool:
+    """Кодовая фраза объявления ('novia rusa') → лид хочет ивент."""
+    return bool(_AD_KEYWORD_RE.search(text or ""))
+
+
 def _last_anna_text(history: list[dict]) -> str | None:
     """Последняя реплика бота (sender='anna') из истории — контекст для RAG-фолбэка."""
     for m in reversed(history or []):
@@ -463,6 +475,17 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         scenarios = []
 
     top = scenarios[0] if scenarios else None
+
+    # Кодовая фраза объявления ("novia rusa") — лид, который её пишет, ОДНОЗНАЧНО имеет
+    # в виду ивент. Форсим №2 (приветствие + крючок про ивент) напрямую по id, не
+    # полагаясь на RAG-score вообще — та же логика, что у форса №51 выше.
+    if _is_ad_keyword(user_text):
+        row = await db.get_scenario_row(2)
+        if row:
+            logger.info("кодовая фраза объявления ('novia rusa') → форс №2 (был top=%s)",
+                        top.get("id") if top else None)
+            row["score"] = 1.0
+            scenarios, top = [row], row
 
     # Контекст-фолбэк: если голого текста не хватило (нет уверенного матча, top < FALLBACK) —
     # перезапрос с последней репликой Anna из истории («вопрос бота + ответ лида»). Чинит
