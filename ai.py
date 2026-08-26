@@ -214,7 +214,13 @@ def _fixed_reply(scenario: dict) -> dict:
         # явного "no me interesa" (#17), где сами двигаем в nurture (см. коммент выше).
         "funnel_stage": "nurture" if scenario.get("id") in _NURTURE_FIXED_SCENARIOS else None,
         "action": action,
-        "extracted": {},
+        # Фикс-сценарии (ai_allowed=false) идут в обход OpenAI → extracted обычно {} (некому
+        # извлекать поля). Для #51/#52 это ломало интерес лида: "hola evento" матчил на
+        # детерминированный №52, interest НИКОГДА не сохранялся, и после квалификации+фото
+        # бот не знал, что лид изначально спрашивал про ивент — пичил дефолтный сервис без
+        # единого упоминания ивента (регресс найден 2026-08-26, живой тест). Раз дошли до
+        # этих сценариев — сам факт этого уже означает interest="event", фиксируем явно.
+        "extracted": {"interest": "event"} if scenario.get("id") in _EVENT_DETAIL_SCENARIOS else {},
         "needs_escalation": action in ("escalate", "silent"),
         "used_scenario_id": scenario.get("id"),
         # детали ивента (#51/#52) → прикладываем explainer-видео Ани (дедуп по типу в actions)
