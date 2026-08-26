@@ -487,6 +487,22 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
             row["score"] = 1.0
             scenarios, top = [row], row
 
+    # Фото только что одобрено, и лид изначально интересовался ивентом (interest='event',
+    # см. _fixed_reply/_EVENT_DETAIL_SCENARIOS) — форсим №51 (цена+детали+ссылка) напрямую,
+    # вместо того чтобы дать AI придумывать питч с нуля. Без этого AI свободно генерил новый
+    # "cómo funciona el evento" питч — путал скидку за друга, ЗАБЫВАЛ дать [event_link] и
+    # застревал на лишних уточняющих вопросах ("¿reservo tu lugar o solo te aviso la fecha?")
+    # вместо того чтобы просто дать ссылку (регресс найден 2026-08-26, живой тест).
+    photo_thanks_prefix = False
+    if user_text == "[фото одобрено]" and lead.get("interest") == "event":
+        row = await db.get_scenario_row(51)
+        if row:
+            logger.info("фото одобрено + interest=event → форс №51 (был top=%s)",
+                        top.get("id") if top else None)
+            row["score"] = 1.0
+            scenarios, top = [row], row
+            photo_thanks_prefix = True
+
     # Контекст-фолбэк: если голого текста не хватило (нет уверенного матча, top < FALLBACK) —
     # перезапрос с последней репликой Anna из истории («вопрос бота + ответ лида»). Чинит
     # короткие/контекстные ответы («sí soltero», «va», «ok») разом. Самодостаточные сообщения
@@ -584,6 +600,10 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
             logger.info("фикс-сценарий #%s (score=%.3f >= %.2f, block=%s), OpenAI не вызываю",
                         top["id"], top["score"], threshold, is_block)
             reply = _fixed_reply(top)
+            if photo_thanks_prefix and reply["messages"]:
+                # Мердж короткого "спасибо за фото" в первый баббл (не отдельным сообщением —
+                # см. правило "NUNCA mandes un mensaje suelto de gracias por tu foto").
+                reply["messages"][0] = "¡Gracias por tu foto! 😊 " + reply["messages"][0]
             await _maybe_announce_event_video(reply, top, lead)
             return reply
         logger.info("фикс-сценарий #%s score=%.3f < %.2f (block=%s, ambiguous=%s) → в AI",
