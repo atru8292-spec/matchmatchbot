@@ -527,20 +527,36 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
                         top.get("id"))
             top = alt
 
+    # Неоднозначность RAG: топ-1 и топ-2 слишком близко по score — значит эмбеддинг
+    # реально не уверен, какой сценарий подходит (частый случай для коротких/расплывчатых
+    # сообщений типа «Evento», где несколько разных по смыслу сценариев набирают почти
+    # одинаковый score просто из-за общего слова). В таком случае НЕ доверяем topу
+    # решительные действия (детерминированный фикс-ответ, форс-эскалацию ниже) — отдаём
+    # решение LLM с полным контекстом вместо того, чтобы патчить каждый похожий случай
+    # отдельно (см. регрессы #51 2026-08-21 и #24 2026-08-24 — оба ровно об этом).
+    AMBIGUITY_MARGIN = 0.05
+    ambiguous = (
+        len(scenarios) >= 2
+        and (scenarios[0].get("score", 0) - scenarios[1].get("score", 0)) < AMBIGUITY_MARGIN
+    )
+    if ambiguous:
+        logger.info("RAG неоднозначен: топ-2 в пределах %.2f (%s)", AMBIGUITY_MARGIN,
+                    [(s["id"], round(s.get("score", 0), 3)) for s in scenarios[:3]])
+
     # Ветка 1: фиксированный сценарий (ai_allowed=false) → template дословно, без OpenAI.
     # Порог зависит от необратимости: блокировка требует высокой уверенности (0.60),
     # обычный фикс-ответ — ниже (0.45). Ниже порога → уходим в AI.
     if top and not top.get("ai_allowed"):
         is_block = top.get("mode") == "bot_then_block" or top.get("blocks_lead")
         threshold = FIXED_BLOCK_SCORE if is_block else FIXED_SCORE
-        if top.get("score", 0) >= threshold:
+        if top.get("score", 0) >= threshold and not ambiguous:
             logger.info("фикс-сценарий #%s (score=%.3f >= %.2f, block=%s), OpenAI не вызываю",
                         top["id"], top["score"], threshold, is_block)
             reply = _fixed_reply(top)
             await _maybe_announce_event_video(reply, top, lead)
             return reply
-        logger.info("фикс-сценарий #%s score=%.3f < %.2f (block=%s) → в AI",
-                    top["id"], top["score"], threshold, is_block)
+        logger.info("фикс-сценарий #%s score=%.3f < %.2f (block=%s, ambiguous=%s) → в AI",
+                    top["id"], top["score"], threshold, is_block, ambiguous)
 
     # Ветка 2/3: AI генерит. При низком score сценарии не передаём (fallback в промпте).
     confident = [s for s in scenarios if s.get("score", 0) >= FALLBACK_SCORE]
@@ -565,8 +581,11 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     # used_scenario_id=None валиден (LLM не опёрся ни на один сценарий, промпт это разрешает) —
     # тогда откатываемся на top как перестраховку: если РЕАЛЬНО подходящий по теме сценарий
     # (top) требует хэндофф, лучше форсировать эскалацию даже без явного подтверждения LLM,
-    # чем рискнуть пропустить лида без единой проверки (см. комментарий выше).
-    used = next((s for s in confident if s.get("id") == result.get("used_scenario_id")), top)
+    # чем рискнуть пропустить лида без единой проверки (см. комментарий выше). НО если top сам
+    # неоднозначен (ambiguous) — не откатываемся на него: доверять шаткому RAG-топу решение
+    # об эскалации рискованнее, чем положиться на явный action от LLM.
+    llm_used = next((s for s in confident if s.get("id") == result.get("used_scenario_id")), None)
+    used = llm_used if llm_used is not None else (None if ambiguous else top)
     if used and used.get("mode") == "bot_then_anna" and used.get("score", 0) >= FALLBACK_SCORE:
         if result["action"] != "escalate":
             logger.info("bot_then_anna #%s → форсирую escalate (LLM вернул %s)",
