@@ -185,7 +185,7 @@ async def _handle_message(chat_id: int, text: str, tg_name: str) -> None:
         await _reset(phone)
         await _send(_client, chat_id,
                      "Привет! Пиши как обычному лиду в WhatsApp — отвечу по реальному "
-                     "сценарию бота (с задержкой ~90с, как в проде, если пишешь сериями). "
+                     "сценарию бота. Отвечаю с задержкой ~90 сек, как в проде. "
                      f'Кнопка "{RESET_LABEL}" внизу — начать с чистого листа в любой момент.')
         return
 
