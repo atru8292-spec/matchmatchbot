@@ -63,8 +63,26 @@ def _chat_id_from_phone(phone: str) -> int:
     return int(phone.removeprefix("tg_"))
 
 
+RESET_LABEL = "🔄 Начать заново"
+
+# Постоянная клавиатура внизу экрана (не нужно печатать /reset руками) — для Ани,
+# которая с командами не очень дружит. resize_keyboard — компактная, не на весь экран.
+_KEYBOARD = {
+    "keyboard": [[{"text": RESET_LABEL}]],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
+
+
 async def _send(client: httpx.AsyncClient, chat_id: int, text: str) -> None:
-    await client.post(f"{API}/sendMessage", json={"chat_id": chat_id, "text": text})
+    await client.post(f"{API}/sendMessage",
+                       json={"chat_id": chat_id, "text": text, "reply_markup": _KEYBOARD})
+
+
+async def _register_commands(client: httpx.AsyncClient) -> None:
+    """Команды в меню "/" Telegram — видны без объяснений, что вообще можно ввести."""
+    commands = [{"command": "reset", "description": "Начать заново (снести историю)"}]
+    await client.post(f"{API}/setMyCommands", json={"commands": commands})
 
 
 async def _reset(phone: str) -> None:
@@ -96,7 +114,8 @@ async def _maybe_send_event_video(client: httpx.AsyncClient, chat_id: int, phone
             logger.info("нет видео ивента в пуле — пропуск (chat_id=%s)", chat_id)
             return
         url = items[0]["storage_url"]
-        r = await client.post(f"{API}/sendVideo", json={"chat_id": chat_id, "video": url})
+        r = await client.post(f"{API}/sendVideo",
+                              json={"chat_id": chat_id, "video": url, "reply_markup": _KEYBOARD})
         r.raise_for_status()
         marker = db.media_marker("video", event_date) or "[video ивента отправлено]"
         await db.insert_message(phone, "outbound", "anna", marker)
@@ -162,12 +181,12 @@ _debouncer = Debouncer(_on_flush, delay=DEBOUNCE_DELAY, max_wait=DEBOUNCE_MAX_WA
 async def _handle_message(chat_id: int, text: str, tg_name: str) -> None:
     phone = _phone(chat_id)
 
-    if text.strip() in ("/start", "/reset"):
+    if text.strip() in ("/start", "/reset", RESET_LABEL):
         await _reset(phone)
         await _send(_client, chat_id,
                      "Привет! Пиши как обычному лиду в WhatsApp — отвечу по реальному "
                      "сценарию бота (с задержкой ~90с, как в проде, если пишешь сериями). "
-                     "/reset — начать с чистого листа.")
+                     f'Кнопка "{RESET_LABEL}" внизу — начать с чистого листа в любой момент.')
         return
 
     await _get_or_create_lead(phone, tg_name)
@@ -226,6 +245,7 @@ async def main() -> None:
     offset = 0
     async with httpx.AsyncClient(timeout=POLL_TIMEOUT + 10) as client:
         _client = client
+        await _register_commands(client)
         logger.info("тест-бот запущен (дебаунс %.0fs/%.0fs), жду сообщений...",
                     DEBOUNCE_DELAY, DEBOUNCE_MAX_WAIT)
         while True:
