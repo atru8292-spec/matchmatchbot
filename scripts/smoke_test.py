@@ -20,6 +20,7 @@ scenario_id вызван, какие поля обновлены), но НЕ в�
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 
 sys.path.insert(0, ".")
@@ -136,6 +137,60 @@ async def check_golden_path_no_repetition():
           " | ".join(r2["messages"]))
 
 
+async def check_duplicate_message_no_verbatim_repeat():
+    """Регресс 2026-08-26 (test real vía mini-CRM/Telegram): lead manda el MISMO mensaje
+    dos veces seguidas ('Evento') → el bot NO debe responder con el texto idéntico, ni
+    tampoco saludar como si hubiera pasado tiempo ('hola de nuevo') — conversation_history
+    no trae timestamps, no hay base para asumir que pasó tiempo."""
+    lead = {"funnel_stage": "new"}
+    hist = []
+    r1 = await ai.generate_reply(lead, hist, "Evento")
+    hist.append({"sender": "lead", "text": "Evento"})
+    for m in r1["messages"]:
+        hist.append({"sender": "anna", "text": m})
+    r2 = await ai.generate_reply(lead, hist, "Evento")
+    text1 = " ".join(r1["messages"]).strip().lower()
+    text2 = " ".join(r2["messages"]).strip().lower()
+    re_greet = any(p in text2 for p in ("de nuevo", "otra vez", "hola de nuevo"))
+    ok = text1 != text2 and not re_greet
+    check("Mensaje repetido ('Evento'×2) → NO responde idéntico ni re-saluda", ok,
+          f"1º: {text1!r} | 2º: {text2!r}")
+
+
+async def check_new_lead_event_word_not_escalated():
+    """Регресс 2026-08-24 (test real vía mini-CRM): lead NUEVO (no event_attended) manda
+    algo corto con 'evento' → RAG a veces matcheaba #24 (feedback POST-evento, bot_then_anna)
+    solo por la palabra en común, forzando escalate sin motivo. Gate por funnel_stage
+    debe evitarlo."""
+    lead = {"funnel_stage": "new"}
+    r = await ai.generate_reply(lead, [], "hola evento")
+    ok = r["action"] != "escalate" and not r["needs_escalation"]
+    check("Lead nuevo + 'hola evento' → NO escala (no es post-evento)", ok,
+          f"action={r['action']!r} used_scenario_id={r.get('used_scenario_id')}")
+
+
+_EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
+
+
+async def check_emoji_not_every_bubble():
+    """Regresión 2026-08-26 (feedback directo de la dueña, test real): emoji en CASI CADA
+    burbuja se ve mecánico/'como bot'. En un intercambio corto de 3 turnos, no todos los
+    bubbles deben llevar emoji (referencia del prompt: no más de 1 de cada 3-4)."""
+    lead = {"funnel_stage": "new"}
+    hist = []
+    all_bubbles = []
+    for text in ("Evento", "Si", "29 años, doctor"):
+        r = await ai.generate_reply(lead, hist, text)
+        all_bubbles.extend(r["messages"])
+        hist.append({"sender": "lead", "text": text})
+        for m in r["messages"]:
+            hist.append({"sender": "anna", "text": m})
+    with_emoji = sum(1 for b in all_bubbles if _EMOJI_RE.search(b))
+    ok = len(all_bubbles) == 0 or with_emoji / len(all_bubbles) <= 0.6
+    check("Emoji no en cada burbuja (intercambio de 3 turnos)", ok,
+          f"{with_emoji}/{len(all_bubbles)} bubbles con emoji — {all_bubbles}")
+
+
 async def main() -> None:
     await db.init_pool()
     ai._system_prompt_cache = None
@@ -158,6 +213,12 @@ async def main() -> None:
         await check_full_decline_sets_nurture()
         await asyncio.sleep(1)
         await check_golden_path_no_repetition()
+        await asyncio.sleep(1)
+        await check_duplicate_message_no_verbatim_repeat()
+        await asyncio.sleep(1)
+        await check_new_lead_event_word_not_escalated()
+        await asyncio.sleep(1)
+        await check_emoji_not_every_bubble()
     finally:
         await db.close_pool()
 
