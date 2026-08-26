@@ -49,8 +49,8 @@ FILE_API = f"https://api.telegram.org/file/bot{settings.tg_test_bot_token}"
 POLL_TIMEOUT = 30
 SOURCE = "telegram_test"
 PHOTO_MARKER = "[photo received]"
-DEBOUNCE_DELAY = 90.0
-DEBOUNCE_MAX_WAIT = 120.0
+DEBOUNCE_DELAY = 30.0  # короче, чем в проде (90с) — тест-бот, не тянуть с ответом
+DEBOUNCE_MAX_WAIT = 60.0
 
 _client: httpx.AsyncClient | None = None
 
