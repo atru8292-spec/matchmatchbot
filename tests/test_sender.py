@@ -501,7 +501,7 @@ class TestLinkPlaceholders:
         monkeypatch.setattr(sender.db, "get_settings", AsyncMock(return_value={
             "event_price_nonmember": "6,000", "event_price_old": "9,000"}))
         out = await sender._fill_event_vars("[event_price_nonmember] MXN[event_promo]")
-        assert out == "6,000 MXN (antes 9,000)"
+        assert out == "6,000 MXN ~9,000 MXN~"
 
     async def test_promo_hidden_when_old_price_empty(self, monkeypatch, db_pool):
         # акция кончилась → event_price_old пусто → «(antes …)» исчезает целиком

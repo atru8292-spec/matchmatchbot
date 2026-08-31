@@ -127,8 +127,11 @@ async def _fill_event_vars(text: str) -> str:
     из ISO в испанскую дату (_fmt_date_es).
     """
     present = [k for k in _EVENT_VAR_KEYS if f"[{k}]" in text]
-    # [event_promo] — условный: «(antes <старая цена>)», если задана event_price_old,
-    # иначе пустая строка (акция кончилась → Аня очистила поле → «было» исчезает само).
+    # [event_promo] — условный: зачёркнутая старая цена (WhatsApp/Telegram рендерят
+    # ~текст~ как strikethrough нативно, без разметки/parse_mode), если задана
+    # event_price_old, иначе пустая строка (акция кончилась → Аня очистила поле →
+    # старая цена исчезает сама). Без слова "antes" — просьба владелицы 2026-08-31:
+    # визуально зачёркнуто, а не текстом.
     promo = "[event_promo]" in text
     if not present and not promo:
         return text
@@ -141,7 +144,7 @@ async def _fill_event_vars(text: str) -> str:
         text = text.replace(f"[{k}]", val)
     if promo:
         old = (s.get("event_price_old") or "").strip()
-        text = text.replace("[event_promo]", f" (antes {old})" if old else "")
+        text = text.replace("[event_promo]", f" ~{old} MXN~" if old else "")
     return text
 
 
