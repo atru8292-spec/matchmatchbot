@@ -328,6 +328,22 @@ def _is_price_question(text: str) -> bool:
     return bool(_PRICE_RE.search(text or ""))
 
 
+# Явное упоминание СЕРВИСА (не ивента) в ТЕКУЩЕМ сообщении лида. Нужно, чтобы явный
+# вопрос про сервис не перебивался залипшим lead.interest="event" от более раннего
+# сообщения (регресс найден 2026-08-31: лид, который раньше спрашивал про ивент, потом
+# явно написал "el servicio de matchmaking cuanto cuesta" — а старый interest=event всё
+# равно форсил цену ивента, игнорируя явный текущий вопрос).
+_SERVICE_KEYWORD_RE = re.compile(
+    r"\bservicio\b|\bmatchmaking\b|\bpersonalizado\b|\bacompañamiento\b",
+    re.IGNORECASE,
+)
+
+
+def _explicitly_about_service(text: str) -> bool:
+    """Текущее сообщение явно про СЕРВИС (не про ивент) — приоритет над interest="event"."""
+    return bool(_SERVICE_KEYWORD_RE.search(text or ""))
+
+
 # Кодовая фраза из рекламы (CTA в объявлении: «напиши novia rusa») — лид, который пишет
 # это, ОДНОЗНАЧНО имеет в виду ивент, RAG на короткие фразы ненадёжен (см. регрессы выше),
 # поэтому форсим сценарий №2 напрямую по id, не полагаясь на его score вообще
@@ -550,7 +566,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     #   • детали ивента без денег (qué incluye / cuéntame …) и RAG=№51 → №52 (детали без цены).
     # Квалифицированный лид получает полный №51 (с ценой) как есть.
     if lead.get("is_single") is not True:
-        if _is_price_question(user_text) and (
+        if _is_price_question(user_text) and not _explicitly_about_service(user_text) and (
             "evento" in user_text.lower() or lead.get("interest") == "event"
         ):
             row = await db.get_scenario_row(51)
@@ -574,6 +590,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
                 scenarios, top = [row], row
     elif (
         top and top.get("id") != 51 and _is_price_question(user_text)
+        and not _explicitly_about_service(user_text)
         and ("evento" in user_text.lower() or lead.get("interest") == "event")
     ):
         # Лид уже квалифицирован и спрашивает про ЦЕНУ ИВЕНТА конкретно — частый случай:
