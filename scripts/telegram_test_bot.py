@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 
 import httpx
@@ -74,9 +75,19 @@ _KEYBOARD = {
 }
 
 
+def _to_telegram_html(text: str) -> str:
+    """~texto~ (strikethrough nativo de WhatsApp) → <s>texto</s> de Telegram, para que
+    el preview en el bot de pruebas se vea igual que en WhatsApp real (encontrado
+    2026-08-31: sin esto, Telegram muestra los ~ literales en vez de tachar)."""
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return re.sub(r"~([^~]+)~", r"<s>\1</s>", escaped)
+
+
 async def _send(client: httpx.AsyncClient, chat_id: int, text: str) -> None:
-    await client.post(f"{API}/sendMessage",
-                       json={"chat_id": chat_id, "text": text, "reply_markup": _KEYBOARD})
+    await client.post(f"{API}/sendMessage", json={
+        "chat_id": chat_id, "text": _to_telegram_html(text),
+        "parse_mode": "HTML", "reply_markup": _KEYBOARD,
+    })
 
 
 async def _register_commands(client: httpx.AsyncClient) -> None:
