@@ -527,18 +527,37 @@ class TestContextFallback:
 class TestColdLeadEventGuard:
     """Холодный лид + ценовой/детальный вопрос → крючок или детали без цены."""
 
-    async def test_cold_lead_price_question_routed_to_2(self):
-        """Холодный лид + ценовой вопрос (любой RAG) → №2 (крючок)."""
+    async def test_cold_lead_service_price_question_no_longer_forced(self):
+        """Холодный лид + ценовой вопрос про сервис (RAG=№16, ai_allowed=true) → форса
+        больше нет (убран вместе с cold-lead router) — идёт обычная AI-ветка. Защиту от
+        утечки $10k теперь обеспечивает _enforce_service_price_gate, не роутинг сюда."""
         lead = {"funnel_stage": "new"}  # is_single не задан → холодный
-        n16 = _make_scenario(id=16, ai_allowed=False, score=0.55)
-        n2_row = {"id": 2, "template_es": "Крючок", "mode": "bot_auto",
-                  "ai_allowed": True, "blocks_lead": False}
-        getrow = AsyncMock(return_value=n2_row)
+        n16 = _make_scenario(id=16, ai_allowed=True, score=0.55)
+        getrow = AsyncMock()
+        call_openai = AsyncMock(return_value=_VALID_AI_RESPONSE)
         with patch("ai.search_scenarios", AsyncMock(return_value=[n16])), \
              patch("ai.db.get_scenario_row", getrow), \
-             patch("ai._call_openai", AsyncMock(return_value=_VALID_AI_RESPONSE)):
+             patch("ai._call_openai", call_openai):
             await ai.generate_reply(lead, [], "cuánto sale entrar?")
-        getrow.assert_awaited_once_with(2)   # ценовой вопрос → крючок №2
+        getrow.assert_not_awaited()          # роутинг убран — никакого форса
+        call_openai.assert_awaited_once()
+
+    async def test_cold_lead_event_price_via_natural_rag_no_force_needed(self):
+        """Холодный лид спрашивает цену ИВЕНТА — раньше форсили №51 напрямую отдельным
+        роутером, теперь не нужно: RAG сам находит №51 с высоким score (буквально пример
+        в его trigger_es), обычный fixed-reply путь, без всякого форса."""
+        lead = {"funnel_stage": "new"}
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.70,
+                              template_es="Precio del evento.")
+        getrow = AsyncMock()
+        mock_openai = AsyncMock()
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
+             patch("ai.db.get_scenario_row", getrow), \
+             patch("ai._call_openai", mock_openai):
+            result = await ai.generate_reply(lead, [], "cuanto cuesta el evento")
+        getrow.assert_not_awaited()
+        mock_openai.assert_not_awaited()
+        assert result["used_scenario_id"] == 51
 
     async def test_cold_lead_51_details_routed_to_52(self):
         """Холодный лид + RAG=N51 + не ценовой вопрос → №52 (детали без цены)."""
@@ -563,6 +582,48 @@ class TestColdLeadEventGuard:
             result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
         getrow.assert_not_awaited()          # №51 остался (не роутили)
         assert result["used_scenario_id"] == 51
+
+
+class TestWarmLeadEventPriceAugment:
+    """Тёплый лид + смешанное сообщение (профиль + цена ивента), RAG-топ ненадёжен
+    (регрессы 2026-08-21/26) → №51 ДОБАВЛЯЕТСЯ в кандидаты (не форсится top)."""
+
+    async def test_augments_51_when_mismatched_top(self):
+        lead = _make_lead(is_single=True, interest=None)
+        wrong_top = _make_scenario(id=4, ai_allowed=True, score=0.55,
+                                    template_es="Y cuántos años tienes?")
+        n51_row = {"id": 51, "template_es": "Detalles+precio evento", "mode": "bot_auto",
+                   "ai_allowed": False, "blocks_lead": False}
+        getrow = AsyncMock(return_value=n51_row)
+        ai_response = {**_VALID_AI_RESPONSE, "used_scenario_id": 51}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[wrong_top])), \
+             patch("ai.db.get_scenario_row", getrow), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, [], "soy soltero, 35, cuanto cuesta el evento")
+        getrow.assert_awaited_once_with(51)   # №51 добавлен как кандидат
+        assert result["used_scenario_id"] == 51
+
+    async def test_does_not_augment_when_explicit_service_question(self):
+        """Явное "servicio" в тексте — приоритет над упоминанием evento/interest, №51
+        не добавляем (регресс 2026-08-31)."""
+        lead = _make_lead(is_single=True, interest="event")
+        wrong_top = _make_scenario(id=4, ai_allowed=True, score=0.55)
+        getrow = AsyncMock()
+        with patch("ai.search_scenarios", AsyncMock(return_value=[wrong_top])), \
+             patch("ai.db.get_scenario_row", getrow), \
+             patch("ai._call_openai", AsyncMock(return_value=_VALID_AI_RESPONSE)):
+            await ai.generate_reply(lead, [], "oye y el servicio de matchmaking cuanto cuesta")
+        getrow.assert_not_awaited()
+
+    async def test_does_not_duplicate_when_51_already_candidate(self):
+        lead = _make_lead(is_single=True, interest=None)
+        n51 = _make_scenario(id=51, ai_allowed=False, score=0.40)
+        getrow = AsyncMock()
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
+             patch("ai.db.get_scenario_row", getrow), \
+             patch("ai._call_openai", AsyncMock(return_value=_VALID_AI_RESPONSE)):
+            await ai.generate_reply(lead, [], "cuanto cuesta el evento")
+        getrow.assert_not_awaited()   # уже в scenarios — второй раз не добавляем
 
 
 class TestEventVideoAnnounce:
