@@ -1,14 +1,36 @@
 """AI-ядро бота Anna: RAG по сценариям + генерация ответа (OpenAI) с защитой от галлюцинаций.
 
-System prompt читается из anna_prompt_v2.md (не хардкодим).
-RAG: текст лида → эмбеддинг (text-embedding-3-small) → cosine по scenarios.embedding.
-Ветки:
-  - ai_allowed=false + уверенный матч → template_es ДОСЛОВНО, OpenAI НЕ вызывается
-    (блокировки/фикс-ответы: ноль галлюцинаций + экономия токенов).
-  - ai_allowed=true (или низкий score) → OpenAI генерит в тоне Anna по образцу.
+System prompt читается из anna_prompt_v5.md (не хардкодим).
+RAG: текст лида → эмбеддинг (text-embedding-3-small) → cosine по scenarios.embedding,
+top_k=5 кандидатов (generate_reply).
+
+Архитектура (рефакторинг 2026-09, ветка refactor/ai-routing-simplify): AI всегда решает
+с полным контекстом переписки, читая RAG-кандидатов как референс, а не приказ. Два типа
+кода вокруг него:
+  - Candidate-pool операции (до вызова OpenAI) — только ФИЛЬТРУЮТ или ДОПОЛНЯЮТ список
+    кандидатов, никогда не выбирают победителя за AI: post-event гейт (фильтр),
+    augment "novia rusa"/тёплый лид+цена ивента (добавляют кандидата, не заменяют top),
+    ambiguity-гейт (топ-1/топ-2 слишком близко → не доверяем детерминированным веткам).
+  - Guardrail'ы (после ответа AI) — проверяют небольшой набор жёстких инвариантов и
+    при нарушении ЗАМЕНЯЮТ весь ответ или довешивают недостающее ОТДЕЛЬНЫМ бабблом,
+    никогда не правят текст AI хирургически: _enforce_service_price_gate (холодному
+    нельзя цену $10k), _enforce_link_presence (детали ивента без ссылки на билет),
+    _tag_event_interest / _enforce_nurture_stage (funnel_stage/extracted, которые
+    нельзя доверить только промпту — model нарушала даже прямые текстовые запреты).
+  - _block_candidate_ok — тот же принцип уверенности, что у детерминированной блокировки
+    (FIXED_BLOCK_SCORE + не ambiguous), распространён на ЛЮБОЙ blocks_lead-кандидат
+    независимо от ai_allowed — не даёт AI повод блокировать лида по случайному RAG-матчу.
+
+Ветки диспетчеризации (score = 1 - cosine_distance):
+  - ai_allowed=false + уверенный матч (score >= FIXED_SCORE/FIXED_BLOCK_SCORE, не
+    ambiguous) → template_es ДОСЛОВНО, OpenAI НЕ вызывается (ноль галлюцинаций +
+    экономия токенов). Сейчас таким остался небольшой хвост сценариев — большинство
+    business-critical (цена/детали ивента, крючки, отказы) переведены на ai_allowed=true.
+  - иначе → OpenAI генерит в тоне Anna, видя confident-кандидатов (score >= FALLBACK_SCORE)
+    как референс.
   - score < FALLBACK_SCORE → в контекст не кладём сомнительный сценарий; промпт сам
     даёт вежливый fallback + видеозвонок без выдумок.
-Выход — строго JSON (формат в anna_prompt_v2.md).
+Выход — строго JSON (формат в anna_prompt_v5.md).
 Ошибка/таймаут OpenAI → не падаем: fallback-сообщение + escalate.
 """
 from __future__ import annotations
