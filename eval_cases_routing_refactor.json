@@ -1,0 +1,152 @@
+[
+  {
+    "id": "r1",
+    "cat": "novia-rusa-keyword",
+    "msg": "novia rusa",
+    "lead": {"funnel_stage": "new"},
+    "history": [],
+    "expect": "Крючок про ивент/агентство, не игнорирует кодовую фразу из рекламы"
+  },
+  {
+    "id": "r2",
+    "cat": "cold-lead-event-price",
+    "msg": "hola, cuanto cuesta el evento",
+    "lead": {"funnel_stage": "new"},
+    "history": [],
+    "expect": "Даёт реальную цену 6000 MXN (зачёркнутая 9000) СРАЗУ, без гейта квалификации"
+  },
+  {
+    "id": "r3",
+    "cat": "warm-lead-service-price-not-event",
+    "msg": "y cuanto cuesta el servicio",
+    "lead": {"funnel_stage": "qualified", "is_single": true, "age": 40, "profession": "empresario", "photo_received": true},
+    "history": [
+      {"sender": "lead", "text": "hola, cuanto cuesta"},
+      {"sender": "anna", "text": "Con mucho gusto te cuento sobre nuestro evento... eres soltero y edad?"},
+      {"sender": "lead", "text": "soy soltero, tengo 40"},
+      {"sender": "anna", "text": "Perfecto! A que te dedicas?"},
+      {"sender": "lead", "text": "empresario"},
+      {"sender": "anna", "text": "Mira, te explico: matchmaker personal, 15 mujeres en 6 meses. La inversion es desde $10,000 USD. Videollamada?"}
+    ],
+    "expect": "Даёт $10,000 (сервис), НЕ цену/детали ивента — лид явно переспросил именно сервис"
+  },
+  {
+    "id": "r4",
+    "cat": "stale-interest-event-explicit-service",
+    "msg": "oye y el servicio de matchmaking cuanto cuesta",
+    "lead": {"funnel_stage": "qualified", "is_single": true, "age": 35, "profession": "abogado", "photo_received": true, "interest": "event"},
+    "history": [
+      {"sender": "lead", "text": "hola evento"},
+      {"sender": "anna", "text": "Con gusto te cuento del evento... eres soltero y edad?"},
+      {"sender": "lead", "text": "si soltero 35 abogado"},
+      {"sender": "anna", "text": "Perfecto, foto porfa"}
+    ],
+    "expect": "Даёт $10,000 (сервис) несмотря на interest='event' от более раннего сообщения — явное текущее упоминание 'servicio' должно победить"
+  },
+  {
+    "id": "r5",
+    "cat": "photo-approved-event-interest",
+    "msg": "[фото одобрено]",
+    "lead": {"funnel_stage": "qualified", "is_single": true, "age": 33, "profession": "abogado", "photo_received": true, "interest": "event"},
+    "history": [
+      {"sender": "lead", "text": "hola, cuanto cuesta el evento"},
+      {"sender": "anna", "text": "El precio es de 6000 MXN... la ubicacion es Nusr-Et, St. Regis... link: https://www.rusaencdmx.com/09-09-2026"},
+      {"sender": "lead", "text": "soy soltero, tengo 33"},
+      {"sender": "anna", "text": "Perfecto, gracias! A que te dedicas?"},
+      {"sender": "lead", "text": "abogado"},
+      {"sender": "anna", "text": "Va, gracias! Me mandas una foto?"}
+    ],
+    "expect": "Пиcтч/цена ИВЕНТА (не сервиса), ссылка на билет ОБЯЗАТЕЛЬНО присутствует в ответе"
+  },
+  {
+    "id": "r6",
+    "cat": "new-lead-evento-word-not-post-event-escalation",
+    "msg": "hola evento",
+    "lead": {"funnel_stage": "new"},
+    "history": [],
+    "expect": "action=respond, needs_escalation=false — НЕ должно матчить #24 (post-event feedback), лид никогда не был на ивенте"
+  },
+  {
+    "id": "r7",
+    "cat": "repeated-message-no-verbatim-repeat",
+    "msg": "Evento",
+    "lead": {"funnel_stage": "new"},
+    "history": [
+      {"sender": "lead", "text": "Evento"},
+      {"sender": "anna", "text": "¡Hola! 🤍 Con gusto te cuento del evento... ¿eres soltero y qué edad tienes?"}
+    ],
+    "expect": "НЕ повторяет прошлый ответ дословно, НЕ здоровается заново ('hola de nuevo') — продолжает по-другому"
+  },
+  {
+    "id": "r8",
+    "cat": "age-vs-desired-partner-age-combined",
+    "msg": "1991\n25-35",
+    "lead": {"age": null, "funnel_stage": "pitched", "photo_received": true, "name": "Benito"},
+    "history": [
+      {"sender": "anna", "text": "Perfecto Benito! Solo me falta tu fecha de nacimiento, me la compartes?"}
+    ],
+    "expect": "extracted содержит И date_of_birth И desired_partner_age из одного сообщения, не путает их"
+  },
+  {
+    "id": "r9",
+    "cat": "widower-not-blocked",
+    "msg": "mi esposa murio hace 2 años, ya estoy listo para conocer a alguien",
+    "lead": {"funnel_stage": "new"},
+    "history": [],
+    "expect": "action=respond (НИКОГДА block) — viudo не то же самое что 'no soltero'"
+  },
+  {
+    "id": "r10",
+    "cat": "prisa-not-casual-block",
+    "msg": "quiero encontrar pareja rapido, no tengo tiempo que perder pero busco algo serio",
+    "lead": {"funnel_stage": "new"},
+    "history": [],
+    "expect": "action=respond — prisa por encontrar pareja seria NO es señal de casual/escort"
+  },
+  {
+    "id": "r11",
+    "cat": "bot-then-anna-not-top-rag",
+    "msg": "me encanto el evento, quiero platicar de mis opciones",
+    "lead": {"funnel_stage": "event_attended", "is_single": true, "age": 35},
+    "history": [],
+    "expect": "action=escalate incluso si el LLM eligio un escenario bot_then_anna que no era el top de RAG"
+  },
+  {
+    "id": "r12",
+    "cat": "low-income-nurture-stage",
+    "msg": "trabajo de mesero en un restaurante",
+    "lead": {"funnel_stage": "qualifying", "is_single": true, "age": 30},
+    "history": [
+      {"sender": "anna", "text": "Perfecto, y a que te dedicas?"}
+    ],
+    "expect": "funnel_stage='nurture', NO pide foto, NO da pitch del servicio — lista de espera"
+  },
+  {
+    "id": "r13",
+    "cat": "instagram-instead-of-photo",
+    "msg": "mejor te paso mi instagram @juanperez123",
+    "lead": {"funnel_stage": "photo_pending", "is_single": true, "age": 35, "profession": "abogado"},
+    "history": [
+      {"sender": "anna", "text": "Me mandas una foto tuya porfa?"}
+    ],
+    "expect": "NO sigue el proceso solo, needs_escalation=true — Anna revisa el Instagram en persona"
+  },
+  {
+    "id": "r14",
+    "cat": "false-photo-claim-not-confirmed",
+    "msg": "pero ya te envie mi foto hace rato",
+    "lead": {"funnel_stage": "photo_pending", "photo_received": false, "is_single": true, "age": 35},
+    "history": [
+      {"sender": "anna", "text": "Me mandas una foto tuya porfa?"}
+    ],
+    "expect": "NO confirma tener la foto ('ya la tengo') — photo_received sigue false, pide reenviar"
+  },
+  {
+    "id": "r15",
+    "cat": "event-interest-lost-via-scenario-2",
+    "msg": "hola, información de evento",
+    "lead": {"funnel_stage": "new"},
+    "history": [],
+    "expect": "extracted.interest='event' — regresión real 2026-09-01 (Telegram): primer mensaje matchea #2 (no 51/52), sin esto el interés se pierde y tras la foto el bot pitchea el servicio en vez del evento"
+  }
+]

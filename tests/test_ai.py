@@ -1189,6 +1189,19 @@ class TestTagEventInterest:
         mock_openai.assert_not_awaited()
         assert result["extracted"] == {"interest": "event"}
 
+    async def test_scenario_2_tags_interest(self, history):
+        """Регресс найден 2026-09-01 (живой тест в Telegram): "info del evento" матчит
+        №2 (натуральный RAG-топ, не 51/52) — interest должен сохраниться, иначе форс
+        "фото одобрено + interest=event" ниже не срабатывает и после фото уходит
+        дефолтный питч сервиса без единого упоминания ивента."""
+        lead = _make_lead(interest=None)
+        scenario = _make_scenario(id=2, ai_allowed=True, mode="bot_auto", score=0.80)
+        ai_response = {**_VALID_AI_RESPONSE, "used_scenario_id": 2}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "hola, información de evento")
+        assert result["extracted"]["interest"] == "event"
+
 
 class TestEnforceNurtureStage:
     """funnel_stage='nurture' для #10 (bajo ingreso) / #17 (no me interesa) — единая
