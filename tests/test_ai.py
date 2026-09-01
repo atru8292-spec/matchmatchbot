@@ -1218,6 +1218,15 @@ class TestEnforceNurtureStage:
         out = ai._enforce_nurture_stage(result, used)
         assert out["funnel_stage"] == "qualifying"
 
+    def test_noop_when_ambiguous(self):
+        """Найдено 2026-09-01 (smoke-test): "no me alcanza, mejor lo dejamos" после
+        защиты цены сервиса матчил #17 с ambiguous score — по бизнес-правилу должен
+        вести по лестнице сервис→ивент, не форсить nurture по шаткому RAG-топу."""
+        used = _make_scenario(id=17)
+        result = {"action": "respond", "funnel_stage": "pitched"}
+        out = ai._enforce_nurture_stage(result, used, ambiguous=True)
+        assert out["funnel_stage"] == "pitched"
+
     async def test_fixed_branch_sets_nurture(self, lead, history):
         """№10 через детерминированную ветку (ai_allowed=false) → nurture всё равно
         проставляется, хотя OpenAI не вызывался."""

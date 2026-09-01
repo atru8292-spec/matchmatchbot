@@ -268,7 +268,7 @@ def _tag_event_interest(result: dict, used: dict | None) -> dict:
     return result
 
 
-def _enforce_nurture_stage(result: dict, used: dict | None) -> dict:
+def _enforce_nurture_stage(result: dict, used: dict | None, ambiguous: bool = False) -> dict:
     """funnel_stage='nurture' для сценариев #10 (bajo ingreso) / #17 (no me interesa) —
     единая пост-генерационная точка для фикс- И AI-ветки. Промпт теперь тоже явно об
     этом просит (anna_prompt_v5.md), но полагаться только на промпт для business-
@@ -276,8 +276,14 @@ def _enforce_nurture_stage(result: dict, used: dict | None) -> dict:
     _enforce_service_price_gate — модель нарушала даже прямые текстовые запреты).
     Без nurture лид получил бы противоречащий автодогон "¿sigues soltero?" через
     24-48ч сразу после того как ему сказали "espera 6-12 meses" (регресс 2026-08-06).
+
+    ambiguous=True (топ-1/топ-2 RAG слишком близко) → НЕ форсим: найдено 2026-09-01
+    (smoke-test) — "no me alcanza, mejor lo dejamos" после защиты цены сервиса матчил
+    #17 с ambiguous score 0.43 (топ-2 в пределах 0.05), а по бизнес-правилу это должно
+    вести по лестнице сервис→ивент, не сразу в nurture/no-followup. Тот же принцип, что
+    у _block_candidate_ok — шаткому RAG-топу не доверяем необратимый побочный эффект.
     """
-    if not used or used.get("id") not in _NURTURE_SCENARIOS:
+    if not used or used.get("id") not in _NURTURE_SCENARIOS or ambiguous:
         return result
     if result.get("action") != "respond" or result.get("funnel_stage") == "nurture":
         return result
@@ -831,7 +837,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         if not result.get("used_scenario_id"):
             result["used_scenario_id"] = used["id"]
     result = _tag_event_interest(result, used)
-    result = _enforce_nurture_stage(result, used)
+    result = _enforce_nurture_stage(result, used, ambiguous)
     result = _enforce_link_presence(result, used)
     result = await _enforce_service_price_gate(result, lead)
     return result
