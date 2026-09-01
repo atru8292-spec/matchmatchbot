@@ -485,7 +485,10 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     """
     lead = lead or {}
     try:
-        scenarios = await search_scenarios(user_text)
+        # top_k=5 (было 3): чем больше кандидатов видит AI, тем меньше шанс, что единственный
+        # (возможно случайный) RAG-матч продавит решение — без этого модель почти всегда
+        # берёт единственный предложенный сценарий за неимением альтернатив.
+        scenarios = await search_scenarios(user_text, top_k=5)
     except Exception:
         logger.exception("RAG-поиск упал, иду в OpenAI без сценариев")
         scenarios = []
@@ -527,7 +530,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         last_bot = _last_anna_text(history)
         if last_bot:
             try:
-                ctx = await search_scenarios(f"{last_bot} {user_text}")
+                ctx = await search_scenarios(f"{last_bot} {user_text}", top_k=5)
             except Exception:
                 logger.exception("контекст-фолбэк RAG упал, оставляю bare")
                 ctx = []
@@ -650,7 +653,24 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
                     top["id"], top["score"], threshold, is_block, ambiguous)
 
     # Ветка 2/3: AI генерит. При низком score сценарии не передаём (fallback в промпте).
-    confident = [s for s in scenarios if s.get("score", 0) >= FALLBACK_SCORE]
+    # Блокирующие сценарии (bot_then_block/blocks_lead) требуют ту же высокую уверенность и
+    # отсутствие неоднозначности, что и в детерминированной ветке выше (FIXED_BLOCK_SCORE +
+    # ambiguous) — раньше это применялось только при ai_allowed=false. Для ai_allowed=true
+    # блокирующих сценариев такой защиты не было вообще: они просто попадали в 'confident'
+    # наравне со всеми, и AI мог блокировать реального лида по случайному RAG-совпадению
+    # (найдено 2026-09-01, baseline-кейс r8: "1991\n25-35" — дата рождения + желаемый возраст
+    # партнёрши в одном сообщении — ложно матчило №7 "tengo 25 años", лид 35 лет получал отказ
+    # по возрасту). Чистый фильтр кандидатов — ничего не форсим, просто не даём AI
+    # ненадёжный повод для необратимого действия.
+    def _block_candidate_ok(s: dict) -> bool:
+        if not (s.get("mode") == "bot_then_block" or s.get("blocks_lead")):
+            return True
+        return s.get("score", 0) >= FIXED_BLOCK_SCORE and not ambiguous
+
+    confident = [
+        s for s in scenarios
+        if s.get("score", 0) >= FALLBACK_SCORE and _block_candidate_ok(s)
+    ]
     context = _build_user_context(lead, history, user_text, confident)
     try:
         raw = await _call_openai(context)
