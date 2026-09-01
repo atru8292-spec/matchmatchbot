@@ -60,19 +60,25 @@ async def send_event_photos(phone: str, event_date: str | None = None) -> int:
     return await _send_event_media(phone, "image", EVENT_PHOTO_COUNT, event_date)
 
 
-async def send_event_video(phone: str, event_date: str | None = None) -> int:
-    """Прислать лиду 1 случайное ВИДЕО с ивента (если видео ещё не слали). Вернуть число."""
-    return await _send_event_media(phone, "video", EVENT_VIDEO_COUNT, event_date)
+async def send_event_video(phone: str, event_date: str | None = None,
+                           caption: str | None = None) -> int:
+    """Прислать лиду 1 случайное ВИДЕО с ивента (если видео ещё не слали). Вернуть число.
+
+    caption — необязательная подпись к видео (см. ai.py _maybe_announce_event_video)."""
+    return await _send_event_media(phone, "video", EVENT_VIDEO_COUNT, event_date, caption)
 
 
 async def _send_event_media(phone: str, media_type: str, count: int,
-                            event_date: str | None = None) -> int:
+                            event_date: str | None = None,
+                            caption: str | None = None) -> int:
     """Отправить медиа заданного типа с дедупом в рамках ивента (не повторяем тип лиду).
 
     event_date задаёт ивент (вар. B): на новый ивент шлём заново. Если не передан —
     берём активный event_date из настроек (одинаковый ключ у chat-reply и планировщика).
     Уже слали этот тип на этот ивент → 0. Нет медиа типа → 0. Отдельными сообщениями с
     антибан-паузой (внутри send_media). Сбой не роняет основной ответ (ловит вызывающий).
+    caption — подпись, ставится только на ПЕРВОЕ отправленное медиа (для видео count
+    всегда 1, так что без разницы; для фото-галереи не повторяем на каждой штуке).
     """
     if event_date is None:
         s = await db.get_settings(["event_date"])
@@ -86,9 +92,9 @@ async def _send_event_media(phone: str, media_type: str, count: int,
         logger.info("медиа ивента (%s) нет в пуле — нечего слать %s", media_type, phone)
         return 0
     sent = 0
-    for m in items:
+    for i, m in enumerate(items):
         if await sender.send_media(phone, m["storage_url"], m.get("media_type", media_type),
-                                   event_date):
+                                   event_date, caption if i == 0 else None):
             sent += 1
     logger.info("медиа ивента (%s): отправлено %d/%d %s", media_type, sent, len(items), phone)
     return sent

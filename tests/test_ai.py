@@ -636,7 +636,8 @@ class TestEventVideoAnnounce:
         )
 
     async def test_announce_added_when_not_sent_and_pool_nonempty(self):
-        """Видео не слали + в пуле есть активное видео → анонс в последнем баббле."""
+        """Видео не слали + в пуле есть активное видео → подпись выставлена (video_caption),
+        messages не трогаем — подпись идёт К видео, не отдельным бабблом."""
         lead = _make_lead(phone="wa_5215500000001")
         n51 = _make_scenario(id=51, ai_allowed=False, score=0.62, template_es=self._TMPL_51)
         p_settings, p_sent, p_pool = self._patches(already_sent=False, pool_video=[{"storage_url": "u"}])
@@ -646,13 +647,13 @@ class TestEventVideoAnnounce:
             result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
         assert result["used_scenario_id"] == 51
         assert result["send_event_video"] is True
-        assert result["messages"][-1].endswith(ai._EVENT_VIDEO_ANNOUNCE)  # анонс в конце
-        assert ai._EVENT_VIDEO_ANNOUNCE not in result["messages"][0]       # только последний баббл
-        assert len(result["messages"]) <= ai.MAX_MESSAGES                  # лимит не превышен
+        assert result["video_caption"] == ai._EVENT_VIDEO_ANNOUNCE
+        assert ai._EVENT_VIDEO_ANNOUNCE not in "\n".join(result["messages"])  # не в тексте
+        assert len(result["messages"]) <= ai.MAX_MESSAGES                     # лимит не превышен
         mock_openai.assert_not_awaited()
 
     async def test_no_announce_when_already_sent(self):
-        """Видео этому лиду на этот ивент уже слали → анонса нет, текст кончается на ссылке."""
+        """Видео этому лиду на этот ивент уже слали → подписи нет, текст кончается на ссылке."""
         lead = _make_lead(phone="wa_5215500000002")
         n51 = _make_scenario(id=51, ai_allowed=False, score=0.62, template_es=self._TMPL_51)
         p_settings, p_sent, p_pool = self._patches(already_sent=True, pool_video=[{"storage_url": "u"}])
@@ -660,12 +661,12 @@ class TestEventVideoAnnounce:
              patch("ai._call_openai", AsyncMock()), \
              p_settings, p_sent, p_pool:
             result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
-        assert ai._EVENT_VIDEO_ANNOUNCE not in "\n".join(result["messages"])
+        assert result.get("video_caption") is None
         assert result["messages"][-1] == "Aquí está el enlace: [event_link]"
         assert len(result["messages"]) <= ai.MAX_MESSAGES
 
     async def test_no_announce_when_pool_empty(self):
-        """Пул видео пуст (удалили/сняли is_active) → анонса нет ДАЖЕ если маркера ещё нет."""
+        """Пул видео пуст (удалили/сняли is_active) → подписи нет ДАЖЕ если маркера ещё нет."""
         lead = _make_lead(phone="wa_5215500000003")
         n51 = _make_scenario(id=51, ai_allowed=False, score=0.62, template_es=self._TMPL_51)
         p_settings, p_sent, p_pool = self._patches(already_sent=False, pool_video=[])
@@ -673,12 +674,12 @@ class TestEventVideoAnnounce:
              patch("ai._call_openai", AsyncMock()), \
              p_settings, p_sent, p_pool:
             result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
-        assert ai._EVENT_VIDEO_ANNOUNCE not in "\n".join(result["messages"])
+        assert result.get("video_caption") is None
         assert result["messages"][-1] == "Aquí está el enlace: [event_link]"
         assert len(result["messages"]) <= ai.MAX_MESSAGES
 
     async def test_announce_also_for_52(self):
-        """#52 (детали без цены) — та же ветка анонса при квалифицированном лиде."""
+        """#52 (детали без цены) — та же ветка подписи при квалифицированном лиде."""
         lead = _make_lead(phone="wa_5215500000004")
         tmpl52 = "Incluye ...\n\nEs único ...\n\nTodos van ...\n\nSi quieres, te paso el enlace."
         n52 = _make_scenario(id=52, ai_allowed=False, score=0.62, template_es=tmpl52)
@@ -687,7 +688,7 @@ class TestEventVideoAnnounce:
              patch("ai._call_openai", AsyncMock()), \
              p_settings, p_sent, p_pool:
             result = await ai.generate_reply(lead, [], "cuéntame del evento")
-        assert result["messages"][-1].endswith(ai._EVENT_VIDEO_ANNOUNCE)
+        assert result["video_caption"] == ai._EVENT_VIDEO_ANNOUNCE
         assert len(result["messages"]) <= ai.MAX_MESSAGES
 
     async def test_no_announce_when_block(self):
@@ -735,7 +736,7 @@ class TestEventVideoAnnounce:
              p_settings, p_sent, p_pool:
             result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
         assert result["send_event_video"] is True
-        assert result["messages"][-1].endswith(ai._EVENT_VIDEO_ANNOUNCE)
+        assert result["video_caption"] == ai._EVENT_VIDEO_ANNOUNCE
 
     async def test_ai_branch_no_video_when_already_sent(self):
         """AI-ветка + видео уже слали на этот ивент → дедуп всё равно срабатывает."""

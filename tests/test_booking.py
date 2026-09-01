@@ -466,6 +466,31 @@ class TestEventMediaActions:
         assert await actions.send_event_video("wa_1") == 0
         sm.assert_not_called()
 
+    async def test_video_caption_reaches_send_media(self, monkeypatch):
+        """caption (ai.py video_caption) доходит до sender.send_media как подпись к видео."""
+        import actions, sender
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
+        monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
+            {"storage_url": "https://s/v.mp4", "media_type": "video"}]))
+        sm = AsyncMock(return_value=True); monkeypatch.setattr(sender, "send_media", sm)
+        n = await actions.send_event_video("wa_1", caption="Aquí respondo dudas 🤍")
+        assert n == 1
+        assert sm.call_args.args[4] == "Aquí respondo dudas 🤍"
+
+    async def test_photo_gallery_caption_only_on_first(self, monkeypatch):
+        """Галерея из нескольких фото — caption (если бы был) только на первом, не дублируем."""
+        import actions, sender
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
+        monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
+            {"storage_url": "https://s/1.jpg", "media_type": "image"},
+            {"storage_url": "https://s/2.jpg", "media_type": "image"}]))
+        sm = AsyncMock(return_value=True); monkeypatch.setattr(sender, "send_media", sm)
+        await actions._send_event_media("wa_1", "image", 2, caption="solo en la primera")
+        assert sm.await_args_list[0].args[4] == "solo en la primera"
+        assert sm.await_args_list[1].args[4] is None
+
     def test_media_marker_dated_vs_legacy(self):
         """Вар. B: с датой — маркер привязан к ивенту; без даты — легаси-глобальный."""
         assert db.media_marker("image", "2026-08-15") == "[foto ивента отправлено 2026-08-15]"

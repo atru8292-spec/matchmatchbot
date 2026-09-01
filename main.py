@@ -458,7 +458,9 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
             logger.exception("send_event_photos упал [%s] (ответ лиду уже отправлен)", phone)
     if result.get("send_event_video"):
         try:
-            await actions.send_event_video(phone)
+            # video_caption (ai.py _maybe_announce_event_video) — подпись К видео
+            # (Wazzup text+contentUri в одном сообщении), не отдельный текстовый баббл.
+            await actions.send_event_video(phone, caption=result.get("video_caption"))
         except Exception:
             logger.exception("send_event_video упал [%s] (ответ лиду уже отправлен)", phone)
     # needs_escalation=True — ИСПРАВЛЕНО (2026-08-06): раньше эскалация проверялась

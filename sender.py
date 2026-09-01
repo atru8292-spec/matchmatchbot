@@ -177,17 +177,29 @@ async def _fill_link_placeholders(text: str, phone: str | None = None,
     return text
 
 
-async def _send_content_uri(phone: str, url: str, where: str, delay: float) -> bool:
+async def _send_content_uri(phone: str, url: str, where: str, delay: float,
+                            caption: str | None = None) -> bool:
     """Отправить медиа (contentUri) в WhatsApp через Wazzup. Не бросает → bool.
 
     Фото и видео шлются одним и тем же полем contentUri (Wazzup определяет тип по файлу).
     delay — антибан-пауза перед отправкой, вызывающий сам решает какая (обычная или
-    короткая для галереи, см. compute_media_delay).
+    короткая для галереи, см. compute_media_delay). caption — необязательная подпись
+    (поле text вместе с contentUri в ОДНОМ запросе на отправку — не то же самое, что
+    редактирование уже отправленного сообщения, где Wazzup не даёт менять и text, и
+    contentUri разом).
     """
     if not url:
         return False
     chat_id = phone.replace("wa_", "", 1)
     await asyncio.sleep(delay)
+    payload = {
+        "channelId": settings.wazzup_channel_id,
+        "chatType": "whatsapp",
+        "chatId": chat_id,
+        "contentUri": url,
+    }
+    if caption:
+        payload["text"] = caption
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(
@@ -196,12 +208,7 @@ async def _send_content_uri(phone: str, url: str, where: str, delay: float) -> b
                     "Authorization": f"Bearer {settings.wazzup_token}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "channelId": settings.wazzup_channel_id,
-                    "chatType": "whatsapp",
-                    "chatId": chat_id,
-                    "contentUri": url,
-                },
+                json=payload,
             )
             r.raise_for_status()
     except Exception as e:
@@ -224,13 +231,14 @@ async def send_image(phone: str, image_url: str) -> bool:
 
 
 async def send_media(phone: str, url: str, media_type: str = "image",
-                     event_date: str | None = None) -> bool:
+                     event_date: str | None = None, caption: str | None = None) -> bool:
     """Отправить медиа с ивента (фото/видео) лиду. Маркер в messages — дедуп по типу.
 
     event_date → дедуп в рамках конкретного ивента (вар. B): маркер с датой.
     Короткая пауза (compute_media_delay) — шлётся пачкой (галерея), см. actions.py
-    _send_event_media."""
-    ok = await _send_content_uri(phone, url, "send_media", compute_media_delay())
+    _send_event_media. caption — необязательная подпись к медиа (напр. анонс explainer-
+    видео "aquí respondo las dudas más frecuentes...", см. ai.py _maybe_announce_event_video)."""
+    ok = await _send_content_uri(phone, url, "send_media", compute_media_delay(), caption)
     if ok:
         marker = db.media_marker(media_type, event_date) or "[media ивента отправлено]"
         await db.save_outbound(phone, marker)

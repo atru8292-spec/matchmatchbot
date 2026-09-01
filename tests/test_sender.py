@@ -583,3 +583,26 @@ class TestSendMediaMarker:
         ok = await sender.send_media("wa_1", "https://s/1.jpg", "image", "2026-08-15")
         assert ok is False
         save.assert_not_called()
+
+
+class TestSendMediaCaption:
+    """caption — подпись к видео/фото в ОДНОМ запросе (text + contentUri), не отдельный
+    текстовый баббл. Например анонс explainer-видео (ai.py _maybe_announce_event_video)."""
+
+    async def test_caption_included_in_payload(self, monkeypatch, db_pool):
+        cls = _make_http_client_cls()
+        monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
+        monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
+        await sender.send_media("wa_1", "https://s/v.mp4", "video", caption="Aquí respondo dudas 🤍")
+        body = cls._post_mock.call_args.kwargs["json"]
+        assert body["contentUri"] == "https://s/v.mp4"
+        assert body["text"] == "Aquí respondo dudas 🤍"
+
+    async def test_no_caption_no_text_key(self, monkeypatch, db_pool):
+        """Без caption — как раньше, поле text вообще отсутствует."""
+        cls = _make_http_client_cls()
+        monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
+        monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
+        await sender.send_media("wa_1", "https://s/v.mp4", "video")
+        body = cls._post_mock.call_args.kwargs["json"]
+        assert "text" not in body

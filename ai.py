@@ -226,9 +226,10 @@ _EVENT_INTEREST_SCENARIOS = _EVENT_DETAIL_SCENARIOS | {2}
 # _tag_event_interest).
 _NURTURE_SCENARIOS = {10, 17}
 
-# Анонс explainer-видео (Аня лично отвечает на частые вопросы про ивент) — дописывается
-# в ПОСЛЕДНИЙ баббл #51/#52, только когда видео реально уйдёт (не слали + пул не пуст).
-# Так текст не обещает видео, которого не будет (см. _maybe_announce_event_video).
+# Анонс explainer-видео (Аня лично отвечает на частые вопросы про ивент) — идёт как
+# ПОДПИСЬ к самому видео (не отдельный текстовый баббл), только когда видео реально
+# уйдёт (не слали + пул не пуст). Так текст не обещает видео, которого не будет
+# (см. _maybe_announce_event_video).
 _EVENT_VIDEO_ANNOUNCE = (
     "Te dejo también un video donde te respondo las dudas más frecuentes "
     "y te explico los detalles del evento con calma 🤍"
@@ -631,41 +632,43 @@ async def _call_openai(user_context: str) -> dict:
 # ===== главная точка входа =====
 
 async def _maybe_announce_event_video(reply: dict, scenario: dict, lead: dict) -> None:
-    """Дописать анонс explainer-видео в последний баббл #51/#52 — ЕСЛИ видео реально уйдёт.
+    """Выставить reply["video_caption"] — подпись К ВИДЕО (не отдельный текстовый баббл) —
+    ЕСЛИ видео реально уйдёт. Раньше текст дописывался в последний баббл ответа; теперь
+    main.py передаёт video_caption в actions.send_event_video → sender.send_media, и
+    Wazzup шлёт его как caption вместе с самим видео (contentUri) в одном сообщении —
+    так подпись физически прикреплена к видео, а не висит отдельной строкой раньше него.
 
-    Не обещаем то, что не отправится. Анонс добавляем только когда выполнены ВСЕ условия:
+    Не обещаем то, что не отправится. Подпись выставляем только когда выполнены ВСЕ условия:
       • action != 'block' — при блоке main шлёт прощальное сообщение и делает return ДО
-        диспетча видео (main.py), т.е. видео не уйдёт → анонс в нём был бы ложью. Защищает
-        от случая, если #51/#52 когда-либо станет blocks_lead=True (правкой сценария в проде);
+        диспетча видео (main.py), т.е. видео не уйдёт → подпись без видео была бы странной.
+        Защищает от случая, если #51/#52 когда-либо станет blocks_lead=True (правкой в проде);
       • сценарий из _EVENT_DETAIL_SCENARIOS и send_event_video выставлен;
       • видео этому лиду на ЭТОТ ивент ещё НЕ слали (дедуп по дате, вар. B);
       • в пуле есть активное видео (иначе actions.send_event_video пришлёт 0).
     event_date берём из app_settings — тот же источник, что actions.send_event_video при
     реальной отправке (event_date=None → settings), поэтому проверка и отправка смотрят на
-    один и тот же дедуп-маркер. Любой сбой БД → анонс НЕ добавляем (лучше промолчать, чем
-    соврать). Мутирует reply["messages"] на месте; лимит бабблов не растёт (дописываем в
-    последний через '\\n\\n', render_bubbles по '\\n\\n' не режет).
+    один и тот же дедуп-маркер. Любой сбой БД → подпись НЕ выставляем (лучше без подписи,
+    чем соврать). Мутирует reply["video_caption"] на месте, messages не трогает.
     """
     if reply.get("action") == "block":
-        return  # видео при блоке не уйдёт (main возвращается раньше) — не анонсируем
+        return  # видео при блоке не уйдёт (main возвращается раньше) — подпись не нужна
     if not reply.get("send_event_video") or scenario.get("id") not in _EVENT_DETAIL_SCENARIOS:
         return
-    messages = reply.get("messages")
     phone = lead.get("phone")
-    if not messages or not phone:
+    if not reply.get("messages") or not phone:
         return
     try:
         s = await db.get_settings(["event_date"])
         event_date = s.get("event_date") or None
         if await db.event_media_sent(phone, "video", event_date):
-            return  # уже слали видео на этот ивент — анонс не нужен (текст кончается как есть)
+            return  # уже слали видео на этот ивент — подпись не нужна
         if not await db.random_event_media("video", 1):
-            return  # пул пуст / нет активного видео — не анонсируем то, что не придёт
+            return  # пул пуст / нет активного видео — не обещаем то, что не придёт
     except Exception:
-        logger.exception("анонс видео #%s: проверка упала — анонс не добавляю", scenario.get("id"))
+        logger.exception("подпись видео #%s: проверка упала — не выставляю", scenario.get("id"))
         return
-    messages[-1] = messages[-1] + "\n\n" + _EVENT_VIDEO_ANNOUNCE
-    logger.info("анонс explainer-видео дописан в #%s для %s", scenario.get("id"), phone)
+    reply["video_caption"] = _EVENT_VIDEO_ANNOUNCE
+    logger.info("подпись explainer-видео выставлена для #%s, %s", scenario.get("id"), phone)
 
 
 async def _enforce_event_video(result: dict, used: dict | None, lead: dict) -> dict:
