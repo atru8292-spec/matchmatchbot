@@ -50,6 +50,7 @@ class NormalizedMessage:
     external_message_id: str       # 'wa_' + messageId (для идемпотентности)
     received_at: str | None        # dateTime из Wazzup (ISO) или None
     media_info: dict | None        # {'content_uri', 'message_id'} для медиа, иначе None
+    caption: str | None = None     # подпись к фото (Wazzup msg['text'] для type=image), если есть
 
 
 def _only_digits(value) -> str:
@@ -90,8 +91,20 @@ def normalize_wazzup_message(msg: dict) -> NormalizedMessage | None:
             return None
         user_text = text
         media_info = None
+        caption = None
     else:
         user_text = _MEDIA_PLACEHOLDER[content_type]
+        # Подпись к фото (Wazzup кладёт её в то же поле 'text', что и обычный текст,
+        # но для медиа-сообщений мы его раньше игнорировали целиком — лид, подписавший
+        # фото анкетными данными, терял их без следа, найдено 2026-09-01 живым тестом).
+        # Плейсхолдер user_text НЕ трогаем (история/дедуп-логика на него полагаются) —
+        # подпись прокидывается отдельным полем, downstream (main.py) решает как её
+        # использовать (сейчас — только для photo, other медиа пока не просили).
+        caption = None
+        if content_type == "photo":
+            raw_caption = msg.get("text")
+            if isinstance(raw_caption, str) and raw_caption.strip():
+                caption = raw_caption.strip()
         content_uri = msg.get("contentUri")
         if not content_uri:
             # медиа без ссылки downstream (vision/voice) скачать не сможет — видно в логах
@@ -144,4 +157,5 @@ def normalize_wazzup_message(msg: dict) -> NormalizedMessage | None:
         external_message_id=external_message_id,
         received_at=date_time,
         media_info=media_info,
+        caption=caption,
     )

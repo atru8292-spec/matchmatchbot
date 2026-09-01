@@ -1359,6 +1359,44 @@ class TestEnforceServiceQualificationGate:
         out = ai._enforce_service_qualification_gate(result, "cuanto cuesta el servicio", lead)
         assert out["messages"] == ["Pitch..."]
 
+    def test_caption_before_marker_still_triggers_gate(self):
+        """user_text="{caption}\\n\\n[фото одобрено]" (main.py _process_photos) — гейт
+        срабатывает по "in", не по точному равенству (регресс 2026-09-01: подпись к
+        фото раньше терялась целиком, что и привело к этому изменению)."""
+        lead = {"is_single": True, "age": 35, "profession": None}
+        result = {"action": "respond", "messages": ["Pitch..."]}
+        out = ai._enforce_service_qualification_gate(
+            result, "trabajo de algo raro\n\n[фото одобрено]", lead)
+        assert out["messages"][1] == ai._QUALIFICATION_QUESTIONS["profession"]
+
+    async def test_event_force_fires_with_caption_prefix(self):
+        """Форс "фото одобрено + interest=event → №51" тоже проверяет "in", не точное
+        равенство — иначе подпись к фото сломала бы форс ивента так же, как ломала гейт
+        сервиса (регресс 2026-09-01)."""
+        lead = {"funnel_stage": "qualified", "is_single": True, "age": 33,
+                "profession": "abogado", "interest": "event"}
+        n51_row = {"id": 51, "template_es": "Precio del evento...", "mode": "bot_auto",
+                   "ai_allowed": True, "blocks_lead": False}
+        getrow = AsyncMock(return_value=n51_row)
+        ai_response = {**_VALID_AI_RESPONSE, "used_scenario_id": 51}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[])), \
+             patch("ai.db.get_scenario_row", getrow), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, [], "voy solito\n\n[фото одобрено]")
+        getrow.assert_awaited_once_with(51)
+        assert result["used_scenario_id"] == 51
+
+    def test_extracted_this_turn_counts_as_qualified(self):
+        """Если AI ЭТИМ ЖЕ сообщением извлёк недостающее поле (из подписи к фото) —
+        гейт не должен переспрашивать то, что только что пришло. lead (состояние ДО
+        сообщения) сливается с result['extracted'] (это сообщение) перед проверкой."""
+        lead = {"is_single": True, "age": 35, "profession": None}
+        result = {"action": "respond", "messages": ["Pitch completo del servicio..."],
+                  "extracted": {"profession": "abogado"}}
+        out = ai._enforce_service_qualification_gate(
+            result, "soy abogado\n\n[фото одобрено]", lead)
+        assert out["messages"] == ["Pitch completo del servicio..."]
+
     async def test_integration_via_generate_reply(self, history):
         """Интеграционно: неполная анкета + [фото одобрено] через generate_reply целиком,
         даже когда AI не репортит used_scenario_id (найдено 2026-09-01 — сама причина,

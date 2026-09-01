@@ -335,12 +335,19 @@ def _enforce_service_qualification_gate(result: dict, user_text: str, lead: dict
     фото, бот всё равно дал полный питч. Промпт-инструкция (гейт в FLUJO DE VENTA) сама
     по себе ненадёжна — тот же паттерн, что у _enforce_service_price_gate. Заменяет ВЕСЬ
     ответ на недостающий вопрос, не смешивает с питчем.
+
+    user_text — "in" (не точное равенство): подпись к фото ("soy soltero 35, abogado")
+    идёт ПЕРЕД маркером в одном user_text (main.py _process_photos, регресс 2026-09-01 —
+    подпись к фото раньше терялась целиком). Проверяем анкету по lead СЛИТОМУ с
+    result['extracted'] ЭТОГО ЖЕ сообщения — иначе гейт переспросил бы то, что лид
+    только что назвал в подписи и AI корректно извлёк прямо сейчас.
     """
-    if user_text != "[фото одобрено]" or lead.get("interest") == "event":
+    if "[фото одобрено]" not in user_text or lead.get("interest") == "event":
         return result
     if result.get("action") != "respond":
         return result
-    missing = _missing_qualification_field(lead)
+    merged_lead = {**lead, **(result.get("extracted") or {})}
+    missing = _missing_qualification_field(merged_lead)
     if not missing:
         return result
     logger.info("guardrail: фото одобрено, анкета неполная (%s) → переспрашиваю вместо питча",
@@ -720,8 +727,10 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     # полной квалификации (is_single/age/profession). Gate "нет анкеты — не идём дальше"
     # (anna_prompt_v5.md, secc. FLUJO DE VENTA) — только про сервис ($10k, paso 3), не про
     # ивент.
+    # "in", не точное равенство — подпись к фото может идти ПЕРЕД маркером в одном
+    # user_text (main.py _process_photos, регресс 2026-09-01: подпись к фото терялась).
     photo_thanks_prefix = False
-    if user_text == "[фото одобрено]" and lead.get("interest") == "event":
+    if "[фото одобрено]" in user_text and lead.get("interest") == "event":
         row = await db.get_scenario_row(51)
         if row:
             logger.info("фото одобрено + interest=event → форс №51 (был top=%s)",

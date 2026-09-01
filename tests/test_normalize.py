@@ -477,7 +477,8 @@ class TestInvariants:
         assert result.media_info is None
 
     def test_full_happy_path_image(self):
-        """Полный happy-path для image: media_info заполнен, user_text — placeholder."""
+        """Полный happy-path для image: media_info заполнен, user_text — placeholder,
+        caption=None когда подписи нет."""
         msg = {
             "messageId": "IMG001",
             "chatId": "521555111222",
@@ -497,6 +498,48 @@ class TestInvariants:
             "message_id": "IMG001",
         }
         assert result.channel == "whatsapp"
+        assert result.caption is None
+
+    def test_image_with_caption_captured_separately(self):
+        """Регресс найден 2026-09-01 (живой тест): подпись к фото ("soy soltero, 35")
+        раньше терялась целиком. user_text ОСТАЁТСЯ плейсхолдером (история/дедуп на
+        него полагаются) — подпись идёт отдельным полем caption."""
+        msg = {
+            "messageId": "IMG002",
+            "chatId": "521555111222",
+            "chatType": "whatsapp",
+            "status": "inbound",
+            "type": "image",
+            "text": "soy soltero, 35 años, abogado",
+            "contentUri": "https://cdn.example.com/img.jpg",
+            "dateTime": "2024-03-10T16:00:00Z",
+            "contact": {"name": "Ana Lopez", "phone": "521555111222"},
+        }
+        result = normalize_wazzup_message(msg)
+        assert result is not None
+        assert result.user_text == "[photo received]"
+        assert result.caption == "soy soltero, 35 años, abogado"
+
+    def test_image_with_blank_caption_stays_none(self):
+        msg = {
+            "messageId": "IMG003", "chatId": "521555111222", "chatType": "whatsapp",
+            "status": "inbound", "type": "image", "text": "   ",
+            "contentUri": "https://cdn.example.com/img.jpg",
+            "contact": {"name": "Ana Lopez", "phone": "521555111222"},
+        }
+        result = normalize_wazzup_message(msg)
+        assert result.caption is None
+
+    def test_non_photo_media_has_no_caption(self):
+        """Подпись сейчас читаем только для фото (video/voice/document не просили)."""
+        msg = {
+            "messageId": "VID001", "chatId": "521555111222", "chatType": "whatsapp",
+            "status": "inbound", "type": "video", "text": "mira esto",
+            "contentUri": "https://cdn.example.com/v.mp4",
+            "contact": {"name": "Ana Lopez", "phone": "521555111222"},
+        }
+        result = normalize_wazzup_message(msg)
+        assert result.caption is None
         assert result.user_name == "Ana Lopez"
 
 

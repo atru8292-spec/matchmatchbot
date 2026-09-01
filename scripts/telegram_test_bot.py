@@ -214,12 +214,18 @@ async def _download_telegram_photo(client: httpx.AsyncClient, file_id: str) -> b
     return r2.content
 
 
-async def _handle_photo(chat_id: int, photo_sizes: list[dict], tg_name: str) -> None:
+async def _handle_photo(chat_id: int, photo_sizes: list[dict], tg_name: str,
+                        caption: str | None = None) -> None:
     """Фото → реальный Vision (как в проде), без escalation/booking/block (песочница).
-    Вне дебаунса — отдельная немедленная ветка (как и в проде)."""
+    Вне дебаунса — отдельная немедленная ветка (как и в проде).
+
+    caption — подпись к фото (Telegram отдаёт её отдельным полем message.caption).
+    Раньше терялась целиком — лид, подписавший фото анкетными данными, получал
+    переспрос как будто ничего не написал (регресс найден 2026-09-01, живой тест)."""
     phone = _phone(chat_id)
     lead = await _get_or_create_lead(phone, tg_name)
-    await db.insert_message(phone, "inbound", "lead", PHOTO_MARKER)
+    await db.insert_message(phone, "inbound", "lead",
+                            f"{caption}\n\n{PHOTO_MARKER}" if caption else PHOTO_MARKER)
 
     largest = photo_sizes[-1]  # Telegram отдаёт по возрастанию размера
     try:
@@ -237,7 +243,8 @@ async def _handle_photo(chat_id: int, photo_sizes: list[dict], tg_name: str) -> 
         await db.upsert_lead(phone, photo_received=True, funnel_stage="qualified")
         history = await db.get_conversation_history(phone, limit=30)
         lead = await db.get_lead_by_phone(phone)
-        await _reply_via_ai(_client, chat_id, phone, lead, history, "[фото одобрено]")
+        user_text = f"{caption}\n\n[фото одобрено]" if caption else "[фото одобрено]"
+        await _reply_via_ai(_client, chat_id, phone, lead, history, user_text)
     elif verdict == "retry":
         await _send_scenario_text(_client, chat_id, phone, 11)  # "mándame otra foto..."
     elif verdict == "reject":
@@ -275,7 +282,7 @@ async def main() -> None:
                 text = msg.get("text")
                 photo = msg.get("photo")
                 if photo:
-                    await _handle_photo(chat_id, photo, tg_name)
+                    await _handle_photo(chat_id, photo, tg_name, msg.get("caption"))
                 elif text:
                     await _handle_message(chat_id, text, tg_name)
 

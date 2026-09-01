@@ -133,9 +133,20 @@ async def _process_burst_impl(phone: str) -> None:
             logger.warning("фото без content_uri [%s]", phone)
             await escalation.notify_error("photo", "нет content_uri в meta", phone)
             return
+        # Текст, сопровождающий фото в этом же залпе — ИСПРАВЛЕНО (2026-09-01, живой
+        # тест): подпись к фото ("soy soltero, 35 años" вместе с картинкой) раньше
+        # терялась без следа — combined (выше) её тоже не спасает, потому что фото-ветка
+        # уходит в return до использования combined. Берём caption из meta (photo) +
+        # реальный текст остальных сообщений пачки (не placeholder).
+        accompanying_text = "\n".join(
+            (m.get("meta") or {}).get("caption") or ""
+            if (m.get("meta") or {}).get("content_type") == "photo"
+            else (m.get("text") or "")
+            for m in msgs
+        ).strip()
         # Обёртка: сообщения уже processed — сбой фото-обработки не должен быть тихим.
         try:
-            await _process_photos(phone, lead, content_uris)
+            await _process_photos(phone, lead, content_uris, accompanying_text or None)
         except Exception as e:
             logger.exception("_process_photos упал [%s] — фото уже processed", phone)
             await escalation.notify_error("main._process_photo", repr(e), phone)
@@ -178,9 +189,15 @@ async def _transcribe_voices(phone: str, msgs: list[dict]) -> None:
 _VERDICT_PRIORITY = ("reject", "ok", "manual", "retry")
 
 
-async def _process_photos(phone: str, lead: dict, content_uris: list[str]) -> None:
+async def _process_photos(phone: str, lead: dict, content_uris: list[str],
+                          accompanying_text: str | None = None) -> None:
     """Фото-ветка: флуд → скачать+Vision КАЖДОЕ фото пачки → сохранить каждое →
     ОДНО итоговое действие по приоритету вердиктов.
+
+    accompanying_text — подпись к фото / текст, отправленный вместе с ним в этом же
+    залпе (напр. "soy soltero, 35 años"). При verdict=='ok' идёт ПЕРЕД маркером
+    "[фото одобрено]" в user_text для _run_ai — так AI реально видит и извлекает
+    анкетные данные, а не только синтетический маркер (регресс найден 2026-09-01).
 
     ИСПРАВЛЕНО (2026-08-12): раньше обрабатывалось только последнее фото пачки —
     если лид присылал 2-3 фото разом, остальные молча терялись без анализа/сохранения
@@ -234,7 +251,9 @@ async def _process_photos(phone: str, lead: dict, content_uris: list[str]) -> No
         # Хотя бы одно фото одобрено → лид квалифицирован, AI переходит к питчу.
         await db.mark_photo_received(phone, True)
         await db.set_funnel_stage(phone, "qualified", meta={"photo": "ok"})
-        await _run_ai(phone, lead, "[фото одобрено]")
+        user_text = (f"{accompanying_text}\n\n[фото одобрено]" if accompanying_text
+                     else "[фото одобрено]")
+        await _run_ai(phone, lead, user_text)
     elif verdict == "retry":
         # ИСПРАВЛЕНО (2026-08-10, реальный баг на живых тестах — Аня/Мила репортили
         # "опять просит фото"): было #5 — это НЕ ретрай, а generic "mándame tu foto"
@@ -706,6 +725,8 @@ async def _handle_incoming(msg) -> None:
         meta = {"content_type": nm.content_type}
         if nm.media_info and nm.media_info.get("content_uri"):
             meta["content_uri"] = nm.media_info["content_uri"]
+        if nm.caption:
+            meta["caption"] = nm.caption
 
         inserted = await db.insert_message(
             nm.phone,

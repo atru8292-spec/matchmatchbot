@@ -1386,6 +1386,28 @@ class TestProcessPhoto:
         mocks["block_lead"].assert_not_awaited()
         mocks["notify_block"].assert_not_awaited()
 
+    async def test_verdict_ok_with_accompanying_text_prepends_to_marker(self, monkeypatch):
+        """Регресс найден 2026-09-01 (живой тест): подпись к фото ("soy soltero, 35")
+        раньше терялась целиком — user_text уходил в AI как голый маркер, лид считался
+        как будто ничего не написал. Теперь подпись идёт ПЕРЕД маркером в одном user_text."""
+        mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "ok", "reason": ""})
+
+        await main._process_photos(self.PHONE, self.LEAD, [self.CONTENT_URI],
+                                   "soy soltero, 35 años, abogado")
+
+        mocks["_run_ai"].assert_awaited_once()
+        run_ai_call = mocks["_run_ai"].call_args
+        assert run_ai_call.args[2] == "soy soltero, 35 años, abogado\n\n[фото одобрено]"
+
+    async def test_verdict_ok_without_accompanying_text_unchanged(self, monkeypatch):
+        """Без сопровождающего текста (по умолчанию None) — маркер как раньше, без изменений."""
+        mocks = self._mock_all(monkeypatch, analyze_return={"verdict": "ok", "reason": ""})
+
+        await main._process_photos(self.PHONE, self.LEAD, [self.CONTENT_URI])
+
+        run_ai_call = mocks["_run_ai"].call_args
+        assert run_ai_call.args[2] == "[фото одобрено]"
+
     # --- 2. verdict=retry ---
 
     async def test_verdict_retry_sends_scenario_11(self, monkeypatch):
@@ -1605,8 +1627,42 @@ class TestProcessBurstPhotoRouting:
 
         await main._process_burst(self.PHONE)
 
-        photo_mock.assert_awaited_once_with(self.PHONE, self.LEAD, [self.CONTENT_URI])
+        photo_mock.assert_awaited_once_with(self.PHONE, self.LEAD, [self.CONTENT_URI], None)
         apply_mock.assert_not_awaited()
+
+    async def test_photo_with_caption_passes_accompanying_text(self, monkeypatch):
+        """Регресс найден 2026-09-01 (живой тест): подпись к фото ("soy soltero, 35")
+        лежит в meta.caption (см. normalize.py) — залп должен вытащить её и передать
+        в _process_photos, а не потерять."""
+        msgs = [
+            {"id": "uuid-photo-cap", "text": "[photo received]",
+             "meta": {"content_type": "photo", "content_uri": self.CONTENT_URI,
+                      "caption": "soy soltero, 35 años"}},
+        ]
+        photo_mock, _, _ = self._mock_burst_deps(
+            monkeypatch, msgs=msgs, decision_action="needs_ai"
+        )
+        await main._process_burst(self.PHONE)
+        photo_mock.assert_awaited_once_with(
+            self.PHONE, self.LEAD, [self.CONTENT_URI], "soy soltero, 35 años"
+        )
+
+    async def test_text_and_photo_same_burst_combines_accompanying_text(self, monkeypatch):
+        """Лид пишет текст И шлёт фото почти одновременно (два сообщения одного залпа,
+        не подпись к фото) — текст тоже должен дойти как accompanying_text."""
+        msgs = [
+            {"id": "uuid-text", "text": "trabajo de abogado",
+             "meta": {"content_type": "text"}},
+            {"id": "uuid-photo", "text": "[photo received]",
+             "meta": {"content_type": "photo", "content_uri": self.CONTENT_URI}},
+        ]
+        photo_mock, _, _ = self._mock_burst_deps(
+            monkeypatch, msgs=msgs, decision_action="needs_ai"
+        )
+        await main._process_burst(self.PHONE)
+        photo_mock.assert_awaited_once_with(
+            self.PHONE, self.LEAD, [self.CONTENT_URI], "trabajo de abogado"
+        )
 
     # --- 9. photo msg + decision silent → _apply_decision called, _process_photos NOT ---
 
@@ -1686,7 +1742,7 @@ class TestProcessBurstPhotoRouting:
             monkeypatch, msgs=msgs, decision_action="needs_ai"
         )
         await main._process_burst(self.PHONE)
-        photo_mock.assert_awaited_once_with(self.PHONE, self.LEAD, ["https://early.jpg"])
+        photo_mock.assert_awaited_once_with(self.PHONE, self.LEAD, ["https://early.jpg"], None)
         notify_err_mock.assert_not_awaited()
 
     async def test_multiple_photos_all_passed_through(self, monkeypatch):
@@ -1705,7 +1761,7 @@ class TestProcessBurstPhotoRouting:
         )
         await main._process_burst(self.PHONE)
         photo_mock.assert_awaited_once_with(
-            self.PHONE, self.LEAD, ["https://one.jpg", "https://two.jpg", "https://three.jpg"]
+            self.PHONE, self.LEAD, ["https://one.jpg", "https://two.jpg", "https://three.jpg"], None
         )
 
     async def test_process_photos_raises_calls_notify_error(self, monkeypatch):
