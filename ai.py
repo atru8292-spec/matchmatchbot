@@ -229,6 +229,41 @@ def _fixed_reply(scenario: dict) -> dict:
     }
 
 
+_EVENT_LINK_PLACEHOLDER = "[event_link]"
+_EVENT_LINK_BUBBLE = ("Aquí está el enlace para tu boleto, con fotos y videos de eventos "
+                       f"pasados: {_EVENT_LINK_PLACEHOLDER} 🤍")
+
+
+def _enforce_link_presence(result: dict, used: dict | None) -> dict:
+    """Гарантия: если реально использовался сценарий деталей ивента (№51/№52), но AI
+    забыл дать ссылку на билет — довешиваем её ОТДЕЛЬНЫМ бабблом (не мержим в текст).
+    sender.py сам подставит [event_link] и продедуплицирует повтор (db.link_already_sent).
+
+    Регресс найден 2026-08-26: свободная генерация при обсуждении деталей ивента иногда
+    теряла ссылку и застревала на лишних уточняющих вопросах вместо того чтобы её дать.
+    Это единственная защита от такого пропуска, если №51/№52 попадут в AI-ветку (сейчас
+    ai_allowed=false → template всегда содержит ссылку; станет актуально при augment
+    photo-approved и после перевода №51/№52 в ai_allowed=true — см. задачи плана).
+    """
+    if not used or used.get("id") not in _EVENT_DETAIL_SCENARIOS:
+        return result
+    if result.get("action") != "respond":
+        return result
+    messages = result.get("messages", [])
+    if any(_EVENT_LINK_PLACEHOLDER in m for m in messages):
+        return result
+    logger.info("guardrail: детали ивента (#%s) без ссылки → довешиваю %s",
+                used["id"], _EVENT_LINK_PLACEHOLDER)
+    messages = list(messages)
+    if len(messages) >= MAX_MESSAGES:
+        messages[-1] = _EVENT_LINK_BUBBLE
+    else:
+        messages.append(_EVENT_LINK_BUBBLE)
+    result = dict(result)
+    result["messages"] = messages
+    return result
+
+
 def _fallback_reply() -> dict:
     """Ответ при сбое OpenAI: не молчим, но эскалируем на Аню."""
     return {
@@ -709,4 +744,5 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         result["needs_escalation"] = True
         if not result.get("used_scenario_id"):
             result["used_scenario_id"] = used["id"]
+    result = _enforce_link_presence(result, used)
     return result

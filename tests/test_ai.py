@@ -1033,3 +1033,57 @@ class TestSendInvitationFlag:
     def test_default_false(self):
         out = ai._validate_output({"messages": ["hola"], "action": "respond"})
         assert out["send_invitation"] is False
+
+
+class TestEnforceLinkPresence:
+    """Guardrail: сценарий деталей ивента (№51/№52) без [event_link] в ответе AI →
+    довешивается отдельным бабблом (регресс 2026-08-26 — AI терял ссылку)."""
+
+    async def test_appends_link_when_missing(self, lead, history):
+        scenario = _make_scenario(id=51, ai_allowed=True, mode="bot_auto", score=0.80)
+        ai_response = {**_VALID_AI_RESPONSE, "messages": ["El precio es 6000 MXN."],
+                       "used_scenario_id": 51}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
+        assert any("[event_link]" in m for m in result["messages"])
+        assert result["messages"][0] == "El precio es 6000 MXN."
+
+    async def test_no_duplicate_when_link_present(self, lead, history):
+        scenario = _make_scenario(id=51, ai_allowed=True, mode="bot_auto", score=0.80)
+        ai_response = {**_VALID_AI_RESPONSE,
+                       "messages": ["Detalles del evento.", "Aquí tu boleto: [event_link] 🤍"],
+                       "used_scenario_id": 51}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
+        assert result["messages"] == ["Detalles del evento.", "Aquí tu boleto: [event_link] 🤍"]
+
+    async def test_noop_for_unrelated_scenario(self, lead, history):
+        """used_scenario_id no в {51,52} — гейт не трогает ответ вообще."""
+        scenario = _make_scenario(id=16, ai_allowed=True, mode="bot_auto", score=0.80)
+        ai_response = {**_VALID_AI_RESPONSE, "messages": ["La inversión es $10,000 USD."],
+                       "used_scenario_id": 16}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "cuanto cuesta el servicio")
+        assert result["messages"] == ["La inversión es $10,000 USD."]
+
+    async def test_replaces_last_bubble_at_max_messages(self, lead, history):
+        """Уже MAX_MESSAGES бабблов без ссылки → заменяем последний, не превышаем лимит."""
+        scenario = _make_scenario(id=51, ai_allowed=True, mode="bot_auto", score=0.80)
+        ai_response = {**_VALID_AI_RESPONSE, "messages": ["uno", "dos", "tres", "cuatro"],
+                       "used_scenario_id": 51}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
+        assert len(result["messages"]) == ai.MAX_MESSAGES
+        assert result["messages"][:3] == ["uno", "dos", "tres"]
+        assert "[event_link]" in result["messages"][-1]
+
+    def test_direct_noop_when_action_not_respond(self):
+        """action != respond (напр. escalate) — не довешиваем ссылку, не наше дело."""
+        used = _make_scenario(id=51)
+        result = {"action": "escalate", "messages": ["ok"]}
+        out = ai._enforce_link_presence(result, used)
+        assert out["messages"] == ["ok"]
