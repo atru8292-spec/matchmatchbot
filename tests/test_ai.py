@@ -1150,6 +1150,39 @@ class TestEnforceLinkPresence:
         assert out["messages"] == ["ok"]
 
 
+class TestTagEventInterest:
+    """extracted.interest='event' фиксируется единой пост-генерационной точкой для
+    сценариев деталей ивента (№51/№52) — что для фикс-, что для AI-ветки."""
+
+    def test_tags_interest_for_event_detail_scenario(self):
+        used = _make_scenario(id=51)
+        result = {"extracted": {"age": 30}}
+        out = ai._tag_event_interest(result, used)
+        assert out["extracted"] == {"age": 30, "interest": "event"}
+
+    def test_noop_for_unrelated_scenario(self):
+        used = _make_scenario(id=16)
+        result = {"extracted": {"age": 30}}
+        out = ai._tag_event_interest(result, used)
+        assert out["extracted"] == {"age": 30}
+
+    def test_noop_when_used_none(self):
+        result = {"extracted": {}}
+        out = ai._tag_event_interest(result, None)
+        assert out["extracted"] == {}
+
+    async def test_fixed_branch_tags_interest(self, lead, history):
+        """№51 через детерминированную ветку (ai_allowed=false) → interest='event'
+        всё равно проставляется, хотя OpenAI не вызывался."""
+        scenario = _make_scenario(id=51, ai_allowed=False, score=0.70,
+                                   template_es="Precio del evento.")
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock()) as mock_openai:
+            result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
+        mock_openai.assert_not_awaited()
+        assert result["extracted"] == {"interest": "event"}
+
+
 class TestEnforceServicePriceGate:
     """Guardrail: холодному лиду (is_single != True) нельзя раскрывать цену сервиса
     ($10,000) — даже если AI ошибся вопреки промпту, заменяем весь ответ на крючок №2."""

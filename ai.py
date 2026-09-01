@@ -215,18 +215,33 @@ def _fixed_reply(scenario: dict) -> dict:
         "funnel_stage": "nurture" if scenario.get("id") in _NURTURE_FIXED_SCENARIOS else None,
         "action": action,
         # Фикс-сценарии (ai_allowed=false) идут в обход OpenAI → extracted обычно {} (некому
-        # извлекать поля). Для #51/#52 это ломало интерес лида: "hola evento" матчил на
-        # детерминированный №52, interest НИКОГДА не сохранялся, и после квалификации+фото
-        # бот не знал, что лид изначально спрашивал про ивент — пичил дефолтный сервис без
-        # единого упоминания ивента (регресс найден 2026-08-26, живой тест). Раз дошли до
-        # этих сценариев — сам факт этого уже означает interest="event", фиксируем явно.
-        "extracted": {"interest": "event"} if scenario.get("id") in _EVENT_DETAIL_SCENARIOS else {},
+        # извлекать поля). interest='event' для #51/#52 дописывает _tag_event_interest()
+        # ПОСЛЕ вызова этой функции — единая пост-генерационная точка что для фикс-, что
+        # для AI-ветки (см. вызов ниже в generate_reply), а не хардкод здесь.
+        "extracted": {},
         "needs_escalation": action in ("escalate", "silent"),
         "used_scenario_id": scenario.get("id"),
         # детали ивента (#51/#52) → прикладываем explainer-видео Ани (дедуп по типу в actions)
         "send_event_photo": False,
         "send_event_video": scenario.get("id") in _EVENT_DETAIL_SCENARIOS,
     }
+
+
+def _tag_event_interest(result: dict, used: dict | None) -> dict:
+    """Если реально использовался сценарий деталей ивента (№51/№52) — фиксируем
+    extracted.interest='event' явно, единой пост-генерационной точкой для фикс- И
+    AI-ветки. Раньше это было захардкожено только внутри _fixed_reply (регресс
+    2026-08-26: фикс-сценарии идут в обход OpenAI, extracted оставался пустым, интерес
+    лида терялся — "hola evento" матчил детерминированный №52, а после квалификации+фото
+    бот пичил дефолтный сервис без единого упоминания ивента). Теперь применяется
+    одинаково независимо от пути — актуально и для AI-ветки после augment №51 в
+    тёплый/photo-approved контекст (задачи #4/#7).
+    """
+    if not used or used.get("id") not in _EVENT_DETAIL_SCENARIOS:
+        return result
+    result = dict(result)
+    result["extracted"] = {**result.get("extracted", {}), "interest": "event"}
+    return result
 
 
 _EVENT_LINK_PLACEHOLDER = "[event_link]"
@@ -706,7 +721,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         if top.get("score", 0) >= threshold and not ambiguous:
             logger.info("фикс-сценарий #%s (score=%.3f >= %.2f, block=%s), OpenAI не вызываю",
                         top["id"], top["score"], threshold, is_block)
-            reply = _fixed_reply(top)
+            reply = _tag_event_interest(_fixed_reply(top), top)
             if photo_thanks_prefix and reply["messages"]:
                 # Мердж короткого "спасибо за фото" в первый баббл (не отдельным сообщением —
                 # см. правило "NUNCA mandes un mensaje suelto de gracias por tu foto").
@@ -769,6 +784,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         result["needs_escalation"] = True
         if not result.get("used_scenario_id"):
             result["used_scenario_id"] = used["id"]
+    result = _tag_event_interest(result, used)
     result = _enforce_link_presence(result, used)
     result = await _enforce_service_price_gate(result, lead)
     return result
