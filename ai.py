@@ -495,17 +495,6 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
 
     top = scenarios[0] if scenarios else None
 
-    # Кодовая фраза объявления ("novia rusa") — лид, который её пишет, ОДНОЗНАЧНО имеет
-    # в виду ивент. Форсим №2 (приветствие + крючок про ивент) напрямую по id, не
-    # полагаясь на RAG-score вообще — та же логика, что у форса №51 выше.
-    if _is_ad_keyword(user_text):
-        row = await db.get_scenario_row(2)
-        if row:
-            logger.info("кодовая фраза объявления ('novia rusa') → форс №2 (был top=%s)",
-                        top.get("id") if top else None)
-            row["score"] = 1.0
-            scenarios, top = [row], row
-
     # Фото только что одобрено, и лид изначально интересовался ивентом (interest='event',
     # см. _fixed_reply/_EVENT_DETAIL_SCENARIOS) — форсим №51 (цена+детали+ссылка) напрямую,
     # вместо того чтобы дать AI придумывать питч с нуля. Без этого AI свободно генерил новый
@@ -553,6 +542,21 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
                         top.get("id") if top else None)
             scenarios = filtered
             top = scenarios[0] if scenarios else None
+
+    # Кодовая фраза объявления ("novia rusa") — лид, который её пишет, ОДНОЗНАЧНО имеет
+    # в виду ивент. Раньше форсили top/#2 напрямую по id (терялся контекст: если фраза
+    # встречалась не первым сообщением, а посреди диалога, бот всё равно ресетил на
+    # приветствие с нуля). Теперь просто ДОБАВЛЯЕМ №2 как кандидата в RAG-пул (не
+    # заменяя top, ставим ПОСЛЕ контекст-фолбэка и post-event-фильтра, чтобы кандидата
+    # не потеряли по пути) — AI видит его как референс среди остальных сценариев и решает
+    # с полным контекстом переписки, что уместнее: приветствие-крючок или продолжение диалога.
+    if _is_ad_keyword(user_text) and not any(s.get("id") == 2 for s in scenarios):
+        row = await db.get_scenario_row(2)
+        if row:
+            logger.info("кодовая фраза объявления ('novia rusa') → добавляю №2 в кандидаты (top=%s)",
+                        top.get("id") if top else None)
+            row["score"] = 0.5
+            scenarios = scenarios + [row]
 
     # Холодному/неквалифицированному лиду (is_single != True) роутим по типу вопроса:
     #   • ценовой вопрос ПРО ИВЕНТ конкретно (mentiona "evento" или interest уже event) →
