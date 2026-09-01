@@ -303,6 +303,52 @@ def _enforce_nurture_stage(result: dict, used: dict | None, ambiguous: bool = Fa
     return result
 
 
+# Гейт "анкета неполная → не питчим сервис" — привязан к тому же триггеру, что и форс
+# ивента ниже ("[фото одобрено]"), а НЕ к used_scenario_id: проверка на реальном AI
+# показала, что LLM не всегда репортит used_scenario_id даже когда явно даёт питч
+# сервиса (найдено 2026-09-01) — тот же класс ненадёжности, что и везде в этой сессии.
+# Только НЕ-ивент ветка: интерес к ивенту (interest='event') НАМЕРЕННО без гейта —
+# владелица подтвердила дважды, что цену/детали ивента можно давать любому лиду сразу.
+_QUALIFICATION_QUESTIONS = {
+    "is_single": "Oye, antes de seguir — ¿me confirmas que estás soltero? 😊",
+    "age": "Se me pasó preguntarte — ¿qué edad tienes?",
+    "profession": "Y antes de contarte más, ¿a qué te dedicas?",
+}
+
+
+def _missing_qualification_field(lead: dict) -> str | None:
+    """Первое недостающее поле анкеты (порядок воронки: холост → возраст →
+    профессия), либо None если анкета полная."""
+    if lead.get("is_single") is not True:
+        return "is_single"
+    if not lead.get("age"):
+        return "age"
+    if not lead.get("profession"):
+        return "profession"
+    return None
+
+
+def _enforce_service_qualification_gate(result: dict, user_text: str, lead: dict) -> dict:
+    """Питч сервиса не должен уходить с неполной анкетой (is_single/age/profession) —
+    найдено 2026-09-01 живым тестом: лид пропустил вопрос про профессию, сразу прислал
+    фото, бот всё равно дал полный питч. Промпт-инструкция (гейт в FLUJO DE VENTA) сама
+    по себе ненадёжна — тот же паттерн, что у _enforce_service_price_gate. Заменяет ВЕСЬ
+    ответ на недостающий вопрос, не смешивает с питчем.
+    """
+    if user_text != "[фото одобрено]" or lead.get("interest") == "event":
+        return result
+    if result.get("action") != "respond":
+        return result
+    missing = _missing_qualification_field(lead)
+    if not missing:
+        return result
+    logger.info("guardrail: фото одобрено, анкета неполная (%s) → переспрашиваю вместо питча",
+                missing)
+    result = dict(result)
+    result["messages"] = ["¡Gracias por tu foto! 😊", _QUALIFICATION_QUESTIONS[missing]]
+    return result
+
+
 _EVENT_LINK_PLACEHOLDER = "[event_link]"
 _EVENT_LINK_BUBBLE = ("Aquí está el enlace para tu boleto, con fotos y videos de eventos "
                        f"pasados: {_EVENT_LINK_PLACEHOLDER} 🤍")
@@ -646,6 +692,11 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     # "cómo funciona el evento" питч — путал скидку за друга, ЗАБЫВАЛ дать [event_link] и
     # застревал на лишних уточняющих вопросах ("¿reservo tu lugar o solo te aviso la fecha?")
     # вместо того чтобы просто дать ссылку (регресс найден 2026-08-26, живой тест).
+    # НЕ гейтим полнотой анкеты (найдено 2026-09-01: пробовала — неправильно): владелица
+    # подтвердила ПОВТОРНО — цену/детали ивента можно давать любому лиду сразу, даже без
+    # полной квалификации (is_single/age/profession). Gate "нет анкеты — не идём дальше"
+    # (anna_prompt_v5.md, secc. FLUJO DE VENTA) — только про сервис ($10k, paso 3), не про
+    # ивент.
     photo_thanks_prefix = False
     if user_text == "[фото одобрено]" and lead.get("interest") == "event":
         row = await db.get_scenario_row(51)
@@ -849,6 +900,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
             result["used_scenario_id"] = used["id"]
     result = _tag_event_interest(result, used)
     result = _enforce_nurture_stage(result, used, ambiguous)
+    result = _enforce_service_qualification_gate(result, user_text, lead)
     result = _enforce_link_presence(result, used)
     result = await _enforce_service_price_gate(result, lead)
     return result

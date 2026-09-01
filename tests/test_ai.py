@@ -1252,6 +1252,72 @@ class TestEnforceNurtureStage:
         assert result["funnel_stage"] == "nurture"
 
 
+class TestEnforceServiceQualificationGate:
+    """Питч сервиса не должен уходить с неполной анкетой (is_single/age/profession) —
+    регресс найден 2026-09-01 (живой тест): лид пропустил вопрос про профессию, сразу
+    прислал фото, бот всё равно дал полный питч. Гейт привязан к user_text=="[фото
+    одобрено]" (не к used_scenario_id — AI не всегда его репортит). Только сервис —
+    ивент (interest='event') НЕ гейтится (владелица подтвердила дважды)."""
+
+    def test_missing_profession_replaces_pitch(self):
+        lead = {"is_single": True, "age": 35, "profession": None}
+        result = {"action": "respond", "messages": ["Pitch completo del servicio..."]}
+        out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
+        assert out["messages"] == ["¡Gracias por tu foto! 😊", "Y antes de contarte más, ¿a qué te dedicas?"]
+
+    def test_missing_age_asks_age(self):
+        lead = {"is_single": True, "age": None, "profession": "abogado"}
+        result = {"action": "respond", "messages": ["Pitch..."]}
+        out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
+        assert "edad" in out["messages"][1]
+
+    def test_missing_is_single_asks_is_single(self):
+        lead = {"is_single": None, "age": 35, "profession": "abogado"}
+        result = {"action": "respond", "messages": ["Pitch..."]}
+        out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
+        assert "soltero" in out["messages"][1]
+
+    def test_noop_when_qualification_complete(self):
+        lead = {"is_single": True, "age": 35, "profession": "abogado"}
+        result = {"action": "respond", "messages": ["Pitch completo del servicio..."]}
+        out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
+        assert out["messages"] == ["Pitch completo del servicio..."]
+
+    def test_noop_when_interest_is_event(self):
+        """interest='event' NO se gatea — owner confirmó 2x que evento es libre."""
+        lead = {"is_single": None, "age": None, "profession": None, "interest": "event"}
+        result = {"action": "respond", "messages": ["Precio del evento..."]}
+        out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
+        assert out["messages"] == ["Precio del evento..."]
+
+    def test_noop_when_action_not_respond(self):
+        lead = {"is_single": None, "age": None, "profession": None}
+        result = {"action": "escalate", "messages": ["..."]}
+        out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
+        assert out["messages"] == ["..."]
+
+    def test_noop_when_not_photo_approved_trigger(self):
+        """Гейт срабатывает только на "[фото одобрено]" — не на любое сообщение."""
+        lead = {"is_single": None, "age": None, "profession": None}
+        result = {"action": "respond", "messages": ["Pitch..."]}
+        out = ai._enforce_service_qualification_gate(result, "cuanto cuesta el servicio", lead)
+        assert out["messages"] == ["Pitch..."]
+
+    async def test_integration_via_generate_reply(self, history):
+        """Интеграционно: неполная анкета + [фото одобрено] через generate_reply целиком,
+        даже когда AI не репортит used_scenario_id (найдено 2026-09-01 — сама причина,
+        по которой гейт завязан на user_text, а не на used)."""
+        lead = {"is_single": True, "age": 35, "profession": None}
+        scenario = _make_scenario(id=6, ai_allowed=True, mode="bot_auto", score=0.80)
+        ai_response = {**_VALID_AI_RESPONSE,
+                       "messages": ["¡Gracias por tu foto! 😊", "Mira, te cuento cómo funciona el servicio..."],
+                       "used_scenario_id": None}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "[фото одобрено]")
+        assert result["messages"] == ["¡Gracias por tu foto! 😊", "Y antes de contarte más, ¿a qué te dedicas?"]
+
+
 class TestEnforceServicePriceGate:
     """Guardrail: холодному лиду (is_single != True) нельзя раскрывать цену сервиса
     ($10,000) — даже если AI ошибся вопреки промпту, заменяем весь ответ на крючок №2."""
