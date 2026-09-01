@@ -1087,3 +1087,44 @@ class TestEnforceLinkPresence:
         result = {"action": "escalate", "messages": ["ok"]}
         out = ai._enforce_link_presence(result, used)
         assert out["messages"] == ["ok"]
+
+
+class TestEnforceServicePriceGate:
+    """Guardrail: холодному лиду (is_single != True) нельзя раскрывать цену сервиса
+    ($10,000) — даже если AI ошибся вопреки промпту, заменяем весь ответ на крючок №2."""
+
+    async def test_replaces_whole_reply_for_cold_lead(self, history):
+        cold_lead = _make_lead(is_single=False)
+        scenario = _make_scenario(id=16, ai_allowed=True, mode="bot_auto", score=0.80)
+        ai_response = {**_VALID_AI_RESPONSE,
+                       "messages": ["La inversión es desde $10,000 USD."],
+                       "used_scenario_id": 16}
+        hook_row = {"id": 2, "template_es": "Te cuento del evento.\n\n¿Eres soltero?"}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)), \
+             patch("db.get_scenario_row", AsyncMock(return_value=hook_row)):
+            result = await ai.generate_reply(cold_lead, history, "cuanto cuesta el servicio")
+        assert result["messages"] == ["Te cuento del evento.", "¿Eres soltero?"]
+        assert result["used_scenario_id"] == 2
+        assert not any("10,000" in m or "10000" in m for m in result["messages"])
+
+    async def test_allows_price_for_qualified_lead(self, lead, history):
+        """lead из фикстуры is_single=True → цену НЕ трогаем."""
+        scenario = _make_scenario(id=16, ai_allowed=True, mode="bot_auto", score=0.80)
+        ai_response = {**_VALID_AI_RESPONSE,
+                       "messages": ["La inversión es desde $10,000 USD."],
+                       "used_scenario_id": 16}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "cuanto cuesta el servicio")
+        assert result["messages"] == ["La inversión es desde $10,000 USD."]
+
+    async def test_noop_when_no_price_mentioned(self):
+        result = {"action": "respond", "messages": ["Hola, cuéntame más de ti."]}
+        out = await ai._enforce_service_price_gate(result, {"is_single": False})
+        assert out["messages"] == ["Hola, cuéntame más de ti."]
+
+    async def test_noop_when_action_not_respond(self):
+        result = {"action": "escalate", "messages": ["La inversión es desde $10,000 USD."]}
+        out = await ai._enforce_service_price_gate(result, {"is_single": False})
+        assert out["messages"] == ["La inversión es desde $10,000 USD."]

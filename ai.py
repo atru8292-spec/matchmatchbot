@@ -264,6 +264,38 @@ def _enforce_link_presence(result: dict, used: dict | None) -> dict:
     return result
 
 
+_SERVICE_PRICE_PATTERN = re.compile(r"\b10[.,]?000\b")
+
+
+async def _enforce_service_price_gate(result: dict, lead: dict) -> dict:
+    """Гарантия: холодному/неквалифицированному лиду (is_single != True) НЕ раскрываем
+    цену сервиса ($10,000 USD) — правило владельца (CLAUDE.md: "холодному — сначала
+    ценность + квалификация, ведёт на звонок"). Промпт этому уже учит, но полагаться
+    только на промпт для business-critical факта недостаточно — модель нарушала даже
+    прямые текстовые запреты (слово "perfil" продолжало проскакивать несмотря на явный
+    бан). При нарушении заменяем ВЕСЬ ответ на крючок-квалификатор (сценарий №2), а не
+    вырезаем цифру из текста — обрезка оставила бы грамматически сломанное сообщение.
+
+    Одинаковый is_single-гейт с тем, что раньше форсил cold-lead price router (задачи
+    #6/#7) — эта проверка её точная страховка, не новая более строгая политика.
+    """
+    if result.get("action") != "respond":
+        return result
+    if lead.get("is_single") is True:
+        return result
+    if not any(_SERVICE_PRICE_PATTERN.search(m) for m in result.get("messages", [])):
+        return result
+    row = await db.get_scenario_row(2)
+    if not row:
+        return result
+    logger.warning("guardrail: холодному лиду чуть не ушла цена сервиса ($10,000) → "
+                    "заменяю на крючок №2")
+    result = dict(result)
+    result["messages"] = _split_template(row.get("template_es", ""))
+    result["used_scenario_id"] = 2
+    return result
+
+
 def _fallback_reply() -> dict:
     """Ответ при сбое OpenAI: не молчим, но эскалируем на Аню."""
     return {
@@ -745,4 +777,5 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         if not result.get("used_scenario_id"):
             result["used_scenario_id"] = used["id"]
     result = _enforce_link_presence(result, used)
+    result = await _enforce_service_price_gate(result, lead)
     return result
