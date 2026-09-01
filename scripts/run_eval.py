@@ -36,7 +36,9 @@ async def main() -> None:
     await db.init_pool()
     try:
         for c in cases:
-            res = await ai.generate_reply({}, [], c["msg"])
+            # lead/history опциональны — старые файлы без них работают как раньше
+            # (пустой лид, пустая история). Новые кейсы могут задать multi-turn контекст.
+            res = await ai.generate_reply(c.get("lead") or {}, c.get("history") or [], c["msg"])
             print("=" * 78)
             print(f"#{c['id']} [{c.get('cat','?')}]  ЛИД: {c['msg']}")
             if c.get("expect"):
