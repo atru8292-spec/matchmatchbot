@@ -311,8 +311,8 @@ def _enforce_nurture_stage(result: dict, used: dict | None, ambiguous: bool = Fa
 # Только НЕ-ивент ветка: интерес к ивенту (interest='event') НАМЕРЕННО без гейта —
 # владелица подтвердила дважды, что цену/детали ивента можно давать любому лиду сразу.
 _QUALIFICATION_QUESTIONS = {
-    "is_single": "Oye, antes de seguir — ¿me confirmas que estás soltero? 😊",
-    "age": "Se me pasó preguntarte — ¿qué edad tienes?",
+    "is_single": "Oye, antes de seguir, ¿eres soltero? 😊",
+    "age": "Se me pasó preguntarte, ¿qué edad tienes?",
     "profession": "Y antes de contarte más, ¿a qué te dedicas?",
 }
 
