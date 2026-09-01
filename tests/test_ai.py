@@ -518,6 +518,29 @@ class TestContextFallback:
         assert mock_search.await_count == 1
 
 
+class TestAdKeywordForcesEventHook:
+    """"novia rusa" — кодовая фраза рекламы → форс №2 (крючок про ивент), НЕ augment.
+
+    Регресс найден 2026-09-01 живым тестом: augment-кандидата (score=0.5) проигрывал
+    натуральному RAG-топу (напр. #3, общий питч агентства) — AI шёл за агентством,
+    теряя весь смысл рекламной кодовой фразы. Синтетический маркетинговый триггер с
+    ОДНИМ верным толкованием — форсим top напрямую (тот же принцип, что у "photo
+    одобрено + interest=event", в отличие от органического текста лида)."""
+
+    async def test_forces_scenario_2_even_when_natural_top_differs(self):
+        wrong_top = _make_scenario(id=3, ai_allowed=True, score=0.75)
+        n2_row = {"id": 2, "template_es": "Hola, te cuento del evento...",
+                  "mode": "bot_auto", "ai_allowed": True, "blocks_lead": False}
+        getrow = AsyncMock(return_value=n2_row)
+        ai_response = {**_VALID_AI_RESPONSE, "used_scenario_id": 2}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[wrong_top])), \
+             patch("ai.db.get_scenario_row", getrow), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply({"funnel_stage": "new"}, [], "novia rusa")
+        getrow.assert_awaited_once_with(2)
+        assert result["used_scenario_id"] == 2
+
+
 class TestColdLeadEventGuard:
     """Холодный лид + ценовой/детальный вопрос → крючок или детали без цены."""
 
