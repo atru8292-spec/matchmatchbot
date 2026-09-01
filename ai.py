@@ -668,6 +668,26 @@ async def _maybe_announce_event_video(reply: dict, scenario: dict, lead: dict) -
     logger.info("анонс explainer-видео дописан в #%s для %s", scenario.get("id"), phone)
 
 
+async def _enforce_event_video(result: dict, used: dict | None, lead: dict) -> dict:
+    """Видео explainer-ивента гарантированно прикладывается к №51/№52 (цена/детали
+    ивента), не полагаясь на суждение AI — найдено 2026-09-01 живым тестом: AI выставлял
+    send_event_video верно только ~1 раз из 3 (промпт-инструкция ненадёжна сама по себе,
+    тот же паттерн что и везде в этой сессии). Раньше это было гарантировано детерминизмом
+    _fixed_reply (send_event_video=True для любого #51/52), но сломалось молча, когда
+    №51/52 перевели на ai_allowed=true (задача #10) — тот путь больше не используется.
+    Восстанавливает старую гарантию единой пост-генерационной точкой. Реальная отправка
+    и текст анонса всё равно проходят через _maybe_announce_event_video — та сама
+    проверяет дедуп (не слали ли уже на этот ивент) и что в пуле есть видео, так что
+    флаг здесь не гарантирует физическую отправку, только НАМЕРЕНИЕ её сделать.
+    """
+    if not used or used.get("id") not in _EVENT_DETAIL_SCENARIOS or result.get("action") != "respond":
+        return result
+    result = dict(result)
+    result["send_event_video"] = True
+    await _maybe_announce_event_video(result, used, lead)
+    return result
+
+
 async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dict:
     """Сгенерировать ответ бота на склеенный текст лида.
 
@@ -902,5 +922,6 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = _enforce_nurture_stage(result, used, ambiguous)
     result = _enforce_service_qualification_gate(result, user_text, lead)
     result = _enforce_link_presence(result, used)
+    result = await _enforce_event_video(result, used, lead)
     result = await _enforce_service_price_gate(result, lead)
     return result
