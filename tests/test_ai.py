@@ -1451,3 +1451,107 @@ class TestEnforceServicePriceGate:
         result = {"action": "escalate", "messages": ["La inversión es desde $10,000 USD."]}
         out = await ai._enforce_service_price_gate(result, {"is_single": False})
         assert out["messages"] == ["La inversión es desde $10,000 USD."]
+
+
+class TestEnforceNoRegreetOnRepeat:
+    """При повторе сообщения лида не здороваемся заново ("hola de nuevo") — промпт уже
+    запрещает это (REGLAS ANTI-ALUCINACIÓN п.9), найдено smoke_test'ом 2026-09-01, что
+    AI иногда всё равно так делает."""
+
+    def test_is_repeated_detects_exact_match_case_insensitive(self):
+        history = [{"sender": "lead", "text": "Evento"}, {"sender": "anna", "text": "..."}]
+        assert ai._is_repeated_lead_message("evento", history) is True
+
+    def test_is_repeated_false_when_different(self):
+        history = [{"sender": "lead", "text": "Evento"}, {"sender": "anna", "text": "..."}]
+        assert ai._is_repeated_lead_message("hola", history) is False
+
+    def test_is_repeated_false_without_prior_lead_turn(self):
+        assert ai._is_repeated_lead_message("hola", []) is False
+        assert ai._is_repeated_lead_message("hola", [{"sender": "anna", "text": "hola"}]) is False
+
+    def test_strips_regreet_prefix(self):
+        history = [{"sender": "lead", "text": "Evento"}, {"sender": "anna", "text": "..."}]
+        result = {"action": "respond",
+                  "messages": ["¡Hola de nuevo! Ya te había contado del evento.", "¿Eres soltero?"]}
+        out = ai._enforce_no_regreet_on_repeat(result, "Evento", history)
+        assert out["messages"][0] == "Ya te había contado del evento."
+        assert out["messages"][1] == "¿Eres soltero?"
+
+    def test_noop_when_not_repeated(self):
+        history = [{"sender": "lead", "text": "hola"}, {"sender": "anna", "text": "..."}]
+        result = {"action": "respond", "messages": ["¡Hola de nuevo! Bla."]}
+        out = ai._enforce_no_regreet_on_repeat(result, "Evento", history)
+        assert out["messages"] == ["¡Hola de nuevo! Bla."]
+
+    def test_noop_when_no_regreet_phrase_present(self):
+        """Повтор есть, но ответ и так не содержит 'hola de nuevo' — не трогаем."""
+        history = [{"sender": "lead", "text": "Evento"}, {"sender": "anna", "text": "..."}]
+        result = {"action": "respond", "messages": ["Como te comentaba, es una noche especial."]}
+        out = ai._enforce_no_regreet_on_repeat(result, "Evento", history)
+        assert out["messages"] == ["Como te comentaba, es una noche especial."]
+
+    def test_also_strips_on_escalate_action(self):
+        """action='escalate' ТОЖЕ проверяем — лид получает текст и при эскалации
+        (регресс найден 2026-09-01: smoke_test матчил bot_then_anna на повторе "Evento",
+        guardrail изначально пропускал не-respond, поэтому баг не ловился)."""
+        history = [{"sender": "lead", "text": "Evento"}, {"sender": "anna", "text": "..."}]
+        result = {"action": "escalate", "messages": ["¡Hola de nuevo! Bla."]}
+        out = ai._enforce_no_regreet_on_repeat(result, "Evento", history)
+        assert out["messages"] == ["Bla."]
+
+    def test_noop_when_action_block_or_silent(self):
+        history = [{"sender": "lead", "text": "Evento"}, {"sender": "anna", "text": "..."}]
+        for action in ("block", "silent"):
+            result = {"action": action, "messages": ["¡Hola de nuevo!"]}
+            out = ai._enforce_no_regreet_on_repeat(result, "Evento", history)
+            assert out["messages"] == ["¡Hola de nuevo!"]
+
+
+class TestEnforceEmojiBudget:
+    """Не более ~1 из 3-4 бабблов с эмодзи (REGLAS DE TONO) — если недавняя история уже
+    перегружена, этот ответ идёт без эмодзи, не добавляя сверху (найдено smoke_test'ом)."""
+
+    def test_ratio_computed_over_recent_window(self):
+        history = [
+            {"sender": "anna", "text": "Hola 😊"},
+            {"sender": "anna", "text": "Perfecto 🤍"},
+            {"sender": "anna", "text": "Va, gracias"},
+            {"sender": "anna", "text": "Genial 😊"},
+        ]
+        assert ai._recent_anna_emoji_ratio(history) == 0.75
+
+    def test_ratio_none_when_no_anna_history(self):
+        assert ai._recent_anna_emoji_ratio([]) is None
+        assert ai._recent_anna_emoji_ratio([{"sender": "lead", "text": "hola"}]) is None
+
+    def test_strips_emoji_when_recent_ratio_high(self):
+        history = [{"sender": "anna", "text": f"msg {i} 😊"} for i in range(4)]
+        result = {"action": "respond", "messages": ["Perfecto, gracias 😊", "¿Y tu edad?"]}
+        out = ai._enforce_emoji_budget(result, history)
+        assert out["messages"] == ["Perfecto, gracias", "¿Y tu edad?"]
+
+    def test_noop_when_recent_ratio_low(self):
+        history = [{"sender": "anna", "text": "msg sin emoji"} for _ in range(4)]
+        result = {"action": "respond", "messages": ["Perfecto, gracias 😊"]}
+        out = ai._enforce_emoji_budget(result, history)
+        assert out["messages"] == ["Perfecto, gracias 😊"]
+
+    def test_noop_when_not_enough_history(self):
+        result = {"action": "respond", "messages": ["Perfecto, gracias 😊"]}
+        out = ai._enforce_emoji_budget(result, [])
+        assert out["messages"] == ["Perfecto, gracias 😊"]
+
+    def test_also_strips_on_escalate_action(self):
+        """action='escalate' ТОЖЕ проверяем — лид получает текст и при эскалации."""
+        history = [{"sender": "anna", "text": f"msg {i} 😊"} for i in range(4)]
+        result = {"action": "escalate", "messages": ["Perfecto, gracias 😊"]}
+        out = ai._enforce_emoji_budget(result, history)
+        assert out["messages"] == ["Perfecto, gracias"]
+
+    def test_noop_when_action_block_or_silent(self):
+        history = [{"sender": "anna", "text": f"msg {i} 😊"} for i in range(4)]
+        for action in ("block", "silent"):
+            result = {"action": action, "messages": ["Perfecto, gracias 😊"]}
+            out = ai._enforce_emoji_budget(result, history)
+            assert out["messages"] == ["Perfecto, gracias 😊"]

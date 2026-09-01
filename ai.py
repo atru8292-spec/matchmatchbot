@@ -357,6 +357,92 @@ def _enforce_service_qualification_gate(result: dict, user_text: str, lead: dict
     return result
 
 
+# "Hola de nuevo" при повторе сообщения лида (найдено 2026-08-26, укреплено 2026-09-01
+# smoke_test'ом) — промпт уже прямо запрещает это (REGLAS ANTI-ALUCINACIÓN п.9), AI
+# иногда всё равно так делает. Вырезаем именно открывающий оборот, не весь ответ —
+# остальной текст обычно нормальный, дело только в неуместном приветствии.
+_REGREET_RE = re.compile(r"^\W*¡?\s*hola\s+de\s+nuevo\W*", re.IGNORECASE)
+
+
+def _is_repeated_lead_message(user_text: str, history: list[dict]) -> bool:
+    """Текущее сообщение лида дословно совпадает с его же предыдущим ходом — вероятно
+    случайный повтор/задвоение, НЕ сигнал что "прошло время" (conversation_history без
+    таймстампов, промпт явно это подчёркивает)."""
+    for turn in reversed(history or []):
+        if turn.get("sender") == "lead":
+            return (turn.get("text") or "").strip().lower() == (user_text or "").strip().lower()
+    return False
+
+
+def _enforce_no_regreet_on_repeat(result: dict, user_text: str, history: list[dict]) -> dict:
+    """При повторе сообщения лида не здороваемся заново — см. _REGREET_RE выше.
+
+    Проверяем ЛЮБОЙ action с непустыми messages (respond И escalate — при эскалации
+    лид тоже получает текст, плюс алерт Ане отдельно), не только 'respond' — правило
+    промпта не делает этого различия. Найдено 2026-09-01: guardrail изначально
+    ограничивался action=='respond' по аналогии с другими, но именно поэтому пропустил
+    реальный кейс smoke_test'а, где "Evento" дважды подряд матчилось на bot_then_anna
+    (#48) → action=='escalate' с тем же "hola de nuevo" в тексте. Только 'block'/
+    'silent' пропускаем — там либо детерминированный шаблон, либо messages=[].
+    """
+    if result.get("action") not in ("respond", "escalate") or not result.get("messages"):
+        return result
+    if not _is_repeated_lead_message(user_text, history):
+        return result
+    messages = list(result["messages"])
+    first = messages[0]
+    stripped = _REGREET_RE.sub("", first).strip()
+    if not stripped or stripped == first:
+        return result
+    messages[0] = stripped[0].upper() + stripped[1:]
+    result = dict(result)
+    result["messages"] = messages
+    logger.info("guardrail: убрала 'hola de nuevo' на повторе сообщения лида")
+    return result
+
+
+# Лимит эмодзи (REGLAS DE TONO, anna_prompt_v5.md: максимум 1 из 3-4 бабблов) — тот же
+# паттерн детекции, что в scripts/smoke_test.py (согласованный диапазон).
+_EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
+
+
+def _recent_anna_emoji_ratio(history: list[dict], window: int = 4) -> float | None:
+    """Доля последних `window` реплик Anna (из истории) с хотя бы одним эмодзи.
+    None — истории мало, решать не по чему."""
+    anna_msgs = [(t.get("text") or "") for t in (history or []) if t.get("sender") == "anna"]
+    recent = anna_msgs[-window:]
+    if not recent:
+        return None
+    with_emoji = sum(1 for m in recent if _EMOJI_RE.search(m))
+    return with_emoji / len(recent)
+
+
+def _enforce_emoji_budget(result: dict, history: list[dict]) -> dict:
+    """Если Anna в недавней истории и так уже часто ставила эмодзи (>=60% последних
+    реплик) — этот ответ идёт БЕЗ эмодзи, а не поверх и так перегруженной картины
+    (найдено 2026-08-26/2026-09-01 smoke_test'ом — AI иногда ставит эмодзи почти в
+    каждом баббле, хотя промпт прямо просит не больше 1 из 3-4). Трогаем только текст,
+    плейсхолдеры не содержат эмодзи. И 'respond', и 'escalate' — при эскалации лид тоже
+    получает текст (тот же нюанс, что в _enforce_no_regreet_on_repeat, найдено 2026-09-01)."""
+    if result.get("action") not in ("respond", "escalate") or not result.get("messages"):
+        return result
+    ratio = _recent_anna_emoji_ratio(history)
+    if ratio is None or ratio < 0.6:
+        return result
+    messages = result["messages"]
+    if not any(_EMOJI_RE.search(m) for m in messages):
+        return result
+    cleaned = []
+    for m in messages:
+        c = _EMOJI_RE.sub("", m)
+        c = re.sub(r"[ \t]{2,}", " ", c).strip()
+        cleaned.append(c)
+    result = dict(result)
+    result["messages"] = cleaned
+    logger.info("guardrail: срезала эмодзи — недавняя история уже перегружена (ratio=%.2f)", ratio)
+    return result
+
+
 _EVENT_LINK_PLACEHOLDER = "[event_link]"
 _EVENT_LINK_BUBBLE = ("Aquí está el enlace para tu boleto, con fotos y videos de eventos "
                        f"pasados: {_EVENT_LINK_PLACEHOLDER} 🤍")
@@ -939,4 +1025,6 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = _enforce_link_presence(result, used)
     result = await _enforce_event_video(result, used, lead)
     result = await _enforce_service_price_gate(result, lead)
+    result = _enforce_no_regreet_on_repeat(result, user_text, history)
+    result = _enforce_emoji_budget(result, history)
     return result
