@@ -179,16 +179,18 @@ def _split_template(template_es: str) -> list[str]:
 # на уровне кода: это ровно «детальный вопрос про ивент» из правила медиа. Дедуп — в actions.
 _EVENT_DETAIL_SCENARIOS = {51, 52}
 
-# Фикс-сценарии, где template_es сам говорит «жду»/«лист ожидания» — ai_allowed=false,
-# AI не решает, поэтому funnel_stage=None (дефолт _fixed_reply) не двигал лида, и он оставался
-# на активной стадии → получал обычный фоллоу-ап через 24-48ч, противореча тексту, который
-# только что отправили (найдено 2026-08-06, тестовые диалоги):
+# Сценарии, где ответ сам говорит «жду»/«лист ожидания» — funnel_stage должен стать
+# 'nurture', иначе лид остаётся на активной стадии → получает обычный фоллоу-ап через
+# 24-48ч, противореча тексту, который только что отправили (найдено 2026-08-06):
 #   #17 «no me interesa/no gracias/paso» — явный отказ, а не «жди»
 #   #10 «bajo ingreso» — template буквально говорит «lista de espera 6-12 meses», а получал бы
 #       догон #36 «sigues soltero?» уже через 24ч — прямое противоречие
 # 'nurture' — в NO_FOLLOWUP_STAGES (funnel.py), автодогон не сработает; лид остаётся видимым
-# как «лист ожидания», не удаляется.
-_NURTURE_FIXED_SCENARIOS = {10, 17}
+# как «лист ожидания», не удаляется. Проставляется гарантированно через
+# _enforce_nurture_stage() (см. ниже) — не хардкодом внутри _fixed_reply, единой
+# пост-генерационной точкой для фикс- И AI-ветки (тот же паттерн, что у
+# _tag_event_interest).
+_NURTURE_SCENARIOS = {10, 17}
 
 # Анонс explainer-видео (Аня лично отвечает на частые вопросы про ивент) — дописывается
 # в ПОСЛЕДНИЙ баббл #51/#52, только когда видео реально уйдёт (не слали + пул не пуст).
@@ -210,9 +212,9 @@ def _fixed_reply(scenario: dict) -> dict:
         # 'silent' → [] всегда, независимо от template_es (полная тишина лиду — весь смысл
         # to_anna_silent; не доверяем содержимому template гарантировать пустоту сама по себе).
         "messages": [] if action == "silent" else _split_template(scenario.get("template_es", "")),
-        # стадию обычно решит интеграция (block→lost); фикс её не меняет — КРОМЕ
-        # явного "no me interesa" (#17), где сами двигаем в nurture (см. коммент выше).
-        "funnel_stage": "nurture" if scenario.get("id") in _NURTURE_FIXED_SCENARIOS else None,
+        # стадию обычно решит интеграция (block→lost); фикс её не меняет — nurture (#10/#17)
+        # дописывает _enforce_nurture_stage() ПОСЛЕ вызова этой функции (см. generate_reply).
+        "funnel_stage": None,
         "action": action,
         # Фикс-сценарии (ai_allowed=false) идут в обход OpenAI → extracted обычно {} (некому
         # извлекать поля). interest='event' для #51/#52 дописывает _tag_event_interest()
@@ -244,6 +246,24 @@ def _tag_event_interest(result: dict, used: dict | None) -> dict:
     return result
 
 
+def _enforce_nurture_stage(result: dict, used: dict | None) -> dict:
+    """funnel_stage='nurture' для сценариев #10 (bajo ingreso) / #17 (no me interesa) —
+    единая пост-генерационная точка для фикс- И AI-ветки. Промпт теперь тоже явно об
+    этом просит (anna_prompt_v5.md), но полагаться только на промпт для business-
+    critical побочного эффекта недостаточно (тот же класс риска, что у
+    _enforce_service_price_gate — модель нарушала даже прямые текстовые запреты).
+    Без nurture лид получил бы противоречащий автодогон "¿sigues soltero?" через
+    24-48ч сразу после того как ему сказали "espera 6-12 meses" (регресс 2026-08-06).
+    """
+    if not used or used.get("id") not in _NURTURE_SCENARIOS:
+        return result
+    if result.get("action") != "respond" or result.get("funnel_stage") == "nurture":
+        return result
+    result = dict(result)
+    result["funnel_stage"] = "nurture"
+    return result
+
+
 _EVENT_LINK_PLACEHOLDER = "[event_link]"
 _EVENT_LINK_BUBBLE = ("Aquí está el enlace para tu boleto, con fotos y videos de eventos "
                        f"pasados: {_EVENT_LINK_PLACEHOLDER} 🤍")
@@ -256,16 +276,20 @@ def _enforce_link_presence(result: dict, used: dict | None) -> dict:
 
     Регресс найден 2026-08-26: свободная генерация при обсуждении деталей ивента иногда
     теряла ссылку и застревала на лишних уточняющих вопросах вместо того чтобы её дать.
-    Это единственная защита от такого пропуска, если №51/№52 попадут в AI-ветку (сейчас
-    ai_allowed=false → template всегда содержит ссылку; станет актуально при augment
-    photo-approved и после перевода №51/№52 в ai_allowed=true — см. задачи плана).
+
+    Проверяем не только литеральный плейсхолдер, но и "http" — sender.py подставляет
+    [event_link] в РЕАЛЬНЫЙ URL ДО записи в историю (render_bubbles → save_outbound),
+    так что если лид уже видел ссылку раньше, она лежит в history как resolved URL, а не
+    как плейсхолдер, и AI, ссылаясь на неё, естественно печатает тот же URL текстом —
+    без проверки на "http" гейт решил бы, что ссылки нет, и довесил бы дубликат
+    (найдено 2026-09-01 в eval, кейс r5).
     """
     if not used or used.get("id") not in _EVENT_DETAIL_SCENARIOS:
         return result
     if result.get("action") != "respond":
         return result
     messages = result.get("messages", [])
-    if any(_EVENT_LINK_PLACEHOLDER in m for m in messages):
+    if any(_EVENT_LINK_PLACEHOLDER in m or "http" in m for m in messages):
         return result
     logger.info("guardrail: детали ивента (#%s) без ссылки → довешиваю %s",
                 used["id"], _EVENT_LINK_PLACEHOLDER)
@@ -721,7 +745,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         if top.get("score", 0) >= threshold and not ambiguous:
             logger.info("фикс-сценарий #%s (score=%.3f >= %.2f, block=%s), OpenAI не вызываю",
                         top["id"], top["score"], threshold, is_block)
-            reply = _tag_event_interest(_fixed_reply(top), top)
+            reply = _enforce_nurture_stage(_tag_event_interest(_fixed_reply(top), top), top)
             if photo_thanks_prefix and reply["messages"]:
                 # Мердж короткого "спасибо за фото" в первый баббл (не отдельным сообщением —
                 # см. правило "NUNCA mandes un mensaje suelto de gracias por tu foto").
@@ -785,6 +809,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         if not result.get("used_scenario_id"):
             result["used_scenario_id"] = used["id"]
     result = _tag_event_interest(result, used)
+    result = _enforce_nurture_stage(result, used)
     result = _enforce_link_presence(result, used)
     result = await _enforce_service_price_gate(result, lead)
     return result

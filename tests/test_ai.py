@@ -215,17 +215,11 @@ class TestFixedReply:
         result = ai._fixed_reply(scenario)
         assert result["funnel_stage"] is None
 
-    def test_scenario_17_sets_nurture(self):
-        """#17 'no me interesa' — двигаем в nurture (no-followup)."""
-        scenario = _make_scenario(id=17)
-        result = ai._fixed_reply(scenario)
-        assert result["funnel_stage"] == "nurture"
-
-    def test_scenario_10_sets_nurture(self):
-        """#10 'bajo ingreso' — template dice 'lista de espera 6-12 meses' → nurture."""
-        scenario = _make_scenario(id=10)
-        result = ai._fixed_reply(scenario)
-        assert result["funnel_stage"] == "nurture"
+    def test_scenario_17_and_10_funnel_stage_none_by_itself(self):
+        """#10/#17 сами по себе funnel_stage не трогают — nurture проставляет
+        _enforce_nurture_stage() отдельно (единая точка для фикс- И AI-ветки)."""
+        assert ai._fixed_reply(_make_scenario(id=17))["funnel_stage"] is None
+        assert ai._fixed_reply(_make_scenario(id=10))["funnel_stage"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1120,6 +1114,19 @@ class TestEnforceLinkPresence:
             result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
         assert result["messages"] == ["Detalles del evento.", "Aquí tu boleto: [event_link] 🤍"]
 
+    async def test_no_duplicate_when_resolved_url_present(self, lead, history):
+        """sender.py подставляет [event_link] в реальный URL ДО записи в историю — если
+        AI естественно повторяет уже resolved-ссылку из контекста (не плейсхолдер), не
+        считаем это "ссылки нет" и не довешиваем дубликат (найдено 2026-09-01, eval r5)."""
+        scenario = _make_scenario(id=51, ai_allowed=True, mode="bot_auto", score=0.80)
+        ai_response = {**_VALID_AI_RESPONSE,
+                       "messages": ["Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026 🤍"],
+                       "used_scenario_id": 51}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
+        assert result["messages"] == ["Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026 🤍"]
+
     async def test_noop_for_unrelated_scenario(self, lead, history):
         """used_scenario_id no в {51,52} — гейт не трогает ответ вообще."""
         scenario = _make_scenario(id=16, ai_allowed=True, mode="bot_auto", score=0.80)
@@ -1181,6 +1188,46 @@ class TestTagEventInterest:
             result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
         mock_openai.assert_not_awaited()
         assert result["extracted"] == {"interest": "event"}
+
+
+class TestEnforceNurtureStage:
+    """funnel_stage='nurture' для #10 (bajo ingreso) / #17 (no me interesa) — единая
+    пост-генерационная точка, не полагаемся только на промпт (регресс 2026-08-06)."""
+
+    def test_tags_nurture_for_scenario_10(self):
+        used = _make_scenario(id=10)
+        result = {"action": "respond", "funnel_stage": "qualifying"}
+        out = ai._enforce_nurture_stage(result, used)
+        assert out["funnel_stage"] == "nurture"
+
+    def test_tags_nurture_for_scenario_17(self):
+        used = _make_scenario(id=17)
+        result = {"action": "respond", "funnel_stage": None}
+        out = ai._enforce_nurture_stage(result, used)
+        assert out["funnel_stage"] == "nurture"
+
+    def test_noop_for_unrelated_scenario(self):
+        used = _make_scenario(id=16)
+        result = {"action": "respond", "funnel_stage": "qualifying"}
+        out = ai._enforce_nurture_stage(result, used)
+        assert out["funnel_stage"] == "qualifying"
+
+    def test_noop_when_action_not_respond(self):
+        used = _make_scenario(id=10)
+        result = {"action": "block", "funnel_stage": "qualifying"}
+        out = ai._enforce_nurture_stage(result, used)
+        assert out["funnel_stage"] == "qualifying"
+
+    async def test_fixed_branch_sets_nurture(self, lead, history):
+        """№10 через детерминированную ветку (ai_allowed=false) → nurture всё равно
+        проставляется, хотя OpenAI не вызывался."""
+        scenario = _make_scenario(id=10, ai_allowed=False, score=0.70,
+                                   template_es="Lista de espera 6-12 meses.")
+        with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
+             patch("ai._call_openai", AsyncMock()) as mock_openai:
+            result = await ai.generate_reply(lead, history, "trabajo de mesero")
+        mock_openai.assert_not_awaited()
+        assert result["funnel_stage"] == "nurture"
 
 
 class TestEnforceServicePriceGate:
