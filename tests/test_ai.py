@@ -1555,3 +1555,53 @@ class TestEnforceEmojiBudget:
             result = {"action": action, "messages": ["Perfecto, gracias 😊"]}
             out = ai._enforce_emoji_budget(result, history)
             assert out["messages"] == ["Perfecto, gracias 😊"]
+
+
+class TestEnforceNoSelfNarration:
+    """No narrar en voz alta el propio siguiente paso ("En cuanto los tenga, te
+    pregunto...") — encontrado 2026-09-02, live test: instrucción de secuencia del
+    prompt tomada literalmente como algo para decirle al lead."""
+
+    def test_removes_whole_narration_bubble(self):
+        result = {"action": "respond", "messages": [
+            "¡Perfecto! ¿Me pasas tu nombre completo y correo?",
+            "En cuanto los tenga, te pregunto qué día y hora te quedan bien 😊",
+        ]}
+        out = ai._enforce_no_self_narration(result)
+        assert out["messages"] == ["¡Perfecto! ¿Me pasas tu nombre completo y correo?"]
+
+    def test_case_insensitive_and_variant_wording(self):
+        result = {"action": "respond", "messages": [
+            "¿Me compartes tu correo?",
+            "en cuanto lo tenga te pregunto cuándo te queda la llamada",
+        ]}
+        out = ai._enforce_no_self_narration(result)
+        assert len(out["messages"]) == 1
+
+    def test_never_leaves_messages_empty(self):
+        """Si el bubble de narración es el ÚNICO — no lo quitamos (mejor una frase
+        rara que una respuesta vacía)."""
+        result = {"action": "respond",
+                  "messages": ["En cuanto los tenga, te pregunto qué día te queda"]}
+        out = ai._enforce_no_self_narration(result)
+        assert out["messages"] == ["En cuanto los tenga, te pregunto qué día te queda"]
+
+    def test_noop_when_no_narration_present(self):
+        result = {"action": "respond", "messages": ["Perfecto, gracias.", "¿Y tu edad?"]}
+        out = ai._enforce_no_self_narration(result)
+        assert out["messages"] == ["Perfecto, gracias.", "¿Y tu edad?"]
+
+    def test_noop_for_legitimate_future_mention_not_matching_pattern(self):
+        """No debe activarse en menciones normales del futuro que no empiezan con
+        'en cuanto' o no incluyen 'te pregunto' — ambigüedad evitada a propósito."""
+        result = {"action": "respond",
+                  "messages": ["Cuando nos llamemos, te cuento todo con calma 🤍"]}
+        out = ai._enforce_no_self_narration(result)
+        assert out["messages"] == ["Cuando nos llamemos, te cuento todo con calma 🤍"]
+
+    def test_noop_when_action_block_or_silent(self):
+        for action in ("block", "silent"):
+            result = {"action": action, "messages": [
+                "¿Nombre y correo?", "En cuanto los tenga, te pregunto qué día"]}
+            out = ai._enforce_no_self_narration(result)
+            assert len(out["messages"]) == 2

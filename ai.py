@@ -443,6 +443,35 @@ def _enforce_emoji_budget(result: dict, history: list[dict]) -> dict:
     return result
 
 
+# Самонарратив собственного следующего шага ("En cuanto los tenga, te pregunto qué día
+# y hora...") — найдено 2026-09-02, живой тест: инструкция промпта про очерёдность
+# ("en cuanto tengas nombre+correo, pasa DIRECTO a agendar") иногда пересказывается
+# лиду буквально, как будто бот читает вслух свой сценарий, вместо того чтобы просто
+# сделать это в свой черёд. Промпт уже прямо просит так не делать, но AI не всегда
+# соблюдает (2/3 прогонов ок, 1/3 — нет). Целиком убираем БАББЛ, если он ЦЕЛИКОМ —
+# самонарратив (не редактируем текст внутри смешанного баббла — риск сломать
+# грамматику; безопаснее выкинуть весь баббл, раз он не несёт другой пользы).
+_SELF_NARRATION_RE = re.compile(r"^\W*en\s+cuanto\b.*\bte\s+pregunt", re.IGNORECASE | re.DOTALL)
+
+
+def _enforce_no_self_narration(result: dict) -> dict:
+    """Убирает баббл, который целиком — самонарратив будущего шага (см. _SELF_NARRATION_RE).
+    Никогда не оставляет messages пустым — если баббл единственный, не трогаем (лучше
+    оставить кривую фразу, чем ответить пустотой)."""
+    if result.get("action") not in ("respond", "escalate") or not result.get("messages"):
+        return result
+    messages = result["messages"]
+    if len(messages) <= 1:
+        return result
+    filtered = [m for m in messages if not _SELF_NARRATION_RE.match(m.strip())]
+    if not filtered or len(filtered) == len(messages):
+        return result
+    result = dict(result)
+    result["messages"] = filtered
+    logger.info("guardrail: убрала баббл-самонарратив ('en cuanto...te pregunto...')")
+    return result
+
+
 _EVENT_LINK_PLACEHOLDER = "[event_link]"
 _EVENT_LINK_BUBBLE = ("Aquí está el enlace para tu boleto, con fotos y videos de eventos "
                        f"pasados: {_EVENT_LINK_PLACEHOLDER} 🤍")
@@ -1027,4 +1056,5 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = await _enforce_service_price_gate(result, lead)
     result = _enforce_no_regreet_on_repeat(result, user_text, history)
     result = _enforce_emoji_budget(result, history)
+    result = _enforce_no_self_narration(result)
     return result
