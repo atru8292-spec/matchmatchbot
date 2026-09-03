@@ -264,19 +264,65 @@ def _fixed_reply(scenario: dict) -> dict:
     }
 
 
-def _tag_event_interest(result: dict, used: dict | None) -> dict:
-    """Если реально использовался сценарий про ивент (№2/№51/№52) — фиксируем
-    extracted.interest='event' явно, единой пост-генерационной точкой для фикс- И
-    AI-ветки. Раньше это было захардкожено только внутри _fixed_reply для №51/№52
-    (регресс 2026-08-26). №2 добавлен 2026-09-01: это самый частый первый ответ на
-    "info del evento" (натуральный RAG-топ, не 51/52), но не входил в набор — interest
-    никогда не сохранялся с первого сообщения, и форс "фото одобрено + interest=event"
-    ниже никогда не срабатывал (тот же класс регресса, другой путь).
+def _event_interest_upgrade(prior_interest: str | None) -> str | None:
+    """Куда апгрейдить lead.interest при уверенном матче на сценарий-ивент.
+    None — менять не нужно (уже 'event', или уже 'both' — событие и так покрыто).
+
+    Лид мог РАНЬШЕ интересоваться сервисом (interest='agency') и только сейчас заодно
+    спросить про ивент — слепое "= event" стёрло бы agency-интерес (сломало бы
+    event_recipients-таргетинг и вообще перепутало бы, что лиду предлагать дальше,
+    найдено 2026-09-03). 'both' — уже предусмотренное схемой/промптом значение для
+    интереса к обоим направлениям.
     """
-    if not used or used.get("id") not in _EVENT_INTEREST_SCENARIOS:
+    if prior_interest == "agency":
+        return "both"
+    if prior_interest in ("event", "both"):
+        return None
+    return "event"
+
+
+def _merge_interest(new_interest: str | None, prior_interest: str | None) -> str | None:
+    """Не даём свежему extracted['interest'] стереть уже известный 'both'/противоположный
+    интерес — та же защита, что у _event_interest_upgrade, но применённая к ЛЮБОМУ
+    источнику нового значения, не только к форсу через сценарий-ивент. LLM МОЖЕТ сама
+    положить interest в JSON-ответ (промпт это разрешает) в обход _tag_event_interest
+    целиком — тот же класс потери данных достижим другим путём (найдено 2026-09-03,
+    code-review). None — new_interest не менялся (нечего мерджить).
+    """
+    if not new_interest or new_interest == prior_interest:
+        return new_interest
+    if prior_interest == "both":
+        return "both"           # уже покрывает всё, свежее ýже — не сужаем
+    if {new_interest, prior_interest} == {"agency", "event"}:
+        return "both"           # разнонаправленные интересы → both
+    return new_interest
+
+
+def _tag_event_interest(result: dict, used: dict | None, lead: dict | None = None) -> dict:
+    """Если реально использовался сценарий про ивент (№2/№51/№52) — фиксируем
+    interest в extracted явно, единой пост-генерационной точкой для фикс- И AI-ветки.
+    Раньше это было захардкожено только внутри _fixed_reply для №51/№52 (регресс
+    2026-08-26). №2 добавлен 2026-09-01: это самый частый первый ответ на "info del
+    evento" (натуральный RAG-топ, не 51/52), но не входил в набор — interest никогда
+    не сохранялся с первого сообщения, и форс "фото одобрено + interest=event" ниже
+    никогда не срабатывал (тот же класс регресса, другой путь).
+
+    Не форсим на слабом одиночном RAG-кандидате (score < FALLBACK_SCORE) — иначе
+    случайный/неуверенный матч мог бы навсегда проставить interest='event' лиду,
+    который на самом деле не про ивент (ambiguous-проверка выше этого не ловит: она
+    смотрит на разрыв топ-1/топ-2, а не на абсолютный score единственного кандидата;
+    найдено 2026-09-03). Не перезаписываем interest, если LLM уже что-то извлекла сама
+    (напр. 'both') — см. _event_interest_upgrade для апгрейда с учётом прежнего
+    lead.interest (agency→both, не затираем)."""
+    if (not used or used.get("id") not in _EVENT_INTEREST_SCENARIOS
+            or used.get("score", 0) < FALLBACK_SCORE
+            or result.get("extracted", {}).get("interest")):
+        return result
+    new_interest = _event_interest_upgrade((lead or {}).get("interest"))
+    if not new_interest:
         return result
     result = dict(result)
-    result["extracted"] = {**result.get("extracted", {}), "interest": "event"}
+    result["extracted"] = {**result.get("extracted", {}), "interest": new_interest}
     return result
 
 
@@ -985,7 +1031,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         if top.get("score", 0) >= threshold and not ambiguous:
             logger.info("фикс-сценарий #%s (score=%.3f >= %.2f, block=%s), OpenAI не вызываю",
                         top["id"], top["score"], threshold, is_block)
-            reply = _enforce_nurture_stage(_tag_event_interest(_fixed_reply(top), top), top)
+            reply = _enforce_nurture_stage(_tag_event_interest(_fixed_reply(top), top, lead), top)
             if photo_thanks_prefix and reply["messages"]:
                 # Мердж короткого "спасибо за фото" в первый баббл (не отдельным сообщением —
                 # см. правило "NUNCA mandes un mensaje suelto de gracias por tu foto").
@@ -1048,7 +1094,13 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         result["needs_escalation"] = True
         if not result.get("used_scenario_id"):
             result["used_scenario_id"] = used["id"]
-    result = _tag_event_interest(result, used)
+    result = _tag_event_interest(result, used, lead)
+    # LLM может положить interest в extracted сама, в обход _tag_event_interest — тот
+    # же риск потери agency/both другим путём (см. _merge_interest). Единая
+    # пост-генерационная точка нормализации, как и у остальных guardrail'ов здесь.
+    merged_interest = _merge_interest(result["extracted"].get("interest"), lead.get("interest"))
+    if merged_interest and merged_interest != result["extracted"].get("interest"):
+        result["extracted"]["interest"] = merged_interest
     result = _enforce_nurture_stage(result, used, ambiguous)
     result = _enforce_service_qualification_gate(result, user_text, lead)
     result = _enforce_link_presence(result, used)

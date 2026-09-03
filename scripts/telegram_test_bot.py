@@ -9,9 +9,11 @@ source='telegram_test' — не путается с реальными WhatsApp-
 Фото — ВНЕ дебаунса (отдельная немедленная ветка, как и в проде).
 
 Фото: скачивается из Telegram и прогоняется через реальный vision.analyze_photo
-(тот же Vision, что в проде) — ok/retry/reject/manual ветки. Специально НЕ вызывает
-escalation.*/booking.*/db.block_lead — те шлют реальные алерты Ане/Миле в боевой
-менеджер-бот или создают реальные события в календаре, а это песочница.
+(тот же Vision, что в проде) — ok/retry/reject/manual ветки, с записью в lead_photos
+(verdict/reasons/analysis), как в main._process_photos. Отличие от прода: эскалация
+(manual/reject) НЕ шлёт реальный алерт в боевой менеджер-бот Ане/Миле — вместо этого
+помечается прямо в тест-чате (префикс 🧪), чтобы не спамить их боевые уведомления
+тестовыми фото. booking.*/db.block_lead по той же причине тоже не вызываются напрямую.
 
 Видео ивента: если сценарий помечает send_event_video — реально скачиваем/шлём
 случайное видео из event_media (тот же пул, что в проде), с тем же дедупом.
@@ -30,6 +32,7 @@ import asyncio
 import logging
 import re
 import sys
+from datetime import datetime
 
 import httpx
 
@@ -62,6 +65,21 @@ def _phone(chat_id: int) -> str:
 
 def _chat_id_from_phone(phone: str) -> int:
     return int(phone.removeprefix("tg_"))
+
+
+def _parse_dob(s: str):
+    """Строка даты рождения от AI → date. Дублирует main._parse_dob (не импортируем
+    main.py сюда — он поднимает FastAPI app/lifespan/scheduler, тяжело для скрипта).
+    Без этого db.upsert_lead падал бы на date_of_birth-строке (asyncpg ждёт date),
+    и это исключение ничем не ловилось в текстовой ветке (_on_flush) — терялось молча
+    (найдено 2026-09-03, code-review)."""
+    s = (s or "").strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 RESET_LABEL = "🔄 Начать заново"
@@ -152,12 +170,29 @@ async def _reply_via_ai(client: httpx.AsyncClient, chat_id: int, phone: str,
 
     await _maybe_send_event_video(client, chat_id, phone, result)
 
-    extracted = result.get("extracted") or {}
-    update_fields = {k: v for k, v in extracted.items() if v is not None}
-    if result.get("funnel_stage"):
-        update_fields["funnel_stage"] = result["funnel_stage"]
-    if update_fields:
-        await db.upsert_lead(phone, **update_fields)
+    # Обёртка (найдено 2026-09-03, code-review): без try/except исключение здесь
+    # (напр. date_of_birth-строка не сконвертирована → asyncpg падает на upsert_lead)
+    # тонуло молча. Через _handle_photo ловилось внешним try/except, но бабблы уже
+    # ушли лиду — тестировщик видел нормальный ответ без объяснения. Через _on_flush
+    # (текстовая ветка) ловил только Debouncer._flush — тот просто логирует, СОВСЕМ
+    # без сигнала тестировщику: extracted-поля/funnel_stage тихо не сохранялись.
+    try:
+        extracted = dict(result.get("extracted") or {})
+        if isinstance(extracted.get("date_of_birth"), str):
+            dob = _parse_dob(extracted["date_of_birth"])
+            if dob is not None:
+                extracted["date_of_birth"] = dob
+            else:
+                extracted.pop("date_of_birth", None)  # не распарсили — пропускаем
+        update_fields = {k: v for k, v in extracted.items() if v is not None}
+        if result.get("funnel_stage"):
+            update_fields["funnel_stage"] = result["funnel_stage"]
+        if update_fields:
+            await db.upsert_lead(phone, **update_fields)
+    except Exception:
+        logger.exception("не смогла сохранить extracted/funnel_stage (chat_id=%s)", chat_id)
+        await _test_note(chat_id, "сбой сохранения данных лида после ответа — "
+                                    "смотри логи (не критично для самого ответа, он уже отправлен)")
 
 
 async def _send_scenario_text(client: httpx.AsyncClient, chat_id: int, phone: str,
@@ -214,10 +249,21 @@ async def _download_telegram_photo(client: httpx.AsyncClient, file_id: str) -> b
     return r2.content
 
 
+async def _test_note(chat_id: int, text: str) -> None:
+    """Служебная пометка в тест-чат вместо реального алерта Ане/Миле (песочница —
+    эскалация НЕ уходит в боевой менеджер-бот). Без HTML-тегов: _send экранирует
+    '<'/'>' через _to_telegram_html, теги пришли бы литералом."""
+    await _send(_client, chat_id, f"🧪 {text}")
+
+
 async def _handle_photo(chat_id: int, photo_sizes: list[dict], tg_name: str,
                         caption: str | None = None) -> None:
-    """Фото → реальный Vision (как в проде), без escalation/booking/block (песочница).
-    Вне дебаунса — отдельная немедленная ветка (как и в проде).
+    """Фото → тот же пайплайн, что в проде (main._process_photos): реальный Vision,
+    сохранение в lead_photos (verdict/reasons/analysis), проставление photo_received/
+    funnel_stage. Единственное отличие от прода — эскалация (manual/reject) не шлёт
+    реальный алерт в менеджер-бот Ане/Миле, а помечается прямо в тест-чате (🧪), чтобы
+    не спамить их боевые уведомления тестовыми фото. Вне дебаунса — отдельная
+    немедленная ветка (как и в проде).
 
     caption — подпись к фото (Telegram отдаёт её отдельным полем message.caption).
     Раньше терялась целиком — лид, подписавший фото анкетными данными, получал
@@ -239,20 +285,39 @@ async def _handle_photo(chat_id: int, photo_sizes: list[dict], tg_name: str,
     verdict = res["verdict"]
     logger.info("фото [%s]: verdict=%s (%s)", phone, verdict, res.get("reason", ""))
 
-    if verdict == "ok":
-        await db.upsert_lead(phone, photo_received=True, funnel_stage="qualified")
-        history = await db.get_conversation_history(phone, limit=30)
-        lead = await db.get_lead_by_phone(phone)
-        user_text = f"{caption}\n\n[фото одобрено]" if caption else "[фото одобрено]"
-        await _reply_via_ai(_client, chat_id, phone, lead, history, user_text)
-    elif verdict == "retry":
-        await _send_scenario_text(_client, chat_id, phone, 11)  # "mándame otra foto..."
-    elif verdict == "reject":
-        await _send_scenario_text(_client, chat_id, phone, 12)  # despedida
-    else:  # manual — в проде решает Аня по кнопке; в песочнице просто отвечаем нейтрально
-        await _send(_client, chat_id,
-                     "Déjame revisar tu foto con calma y te confirmo en un momento 🤍 "
-                     f"(vision: manual — {res.get('reason', 'sin motivo')})")
+    url, path = await vision.upload_to_storage(phone, img)  # сбой → (None, None), не критично
+    try:
+        await db.save_photo(phone, url, path, verdict, analysis=res,
+                            reasons=[res.get("reason", "")] if res.get("reason") else [],
+                            channel="telegram_test")
+    except Exception:
+        logger.exception("save_photo упал (chat_id=%s) — продолжаю без записи в lead_photos", chat_id)
+
+    # Обёртка: db.upsert_lead/update_lead_fields бросают при сбое (не глотают ошибку
+    # сами) — main() их не оборачивает, поэтому без try/except здесь сбой БД уронил бы
+    # всю корутину poll-цикла, а не только обработку одного фото.
+    try:
+        if verdict == "ok":
+            await db.upsert_lead(phone, photo_received=True, funnel_stage="qualified")
+            history = await db.get_conversation_history(phone, limit=30)
+            lead = await db.get_lead_by_phone(phone)
+            user_text = f"{caption}\n\n[фото одобрено]" if caption else "[фото одобрено]"
+            await _reply_via_ai(_client, chat_id, phone, lead, history, user_text)
+        elif verdict == "retry":
+            await _send_scenario_text(_client, chat_id, phone, 11)  # "mándame otra foto..."
+        elif verdict == "reject":
+            await _send_scenario_text(_client, chat_id, phone, 12)  # despedida
+            await _test_note(chat_id, f"vision: reject ({res.get('reason', 'sin motivo')}) — "
+                                        "в проде: block_lead навсегда + алерт Ане")
+        else:  # manual — в проде решает Аня по кнопке (эскалация); в песочнице только помечаем
+            await db.update_lead_fields(phone, mode="manual")  # как в проде (main.py._process_photos)
+            await _send(_client, chat_id,
+                         "Déjame revisar tu foto con calma y te confirmo en un momento 🤍")
+            await _test_note(chat_id, f"vision: manual ({res.get('reason', 'sin motivo')}) — "
+                                        "в проде: mode=manual + эскалация Ане на ручную проверку")
+    except Exception:
+        logger.exception("обработка verdict=%s упала (chat_id=%s)", verdict, chat_id)
+        await _send(_client, chat_id, "Ой, что-то сломалось на моей стороне после фото 🤍")
 
 
 async def main() -> None:
@@ -281,10 +346,16 @@ async def main() -> None:
                 tg_name = (msg.get("from") or {}).get("first_name") or "Test"
                 text = msg.get("text")
                 photo = msg.get("photo")
-                if photo:
-                    await _handle_photo(chat_id, photo, tg_name, msg.get("caption"))
-                elif text:
-                    await _handle_message(chat_id, text, tg_name)
+                try:
+                    if photo:
+                        await _handle_photo(chat_id, photo, tg_name, msg.get("caption"))
+                    elif text:
+                        await _handle_message(chat_id, text, tg_name)
+                except Exception:
+                    # Один сбойный update не должен ронять весь poll-цикл (главное отличие
+                    # от прода: там роль такой обёртки играет main.py вокруг вебхука; здесь
+                    # это единственная точка входа, свой telegram alert-канал не заведён).
+                    logger.exception("обработка update упала (chat_id=%s)", chat_id)
 
 
 if __name__ == "__main__":

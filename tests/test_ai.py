@@ -1234,6 +1234,32 @@ class TestTagEventInterest:
         out = ai._tag_event_interest(result, None)
         assert out["extracted"] == {}
 
+    def test_prior_agency_interest_upgraded_to_both(self):
+        """Лид раньше интересовался сервисом (interest='agency'), теперь заодно матчит
+        сценарий-ивент — не стираем agency-интерес, повышаем до 'both' (найдено
+        2026-09-03: слепое "= event" ломало event_recipients-таргетинг и путало, что
+        лиду предлагать дальше)."""
+        used = _make_scenario(id=51)
+        result = {"extracted": {}}
+        out = ai._tag_event_interest(result, used, lead={"interest": "agency"})
+        assert out["extracted"] == {"interest": "both"}
+
+    def test_prior_both_interest_not_downgraded(self):
+        used = _make_scenario(id=51)
+        result = {"extracted": {}}
+        out = ai._tag_event_interest(result, used, lead={"interest": "both"})
+        assert "interest" not in out["extracted"]
+
+    def test_weak_single_candidate_does_not_tag_interest(self):
+        """score < FALLBACK_SCORE (одиночный слабый RAG-матч) → не форсим interest —
+        RAG тут явно не уверен (регресс-тест на guard по абсолютному score, найдено
+        2026-09-03: ambiguous-проверка не ловит этот случай, она смотрит на разрыв
+        топ-1/топ-2, а не на абсолютную уверенность единственного кандидата)."""
+        used = _make_scenario(id=2, score=0.10)  # ниже FALLBACK_SCORE=0.40
+        result = {"extracted": {}}
+        out = ai._tag_event_interest(result, used, lead={"interest": None})
+        assert "interest" not in out["extracted"]
+
     async def test_fixed_branch_tags_interest(self, lead, history):
         """№51 через детерминированную ветку (ai_allowed=false) → interest='event'
         всё равно проставляется, хотя OpenAI не вызывался."""
@@ -1257,6 +1283,42 @@ class TestTagEventInterest:
              patch("ai._call_openai", AsyncMock(return_value=ai_response)):
             result = await ai.generate_reply(lead, history, "hola, información de evento")
         assert result["extracted"]["interest"] == "event"
+
+
+class TestMergeInterest:
+    """_merge_interest — LLM может положить interest в extracted САМА (промпт это
+    разрешает), в обход _tag_event_interest целиком. Тот же риск потери agency/both,
+    что и у _event_interest_upgrade, но достижимый другим путём (найдено 2026-09-03,
+    code-review). Единая пост-генерационная нормализация в generate_reply."""
+
+    def test_no_new_value_returns_none(self):
+        assert ai._merge_interest(None, "agency") is None
+
+    def test_same_value_passthrough(self):
+        assert ai._merge_interest("event", "event") == "event"
+
+    def test_no_prior_takes_new(self):
+        assert ai._merge_interest("event", None) == "event"
+
+    def test_prior_both_never_narrowed(self):
+        assert ai._merge_interest("event", "both") == "both"
+        assert ai._merge_interest("agency", "both") == "both"
+
+    def test_opposite_values_merge_to_both(self):
+        assert ai._merge_interest("event", "agency") == "both"
+        assert ai._merge_interest("agency", "event") == "both"
+
+    async def test_llm_sets_interest_directly_does_not_erase_agency(self, history):
+        """LLM сама вернула interest='event' в JSON (не через сценарий-ивент — top
+        здесь #1, обычное приветствие, не в _EVENT_INTEREST_SCENARIOS) — lead.interest
+        уже 'agency' → должно смерджиться в 'both', не затереться на голый 'event'."""
+        lead = _make_lead(is_single=True, funnel_stage="qualifying", interest="agency")
+        n1 = _make_scenario(id=1, ai_allowed=True, score=0.75)
+        ai_response = {**_VALID_AI_RESPONSE, "extracted": {"interest": "event"}}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n1])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
+            result = await ai.generate_reply(lead, [], "hola")
+        assert result["extracted"]["interest"] == "both"
 
 
 class TestEnforceNurtureStage:
