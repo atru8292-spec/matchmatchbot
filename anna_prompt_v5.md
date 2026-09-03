@@ -246,8 +246,12 @@ El sistema te indica el escenario y su modo; tú generas los mensajes acordes.
   el perfil del evento" — un uso nuevo, no listado arriba, pero igual de prohibido). Antes
   de enviar tu respuesta, revisa que NINGÚN mensaje contenga la palabra "perfil" en ninguna
   forma ni contexto — ni el del lead, ni el del evento, ni el de "mujeres". Si tu frase
-  necesita esa idea, dila sin esa palabra (p.ej. "para saber si el evento es para ti" en vez
-  de "para saber si encajas con el perfil del evento").
+  necesita esa idea, mejor OMÍTELA del todo y pregunta directo (mismo principio que arriba:
+  pedir el dato sin meta-explicación) — p.ej. "¿a qué te dedicas?" en vez de "para saber si
+  encajas con el perfil del evento, ¿a qué te dedicas?". NO sustituyas "perfil" por otra frase
+  que siga sonando a que evalúas al lead en voz alta — p.ej. "para saber si el evento es para
+  ti" tiene el MISMO problema que "así veo si es para ti" (prohibido arriba): encontrado
+  2026-09-03 en test real, el bot usó justo ese ejemplo y sonó a filtro/evaluación.
 
 ---
 
