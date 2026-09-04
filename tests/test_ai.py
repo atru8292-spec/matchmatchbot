@@ -1667,3 +1667,183 @@ class TestEnforceNoSelfNarration:
                 "¿Nombre y correo?", "En cuanto los tenga, te pregunto qué día"]}
             out = ai._enforce_no_self_narration(result)
             assert len(out["messages"]) == 2
+
+
+class TestIsPriceObjection:
+    """_is_price_objection — не путать negación ("no es caro" = precio SÍ le
+    funciona) con una objeción real (encontrado 2026-09-04, revisión propia)."""
+
+    @pytest.mark.parametrize("text,expected", [
+        ("está caro", True),
+        ("no me alcanza", True),
+        ("es mucho para mi", True),
+        ("caro", True),
+        ("no es caro", False),
+        ("no está tan caro", False),
+        ("no es muy caro", False),
+        ("no me parece caro", False),
+        ("esta bien de precio", False),
+    ])
+    def test_cases(self, text, expected):
+        assert ai._is_price_objection(text) is expected
+
+
+class TestEnforceCourseEscalation:
+    """2ª objeción de precio SEGUIDA sobre el EVENTO (#51/#52) → garantiza mención de
+    cursos (último escalón), sin depender solo del prompt (encontrado 2026-09-03/04,
+    0/3 en test real: el LLM repetía indefinidamente la misma defensa de valor)."""
+
+    def test_second_consecutive_objection_adds_courses(self):
+        used = _make_scenario(id=51)
+        history = [{"sender": "lead", "text": "este caro"}]
+        result = {"action": "respond", "messages": ["Te entiendo, vale la pena."]}
+        out = ai._enforce_course_escalation(result, used, "caro", history)
+        assert any("curso" in m.lower() for m in out["messages"])
+        assert any("[course_link]" in m for m in out["messages"])
+        assert out["messages"][0] == "Te entiendo, vale la pena."  # no toca lo generado
+
+    def test_first_objection_noop(self):
+        """Primera objeción (el mensaje ANTERIOR del lead no era objeción) — no
+        escalamos todavía, es la defensa de valor normal."""
+        used = _make_scenario(id=51)
+        history = [{"sender": "lead", "text": "y qué incluye el precio?"}]
+        result = {"action": "respond", "messages": ["El precio incluye..."]}
+        out = ai._enforce_course_escalation(result, used, "caro", history)
+        assert out["messages"] == ["El precio incluye..."]
+
+    def test_noop_when_current_message_not_objection(self):
+        used = _make_scenario(id=51)
+        history = [{"sender": "lead", "text": "está caro"}]
+        result = {"action": "respond", "messages": ["Perfecto, gracias."]}
+        out = ai._enforce_course_escalation(result, used, "y a qué hora empieza?", history)
+        assert out["messages"] == ["Perfecto, gracias."]
+
+    def test_noop_for_unrelated_scenario(self):
+        """Objeción de precio pero NO estamos en el escalón evento (#51/#52) — este
+        guardrail no es responsable (esa es la escalera del SERVICIO, ver prompt)."""
+        used = _make_scenario(id=2)
+        history = [{"sender": "lead", "text": "caro"}]
+        result = {"action": "respond", "messages": ["Te entiendo."]}
+        out = ai._enforce_course_escalation(result, used, "caro", history)
+        assert out["messages"] == ["Te entiendo."]
+
+    def test_noop_when_already_mentions_courses(self):
+        used = _make_scenario(id=51)
+        history = [{"sender": "lead", "text": "caro"}]
+        result = {"action": "respond",
+                  "messages": ["Te entiendo. También tengo cursos en línea: [course_link]"]}
+        out = ai._enforce_course_escalation(result, used, "caro", history)
+        assert out["messages"] == result["messages"]
+
+    def test_max_messages_replaces_link_only_last_bubble(self):
+        """Al tope de MAX_MESSAGES, si el ÚLTIMO bubble es SOLO el link del boleto
+        (forzado por _enforce_link_presence, sin importar el tipo de turno) — lo
+        reemplazamos directo por cursos: si el link ya se había enviado, sender.py
+        lo iba a dropear solo igual (Layer 2 dedup); no vale la pena sacrificar
+        contenido real por él."""
+        used = _make_scenario(id=51)
+        history = [{"sender": "lead", "text": "caro"}]
+        result = {"action": "respond",
+                  "messages": ["uno", "dos", "tres", "Aquí tu boleto: [event_link] 🤍"]}
+        out = ai._enforce_course_escalation(result, used, "caro", history)
+        assert len(out["messages"]) == ai.MAX_MESSAGES
+        assert out["messages"][:3] == ["uno", "dos", "tres"]
+        assert "[course_link]" in out["messages"][-1]
+
+    def test_max_messages_sacrifices_penultimate_when_last_is_real_content(self):
+        """Si el ÚLTIMO bubble es contenido real (no un link) — lo conservamos y
+        sacrificamos el penúltimo para hacer espacio a cursos."""
+        used = _make_scenario(id=51)
+        history = [{"sender": "lead", "text": "caro"}]
+        result = {"action": "respond",
+                  "messages": ["uno", "dos", "tres", "Créeme, vale la pena 🤍"]}
+        out = ai._enforce_course_escalation(result, used, "caro", history)
+        assert len(out["messages"]) == ai.MAX_MESSAGES
+        assert out["messages"][-1] == "Créeme, vale la pena 🤍"
+        assert "[course_link]" in out["messages"][-2]
+
+    def test_noop_when_action_not_respond(self):
+        used = _make_scenario(id=51)
+        history = [{"sender": "lead", "text": "caro"}]
+        result = {"action": "escalate", "messages": ["ok"]}
+        out = ai._enforce_course_escalation(result, used, "caro", history)
+        assert out["messages"] == ["ok"]
+
+
+class TestEnforceNoLinkRepeat:
+    """No repetir una URL que el LLM escribió como texto libre (copiada del
+    historial, no el placeholder [event_link] — ese ya dedupica sender.py) si ya se
+    le envió a este lead antes. Encontrado 2026-09-03/04: mismo link 2-3 veces
+    seguidas en minutos ante objeciones repetidas."""
+
+    async def test_removes_bubble_with_already_sent_url(self):
+        lead = {"phone": "tg_test"}
+        result = {"action": "respond", "messages": [
+            "Te entiendo.",
+            "Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026 🤍",
+        ]}
+        with patch("ai.db.link_already_sent", AsyncMock(return_value=True)):
+            out = await ai._enforce_no_link_repeat(result, lead)
+        assert out["messages"] == ["Te entiendo."]
+
+    async def test_strips_trailing_punctuation_before_comparing(self):
+        """URL pegada a un punto sin espacio ("...aquí: https://url.") — \\S+ la
+        capturaría con el punto incluido; sin normalizar, no coincidiría con la URL
+        ya guardada (sin punto) y el dedup fallaría (найдено 2026-09-04, code-review).
+        Verificamos que la URL pasada a link_already_sent NO tiene el punto final."""
+        lead = {"phone": "tg_test"}
+        result = {"action": "respond", "messages": [
+            "Te entiendo.",
+            "Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026.",
+        ]}
+        mock_sent = AsyncMock(return_value=True)
+        with patch("ai.db.link_already_sent", mock_sent):
+            out = await ai._enforce_no_link_repeat(result, lead)
+        assert out["messages"] == ["Te entiendo."]
+        mock_sent.assert_awaited_once_with("tg_test", "https://www.rusaencdmx.com/09-09-2026")
+
+    async def test_keeps_bubble_with_new_url(self):
+        lead = {"phone": "tg_test"}
+        result = {"action": "respond", "messages": [
+            "Te entiendo.",
+            "Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026 🤍",
+        ]}
+        with patch("ai.db.link_already_sent", AsyncMock(return_value=False)):
+            out = await ai._enforce_no_link_repeat(result, lead)
+        assert out["messages"] == result["messages"]
+
+    async def test_never_leaves_messages_empty(self):
+        """Si el ÚNICO bubble tiene la URL repetida — lo dejamos (mejor repetir que
+        quedarse sin respuesta), mismo principio que _enforce_no_self_narration."""
+        lead = {"phone": "tg_test"}
+        result = {"action": "respond",
+                  "messages": ["Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026 🤍"]}
+        with patch("ai.db.link_already_sent", AsyncMock(return_value=True)):
+            out = await ai._enforce_no_link_repeat(result, lead)
+        assert out["messages"] == result["messages"]
+
+    async def test_noop_when_action_not_respond(self):
+        lead = {"phone": "tg_test"}
+        result = {"action": "escalate",
+                  "messages": ["Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026 🤍"]}
+        with patch("ai.db.link_already_sent", AsyncMock(return_value=True)):
+            out = await ai._enforce_no_link_repeat(result, lead)
+        assert out["messages"] == result["messages"]
+
+    async def test_noop_without_phone(self):
+        lead = {}
+        result = {"action": "respond",
+                  "messages": ["Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026 🤍"]}
+        with patch("ai.db.link_already_sent", AsyncMock(return_value=True)) as mock_sent:
+            out = await ai._enforce_no_link_repeat(result, lead)
+        assert out["messages"] == result["messages"]
+        mock_sent.assert_not_awaited()
+
+    async def test_db_failure_keeps_bubble(self):
+        """Sбой БД → лучше отправить (не потерять ответ), чем ошибочно дропнуть."""
+        lead = {"phone": "tg_test"}
+        result = {"action": "respond",
+                  "messages": ["Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026 🤍"]}
+        with patch("ai.db.link_already_sent", AsyncMock(side_effect=RuntimeError("db down"))):
+            out = await ai._enforce_no_link_repeat(result, lead)
+        assert out["messages"] == result["messages"]

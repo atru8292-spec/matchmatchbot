@@ -716,6 +716,152 @@ def _is_ad_keyword(text: str) -> bool:
     return bool(_AD_KEYWORD_RE.search(text or ""))
 
 
+# Возражение по цене ("está caro", "no me alcanza"...) — для гейта эскалации на курсы
+# ниже (_enforce_course_escalation). Не различает сервис/ивент — контекст решает
+# used.id в самом гейте.
+_PRICE_OBJECTION_RE = re.compile(
+    r"\b(car[oa]|no me alcanza|no puedo pagar(?:lo)?|es mucho|muy car[oa]|"
+    r"no tengo (?:ese )?dinero|fuera de (?:mi )?presupuesto)\b",
+    re.IGNORECASE,
+)
+# Negación directa ("no es caro", "no está tan caro", "no me parece caro") — el lead
+# dice que el precio SÍ le funciona, lo contrario de una objeción. Sin este filtro
+# _PRICE_OBJECTION_RE la matchearía igual (contiene "caro") — encontrado 2026-09-04,
+# revisión propia antes de code-review.
+_PRICE_OBJECTION_NEGATION_RE = re.compile(
+    r"\bno\s+(?:es|está|esta|me parece)?\s*(?:tan|muy)?\s*car[oa]\b", re.IGNORECASE,
+)
+
+
+def _is_price_objection(text: str) -> bool:
+    text = text or ""
+    if _PRICE_OBJECTION_NEGATION_RE.search(text):
+        return False
+    return bool(_PRICE_OBJECTION_RE.search(text))
+
+
+def _last_lead_text(history: list[dict]) -> str | None:
+    """Последняя реплика ЛИДА (sender='lead') из истории — аналог _last_anna_text,
+    для проверки "это уже ВТОРОЕ подряд возражение" в _enforce_course_escalation."""
+    for m in reversed(history or []):
+        if m.get("sender") == "lead" and (m.get("text") or "").strip():
+            return m["text"]
+    return None
+
+
+_URL_RE = re.compile(r"https?://\S+")
+_URL_TRAILING_PUNCT = ".,;:!?)]}\"'"
+
+
+async def _enforce_no_link_repeat(result: dict, lead: dict) -> dict:
+    """No repetir un enlace (billete/cursos) que YA se envió a este lead antes.
+
+    Encontrado 2026-09-03/04 en test real: cuando el lead insiste con la misma
+    objeción de precio, el LLM a veces copia la URL YA RESUELTA que ve en
+    conversation_history (no el placeholder [event_link]/[course_link], que sí
+    dedupica sender.py vía db.link_already_sent — ver _enforce_link_presence) —
+    resultado: el mismo link 2-3 veces seguidas en minutos, se ve robótico y es
+    justo el patrón de spam que el antiban del proyecto busca evitar (CLAUDE.md).
+    Reutiliza el MISMO chequeo que usa sender.py para el placeholder, aplicado a
+    cualquier URL que el LLM haya escrito él mismo en texto libre.
+
+    Elimina el BABBLE ENTERO que contiene una URL ya enviada (no edita el texto a
+    medias — mismo principio que _enforce_no_self_narration). Nunca deja messages
+    vacío: si el único babble tiene la URL repetida, lo dejamos (mejor repetir que
+    quedarse sin respuesta).
+    """
+    if result.get("action") != "respond":
+        return result
+    messages = result.get("messages") or []
+    phone = lead.get("phone")
+    if not messages or not phone:
+        return result
+    kept = []
+    changed = False
+    for m in messages:
+        # \S+ жадно захватывает хвостовую пунктуацию, если URL стоит перед точкой/
+        # скобкой без пробела ("...aquí: https://url."). db.link_already_sent ищет
+        # ТОЧНОЕ вхождение подстроки — с лишней точкой не совпало бы с уже
+        # сохранённым текстом (там после URL пробел+emoji, не точка) → повторная
+        # ссылка осталась бы незамеченной (найдено 2026-09-04, code-review).
+        urls = [u.rstrip(_URL_TRAILING_PUNCT) for u in _URL_RE.findall(m)]
+        already = False
+        if urls:
+            try:
+                for u in urls:
+                    if await db.link_already_sent(phone, u):
+                        already = True
+                        break
+            except Exception:
+                logger.exception("_enforce_no_link_repeat: link_already_sent упал, оставляю баббл")
+        if already:
+            logger.info("guardrail: убран баббл с уже отправленной ссылкой [%s]: %r", phone, m)
+            changed = True
+            continue
+        kept.append(m)
+    if not kept or not changed:
+        return result
+    result = dict(result)
+    result["messages"] = kept
+    return result
+
+
+_COURSE_LINK_PLACEHOLDER = "[course_link]"
+_COURSE_ESCALATION_BUBBLE = (
+    "Si el evento tampoco te queda cómodo por ahora, también tengo cursos en línea "
+    f"sobre cómo conocer y conectar con mujeres eslavas: {_COURSE_LINK_PLACEHOLDER} 🤍"
+)
+
+
+def _enforce_course_escalation(result: dict, used: dict | None, user_text: str,
+                               history: list[dict]) -> dict:
+    """2ª objección de precio SEGUIDA sobre el EVENTO (#51/#52) → garantiza mención
+    de los cursos (último escalón de la lestница), sin depender solo del prompt.
+
+    Encontrado 2026-09-03/04 en test real, 0/3: con la instrucción SOLO en el
+    prompt, el LLM repetía indefinidamente la misma defensa de valor + a veces el
+    mismo link, nunca bajaba al último escalón por su cuenta — mismo patrón de
+    instrucción-no-fiable que el resto de guardrails de esta sesión
+    (_tag_event_interest, _enforce_event_video...).
+
+    "2ª objeción SEGUIDA" = el mensaje ANTERIOR del lead (no cualquiera en el
+    historial — evita falso positivo si objetó el precio del SERVICIO mucho antes,
+    ya bajó al evento, y esta es apenas su primera objeción AL EVENTO) también fue
+    una objeción de precio. NO reemplaza el mensaje generado (la defensa de valor
+    sigue siendo válida) — solo AÑADE el mensaje de cursos si falta, igual patrón
+    que _enforce_link_presence con el link del boleto.
+    """
+    if (not used or used.get("id") not in _EVENT_DETAIL_SCENARIOS
+            or result.get("action") != "respond"
+            or not _is_price_objection(user_text)
+            or not _is_price_objection(_last_lead_text(history) or "")):
+        return result
+    messages = result.get("messages") or []
+    if any("curso" in m.lower() or _COURSE_LINK_PLACEHOLDER in m for m in messages):
+        return result  # ya lo mencionó por su cuenta
+    logger.info("guardrail: 2ª objeción de precio (evento) seguida → довешиваю cursos")
+    messages = list(messages)
+    if len(messages) >= MAX_MESSAGES:
+        last_is_link_only = (_EVENT_LINK_PLACEHOLDER in messages[-1]
+                              or _URL_RE.search(messages[-1]))
+        if last_is_link_only:
+            # El último bubble es SOLO el link del boleto (forzado por
+            # _enforce_link_presence más arriba en la cadena, sin importar si este
+            # turno era una objeción) — seguro reemplazarlo: si ya se había enviado
+            # antes, sender.py lo iba a dropear solo igual (Layer 2 dedup); si no,
+            # perder un recordatorio de link es más barato que perder la defensa de
+            # valor real (encontrado 2026-09-04, code-review — antes se sacrificaba
+            # SIEMPRE el penúltimo, incluso cuando el último era contenido real).
+            messages[-1] = _COURSE_ESCALATION_BUBBLE
+        else:
+            messages = messages[:-2] + [_COURSE_ESCALATION_BUBBLE, messages[-1]]
+    else:
+        messages.append(_COURSE_ESCALATION_BUBBLE)
+    result = dict(result)
+    result["messages"] = messages
+    return result
+
+
 def _last_anna_text(history: list[dict]) -> str | None:
     """Последняя реплика бота (sender='anna') из истории — контекст для RAG-фолбэка."""
     for m in reversed(history or []):
@@ -1104,9 +1250,16 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = _enforce_nurture_stage(result, used, ambiguous)
     result = _enforce_service_qualification_gate(result, user_text, lead)
     result = _enforce_link_presence(result, used)
+    # ПОСЛЕ _enforce_link_presence: garantiza que la ссылка на билет уже в messages
+    # ДО того de que decida si hace falta escalar a cursos — evita que ambos guardrails
+    # se pisen entre sí en el bubble final cuando ya se llegó a MAX_MESSAGES (найдено
+    # 2026-09-04: course_escalation reemplazaba el bubble del link, link_presence lo
+    # veía "faltante" y lo volvía a poner encima, borrando el mensaje de cursos).
+    result = _enforce_course_escalation(result, used, user_text, history)
     result = await _enforce_event_video(result, used, lead)
     result = await _enforce_service_price_gate(result, lead)
     result = _enforce_no_regreet_on_repeat(result, user_text, history)
     result = _enforce_emoji_budget(result, history)
     result = _enforce_no_self_narration(result)
+    result = await _enforce_no_link_repeat(result, lead)
     return result
