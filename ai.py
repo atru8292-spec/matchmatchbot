@@ -837,8 +837,14 @@ def _enforce_course_escalation(result: dict, used: dict | None, user_text: str,
             or not _is_price_objection(_last_lead_text(history) or "")):
         return result
     messages = result.get("messages") or []
-    if any("curso" in m.lower() or _COURSE_LINK_PLACEHOLDER in m for m in messages):
-        return result  # ya lo mencionó por su cuenta
+    if any(_COURSE_LINK_PLACEHOLDER in m for m in messages):
+        return result  # ya lo mencionó CON el link — no hace falta más
+    # OJO: antes el noop también disparaba con solo "curso" en el texto (sin el
+    # placeholder) — encontrado 2026-09-05 en test real: el LLM mencionó "cursos en
+    # línea... te paso el link" en prosa, pero SIN el token [course_link], y el
+    # guardrail (con la condición vieja) se quedaba callado creyendo que ya estaba
+    # resuelto — el lead recibía la promesa del link sin el link. Ahora solo
+    # consideramos "resuelto" si el placeholder real está presente.
     logger.info("guardrail: 2ª objeción de precio (evento) seguida → довешиваю cursos")
     messages = list(messages)
     if len(messages) >= MAX_MESSAGES:
