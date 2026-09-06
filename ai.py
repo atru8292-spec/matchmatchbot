@@ -845,8 +845,20 @@ def _enforce_course_escalation(result: dict, used: dict | None, user_text: str,
     # guardrail (con la condición vieja) se quedaba callado creyendo que ya estaba
     # resuelto — el lead recibía la promesa del link sin el link. Ahora solo
     # consideramos "resuelto" si el placeholder real está presente.
-    logger.info("guardrail: 2ª objeción de precio (evento) seguida → довешиваю cursos")
     messages = list(messages)
+    # Si el LLM YA mencionó "curso" en prosa (sin el placeholder) — REEMPLAZAMOS ese
+    # bubble por el nuestro (con link real) en vez de AÑADIR uno nuevo. Sin esto
+    # (encontrado 2026-09-05/06, revisión propia tras probar el fix anterior en
+    # vivo) el lead veía DOS menciones seguidas de cursos — una en prosa del LLM sin
+    # link, y la nuestra justo debajo con el link — se sentía repetitivo/robótico.
+    mention_idx = next((i for i, m in enumerate(messages) if "curso" in m.lower()), None)
+    if mention_idx is not None:
+        logger.info("guardrail: mención de cursos sin link → reemplazo ese baббл (no añado uno nuevo)")
+        messages[mention_idx] = _COURSE_ESCALATION_BUBBLE
+        result = dict(result)
+        result["messages"] = messages
+        return result
+    logger.info("guardrail: 2ª objeción de precio (evento) seguida → довешиваю cursos")
     if len(messages) >= MAX_MESSAGES:
         last_is_link_only = (_EVENT_LINK_PLACEHOLDER in messages[-1]
                               or _URL_RE.search(messages[-1]))

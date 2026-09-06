@@ -1735,11 +1735,14 @@ class TestEnforceCourseEscalation:
         out = ai._enforce_course_escalation(result, used, "caro", history)
         assert out["messages"] == result["messages"]
 
-    def test_adds_link_when_courses_mentioned_without_token(self):
+    def test_replaces_bubble_when_courses_mentioned_without_token(self):
         """Encontrado 2026-09-05 en test real: el LLM mencionó "cursos en línea...
         te paso el link" en prosa pero SIN el placeholder [course_link] — el lead
         recibía la promesa del link sin el link. Mencionar la palabra "curso" NO
-        basta para considerar el guardrail resuelto, solo el placeholder cuenta."""
+        basta para considerar el guardrail resuelto, solo el placeholder cuenta —
+        pero REEMPLAZAMOS ese bubble en vez de añadir uno nuevo (encontrado
+        2026-09-06: añadir uno nuevo dejaba DOS menciones de cursos seguidas,
+        repetitivo/robótico)."""
         used = _make_scenario(id=51)
         history = [{"sender": "lead", "text": "caro"}]
         result = {"action": "respond", "messages": [
@@ -1747,7 +1750,9 @@ class TestEnforceCourseEscalation:
             "También tengo cursos en línea donde te enseño esto. Te paso el link por si te interesa:",
         ]}
         out = ai._enforce_course_escalation(result, used, "caro", history)
-        assert "[course_link]" in " ".join(out["messages"])
+        assert len(out["messages"]) == 2  # no se añadió un tercer bubble
+        assert "[course_link]" in out["messages"][1]
+        assert out["messages"][0] == "Te entiendo."  # el bubble sin mención no se toca
 
     def test_max_messages_replaces_link_only_last_bubble(self):
         """Al tope de MAX_MESSAGES, si el ÚLTIMO bubble es SOLO el link del boleto
