@@ -229,6 +229,27 @@ async def check_service_discount_firmly_denied():
     check("Pide descuento en el SERVICIO → rechazo firme, sin dejar puerta abierta", ok, text)
 
 
+async def check_no_repitch_on_third_repeat():
+    """Регресс 2026-09-07 (live test): "hola" repetido una TERCERA vez (tras ya
+    haberse saltado el gancho correctamente la segunda vez) volvía a disparar el
+    gancho/pitch COMPLETO 5/5 — el escenario #1 (saludo inicial) vuelve a matchear
+    por RAG cada vez que el lead dice "hola" a secas, sin importar el historial.
+    El guardrail _enforce_no_regreet_on_repeat solo cubre la frase literal "hola de
+    nuevo", no el re-pitch completo. Fix fue en el prompt (FLUJO DE VENTA п.1:
+    gancho solo UNA VEZ en toda la conversación)."""
+    lead = {"phone": "tg_smoke_repitch"}
+    hist = [
+        {"sender": "lead", "text": "hola"},
+        {"sender": "anna", "text": "Hola! eres soltero y que edad tienes?"},
+        {"sender": "lead", "text": "hola"},
+        {"sender": "anna", "text": "Cuéntame, eres soltero?"},
+    ]
+    r = await ai.generate_reply(lead, hist, "hola")
+    text = " ".join(r["messages"])
+    ok = "Match Match Agency" not in text and "fundadora" not in text
+    check("'hola' repetido 3ra vez → NO repite el gancho/pitch completo", ok, text)
+
+
 async def main() -> None:
     await db.init_pool()
     ai._system_prompt_cache = None
@@ -261,6 +282,8 @@ async def main() -> None:
         await check_age_76_not_blocked()
         await asyncio.sleep(1)
         await check_service_discount_firmly_denied()
+        await asyncio.sleep(1)
+        await check_no_repitch_on_third_repeat()
     finally:
         await db.close_pool()
 
