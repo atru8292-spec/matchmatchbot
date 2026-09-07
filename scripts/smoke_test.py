@@ -191,6 +191,24 @@ async def check_emoji_not_every_bubble():
           f"{with_emoji}/{len(all_bubbles)} bubbles con emoji — {all_bubbles}")
 
 
+async def check_age_76_not_blocked():
+    """Регресс 2026-09-06/07 (live test): 76 años — ÚLTIMO año ACEPTADO (rango 28-76
+    inclusivo), pero el RAG matcheaba el escenario #8 ("больше 76") por proximidad
+    numérica con sus ejemplos (78/80) independientemente de estar DENTRO del rango —
+    reproducido 3/3. 77 (fuera del rango) sí debe bloquear, para no romper el filtro real."""
+    lead76 = {"phone": "tg_smoke_age76"}
+    r76 = await ai.generate_reply(lead76, [], "Tengo 76 años, estoy soltero, soy médico jubilado")
+    ok76 = r76["action"] != "block"
+    check("Edad 76 (límite inclusivo) → NO bloquea", ok76,
+          f"action={r76['action']!r} used_scenario_id={r76.get('used_scenario_id')}")
+
+    lead77 = {"phone": "tg_smoke_age77"}
+    r77 = await ai.generate_reply(lead77, [], "Tengo 77 años, estoy soltero, soy médico jubilado")
+    ok77 = r77["action"] == "block"
+    check("Edad 77 (fuera del rango) → SÍ bloquea (control, filtro real no se rompió)", ok77,
+          f"action={r77['action']!r} used_scenario_id={r77.get('used_scenario_id')}")
+
+
 async def main() -> None:
     await db.init_pool()
     ai._system_prompt_cache = None
@@ -219,6 +237,8 @@ async def main() -> None:
         await check_new_lead_event_word_not_escalated()
         await asyncio.sleep(1)
         await check_emoji_not_every_bubble()
+        await asyncio.sleep(1)
+        await check_age_76_not_blocked()
     finally:
         await db.close_pool()
 
