@@ -209,6 +209,26 @@ async def check_age_76_not_blocked():
           f"action={r77['action']!r} used_scenario_id={r77.get('used_scenario_id')}")
 
 
+_DISCOUNT_DOOR_OPEN_RE = re.compile(
+    r"ver(emos)? (mejor )?en la videollamada|opción que se adapte|posible descuento|"
+    r"según tu caso", re.IGNORECASE,
+)
+
+
+async def check_service_discount_firmly_denied():
+    """Регресс 2026-09-07 (live test): escenario #39 ("Дай скидку") tenía en su
+    template_es la frase "eso lo vemos mejor en la videollamada según tu caso" —
+    sonaba a puerta abierta a un posible descuento en el servicio ($10,000 USD),
+    directamente contra la regla "NO HAY DESCUENTOS" (CLAUDE.md/prompt línea 71).
+    Reproducido 2/4 con la frase ambigua textual antes del fix del template."""
+    lead = {"phone": "tg_smoke_discount", "age": 35, "is_single": True, "funnel_stage": "pitched"}
+    hist = [{"sender": "anna", "text": "La inversión es desde $10,000 USD"}]
+    r = await ai.generate_reply(lead, hist, "me haces un descuento en el servicio?")
+    text = " ".join(r["messages"])
+    ok = not _DISCOUNT_DOOR_OPEN_RE.search(text)
+    check("Pide descuento en el SERVICIO → rechazo firme, sin dejar puerta abierta", ok, text)
+
+
 async def main() -> None:
     await db.init_pool()
     ai._system_prompt_cache = None
@@ -239,6 +259,8 @@ async def main() -> None:
         await check_emoji_not_every_bubble()
         await asyncio.sleep(1)
         await check_age_76_not_blocked()
+        await asyncio.sleep(1)
+        await check_service_discount_firmly_denied()
     finally:
         await db.close_pool()
 
