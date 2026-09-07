@@ -60,6 +60,32 @@ def _ahora_cdmx() -> str:
     n = datetime.now(_CDMX)
     return f"{_ES_DAYS[n.weekday()]} {n.day} de {_ES_MONTHS[n.month - 1]} de {n.year}, {n.strftime('%H:%M')}"
 
+
+def _relative_gap_es(delta_seconds: float) -> str | None:
+    """Разрыв времени МЕЖДУ соседними сообщениями в человеко-читаемом виде для AI —
+    None, если разрыв мал (не о чем упоминать, обычный темп переписки).
+
+    Не даём модели сырой timestamp/дельту в секундах — модель тогда сама решала бы,
+    что считать "большим" разрывом, а это уже один раз ломалось (2026-08-26: без
+    вообще какого-либо сигнала о времени модель иногда решала что "прошло время"
+    на мгновенный повтор сообщения и здоровалась заново неуместно). Порог здесь —
+    единственное место, где решается "малое" vs "большое": < 6 часов → None (не
+    упоминать), иначе готовая фраза на испанском, чтобы модель не гадала сама
+    сколько это "долго" в её понимании.
+    """
+    if delta_seconds < 6 * 3600:
+        return None
+    days = delta_seconds / 86400
+    if days < 1:
+        return "unas horas"
+    if days < 2:
+        return "un día"
+    if days < 7:
+        return f"{int(days)} días"
+    if days < 30:
+        return f"{int(days / 7)} semana(s)"
+    return f"{int(days / 30)} mes(es)"
+
 logger = logging.getLogger("matchmatch.ai")
 
 _PROMPT_PATH = os.path.join(os.path.dirname(__file__), "anna_prompt_v5.md")
@@ -438,9 +464,20 @@ def _enforce_no_regreet_on_repeat(result: dict, user_text: str, history: list[di
     messages = list(result["messages"])
     first = messages[0]
     stripped = _REGREET_RE.sub("", first).strip()
-    if not stripped or stripped == first:
-        return result
-    messages[0] = stripped[0].upper() + stripped[1:]
+    if stripped == first:
+        return result  # regex no matcheó nada — no hay "hola de nuevo" que quitar
+    if not stripped:
+        # El bubble ENTERO era solo la frase "hola de nuevo" (encontrado 2026-09-07,
+        # live test: el LLM a veces la manda como bubble propio, separado del resto
+        # del texto) — no dejarla como está (defecto anterior) ni dejar un bubble
+        # vacío: BORRAR el bubble entero, mismo principio que _enforce_no_self_narration.
+        # Si es el ÚNICO bubble, no lo tocamos (mejor una frase rara que respuesta vacía).
+        if len(messages) > 1:
+            messages.pop(0)
+        else:
+            return result
+    else:
+        messages[0] = stripped[0].upper() + stripped[1:]
     result = dict(result)
     result["messages"] = messages
     logger.info("guardrail: убрала 'hola de nuevo' на повторе сообщения лида")
@@ -914,6 +951,21 @@ def _build_user_context(lead: dict, history: list[dict], user_text: str,
                 "business_link", "desired_partner_age")}
     profile["whatsapp_name"] = _plausible_name(profile.get("whatsapp_name"))
     hist = [{"sender": m.get("sender"), "text": m.get("text")} for m in history[-10:]]
+
+    # Разрыв времени с последнего сообщения (любого — Anna или лида) до ЭТОГО
+    # входящего сообщения лида. history отдаёт db.get_conversation_history в
+    # хронологическом порядке (старые → новые), так что history[-1] — последняя
+    # реплика ПЕРЕД текущим user_text. None — разрыв мал/неизвестен, не упоминать
+    # (сохраняет старое поведение по умолчанию, где модель НЕ придумывает время).
+    gap = None
+    if history:
+        last_ts = history[-1].get("created_at")
+        if isinstance(last_ts, datetime):
+            now = datetime.now(last_ts.tzinfo) if last_ts.tzinfo else datetime.now()
+            delta = (now - last_ts).total_seconds()
+            if delta > 0:
+                gap = _relative_gap_es(delta)
+
     if scenarios:
         rag = [{"id": s["id"], "mode": s["mode"], "template_es": s["template_es"],
                 "score": round(s["score"], 3)} for s in scenarios]
@@ -926,6 +978,10 @@ def _build_user_context(lead: dict, history: list[dict], user_text: str,
         "ahora_cdmx": _ahora_cdmx(),
         "lead_profile": profile,
         "conversation_history": hist,
+        # None если разрыв мал/неизвестен — модель НЕ должна упоминать время в этом
+        # случае (см. _relative_gap_es и правило в промпте). Заполнено — лид реально
+        # молчал ощутимо, можно естественно отреагировать на возвращение.
+        "tiempo_desde_ultimo_mensaje": gap,
         "rag_scenarios": rag,
         "lead_message": user_text,
     }, ensure_ascii=False, default=str)  # default=str: date_of_birth (date) → строка

@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -52,6 +54,56 @@ def _make_lead(**kwargs) -> dict:
 # ---------------------------------------------------------------------------
 # _split_template
 # ---------------------------------------------------------------------------
+
+class TestRelativeGapEs:
+    """_relative_gap_es — разрыв времени между сообщениями в человеко-читаемом виде
+    для AI (добавлено 2026-09-07, по просьбе пользователя: бот должен уметь отличить
+    реальное возвращение лида после долгого молчания от мгновенного повтора)."""
+
+    def test_small_gap_returns_none(self):
+        assert ai._relative_gap_es(60) is None            # 1 минута
+        assert ai._relative_gap_es(3 * 3600) is None       # 3 часа — ниже порога 6ч
+
+    def test_hours_gap(self):
+        assert ai._relative_gap_es(7 * 3600) == "unas horas"
+
+    def test_one_day_gap(self):
+        assert ai._relative_gap_es(30 * 3600) == "un día"
+
+    def test_several_days_gap(self):
+        assert ai._relative_gap_es(3 * 86400) == "3 días"
+
+    def test_weeks_gap(self):
+        assert ai._relative_gap_es(15 * 86400) == "2 semana(s)"
+
+    def test_months_gap(self):
+        assert ai._relative_gap_es(65 * 86400) == "2 mes(es)"
+
+
+class TestBuildUserContextGap:
+    """_build_user_context выставляет tiempo_desde_ultimo_mensaje по history[-1]."""
+
+    def test_none_when_no_created_at(self):
+        """history без created_at (типичный формат в юнит-тестах/моках) — gap=None,
+        старое поведение сохранено (не ломает существующие тесты)."""
+        history = [{"sender": "anna", "text": "hola"}]
+        ctx = ai._build_user_context({}, history, "hola", [])
+        assert json.loads(ctx)["tiempo_desde_ultimo_mensaje"] is None
+
+    def test_none_when_gap_small(self):
+        from datetime import datetime, timezone
+        recent = datetime.now(timezone.utc)
+        history = [{"sender": "anna", "text": "hola", "created_at": recent}]
+        ctx = ai._build_user_context({}, history, "hola", [])
+        assert json.loads(ctx)["tiempo_desde_ultimo_mensaje"] is None
+
+    def test_set_when_gap_large(self):
+        from datetime import datetime, timedelta, timezone
+        old = datetime.now(timezone.utc) - timedelta(days=3)
+        history = [{"sender": "anna", "text": "hola", "created_at": old}]
+        ctx = ai._build_user_context({}, history, "hola", [])
+        assert json.loads(ctx)["tiempo_desde_ultimo_mensaje"] == "3 días"
+
 
 class TestPlausibleName:
     """_plausible_name — фильтр whatsapp_name перед показом AI (см. ai.py)."""
@@ -1599,6 +1651,26 @@ class TestEnforceNoRegreetOnRepeat:
             result = {"action": action, "messages": ["¡Hola de nuevo!"]}
             out = ai._enforce_no_regreet_on_repeat(result, "Evento", history)
             assert out["messages"] == ["¡Hola de nuevo!"]
+
+    def test_deletes_whole_bubble_when_it_is_only_regreet_phrase(self):
+        """Найдено 2026-09-07 (live test): a veces el LLM manda "Hola de nuevo!"
+        como bubble PROPIO, separado del resto ("Hola de nuevo! 😊", "Cuéntame,
+        ¿eres soltero?"). Stripping deja el bubble vacío — antes el guardrail lo
+        dejaba SIN TOCAR (defecto: "Hola de nuevo!" seguía visible); ahora BORRA
+        el bubble entero (mismo principio que _enforce_no_self_narration)."""
+        history = [{"sender": "lead", "text": "hola"}, {"sender": "anna", "text": "..."}]
+        result = {"action": "respond",
+                  "messages": ["Hola de nuevo! 😊", "Cuéntame, ¿eres soltero?"]}
+        out = ai._enforce_no_regreet_on_repeat(result, "hola", history)
+        assert out["messages"] == ["Cuéntame, ¿eres soltero?"]
+
+    def test_keeps_lone_regreet_bubble_when_it_is_the_only_message(self):
+        """Si "Hola de nuevo!" es el ÚNICO bubble — no lo borramos (dejaría messages
+        vacío), mismo principio que _enforce_no_self_narration."""
+        history = [{"sender": "lead", "text": "hola"}, {"sender": "anna", "text": "..."}]
+        result = {"action": "respond", "messages": ["Hola de nuevo!"]}
+        out = ai._enforce_no_regreet_on_repeat(result, "hola", history)
+        assert out["messages"] == ["Hola de nuevo!"]
 
 
 class TestEnforceEmojiBudget:
