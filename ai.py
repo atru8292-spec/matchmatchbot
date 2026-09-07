@@ -82,9 +82,15 @@ def _relative_gap_es(delta_seconds: float) -> str | None:
         return "un día"
     if days < 7:
         return f"{int(days)} días"
+    # Español real, no sintaxis de plantilla "(s)/(es)" — encontrado en code-review
+    # 2026-09-07: si el modelo alguna vez repite este valor casi literal en su
+    # respuesta al lead, "2 semana(s)" se vería como un bug de template, no texto
+    # natural. Singular/plural correcto en el propio valor.
     if days < 30:
-        return f"{int(days / 7)} semana(s)"
-    return f"{int(days / 30)} mes(es)"
+        weeks = int(days / 7)
+        return "1 semana" if weeks == 1 else f"{weeks} semanas"
+    months = int(days / 30)
+    return "1 mes" if months == 1 else f"{months} meses"
 
 logger = logging.getLogger("matchmatch.ai")
 
@@ -462,24 +468,30 @@ def _enforce_no_regreet_on_repeat(result: dict, user_text: str, history: list[di
     if not _is_repeated_lead_message(user_text, history):
         return result
     messages = list(result["messages"])
-    first = messages[0]
-    stripped = _REGREET_RE.sub("", first).strip()
-    if stripped == first:
-        return result  # regex no matcheó nada — no hay "hola de nuevo" que quitar
-    if not stripped:
-        # El bubble ENTERO era solo la frase "hola de nuevo" (encontrado 2026-09-07,
-        # live test: el LLM a veces la manda como bubble propio, separado del resto
-        # del texto) — no dejarla como está (defecto anterior) ni dejar un bubble
-        # vacío: BORRAR el bubble entero, mismo principio que _enforce_no_self_narration.
-        # Si es el ÚNICO bubble, no lo tocamos (mejor una frase rara que respuesta vacía).
-        if len(messages) > 1:
-            messages.pop(0)
-        else:
-            return result
-    else:
-        messages[0] = stripped[0].upper() + stripped[1:]
+    changed = False
+    out: list[str] = []
+    # Сканируем ВСЕ бабблы, не только первый (найдено 2026-09-07 на code-review):
+    # "hola de nuevo" может оказаться отдельным бабблом в ЛЮБОЙ позиции ответа, не
+    # обязательно первой — _REGREET_RE матчит начало КАЖДОГО баббла по отдельности.
+    for m in messages:
+        stripped = _REGREET_RE.sub("", m).strip()
+        if stripped == m:
+            out.append(m)  # regex не матчил — оставляем как есть
+            continue
+        changed = True
+        if not stripped:
+            # Баббл ЦЕЛИКОМ был только фразой "hola de nuevo" — не оставляем пустым,
+            # УДАЛЯЕМ его целиком (тот же паттерн, что _enforce_no_self_narration).
+            continue
+        out.append(stripped[0].upper() + stripped[1:])
+    if not changed:
+        return result
+    if not out:
+        # Все бабблы оказались чистым "hola de nuevo" — не оставляем ответ пустым
+        # (мейнstream-кейс: единственный баббл, см. тест). Оставляем как было.
+        return result
     result = dict(result)
-    result["messages"] = messages
+    result["messages"] = out
     logger.info("guardrail: убрала 'hola de nuevo' на повторе сообщения лида")
     return result
 
@@ -952,19 +964,33 @@ def _build_user_context(lead: dict, history: list[dict], user_text: str,
     profile["whatsapp_name"] = _plausible_name(profile.get("whatsapp_name"))
     hist = [{"sender": m.get("sender"), "text": m.get("text")} for m in history[-10:]]
 
-    # Разрыв времени с последнего сообщения (любого — Anna или лида) до ЭТОГО
-    # входящего сообщения лида. history отдаёт db.get_conversation_history в
-    # хронологическом порядке (старые → новые), так что history[-1] — последняя
-    # реплика ПЕРЕД текущим user_text. None — разрыв мал/неизвестен, не упоминать
-    # (сохраняет старое поведение по умолчанию, где модель НЕ придумывает время).
+    # Разрыв времени с последнего сообщения ANNA (не history[-1]!) до ЭТОГО входящего
+    # сообщения лида. ИСПРАВЛЕНО (2026-09-07, найдено на code-review): main.py
+    # вставляет входящее сообщение в БД СИНХРОННО при получении вебхука, ДО дебаунса
+    # (main.py._handle_incoming) — к моменту вызова _run_ai это сообщение уже лежит
+    # в messages (processed=True, но НЕ удалено), и db.get_conversation_history его
+    # возвращает как САМУЮ СВЕЖУЮ запись. Значит history[-1] — это фактически ТА ЖЕ
+    # строка, из которой собран user_text (created_at ≈ момент вебхука, за
+    # delay+max_wait ≈ 90-120с до этого вызова) — сравнение с "сейчас" почти всегда
+    # давало бы разрыв <6ч → gap=None ВСЕГДА в проде, фича была бы мертворождённой.
+    # Реплика Anna физически не может быть частью необработанного залпа (её ещё нет
+    # в БД, мы её только генерируем прямо сейчас) — последнее её сообщение в history
+    # надёжно отражает "когда разговор был живым в последний раз", это и есть
+    # правильный якорь для "лид молчал и вернулся". Как бонус — не нужно отдельно
+    # гасить повтор "qué gusto que regresaste" на каждом ходу активного диалога:
+    # после первого ответа Anna в этом заходе её же реплика становится новым
+    # ближайшим якорем, разрыв сразу падает ниже порога.
     gap = None
-    if history:
-        last_ts = history[-1].get("created_at")
+    for m in reversed(history or []):
+        if m.get("sender") != "anna":
+            continue
+        last_ts = m.get("created_at")
         if isinstance(last_ts, datetime):
             now = datetime.now(last_ts.tzinfo) if last_ts.tzinfo else datetime.now()
             delta = (now - last_ts).total_seconds()
             if delta > 0:
                 gap = _relative_gap_es(delta)
+        break
 
     if scenarios:
         rag = [{"id": s["id"], "mode": s["mode"], "template_es": s["template_es"],

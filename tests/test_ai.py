@@ -74,19 +74,28 @@ class TestRelativeGapEs:
         assert ai._relative_gap_es(3 * 86400) == "3 días"
 
     def test_weeks_gap(self):
-        assert ai._relative_gap_es(15 * 86400) == "2 semana(s)"
+        assert ai._relative_gap_es(15 * 86400) == "2 semanas"
+        assert ai._relative_gap_es(8 * 86400) == "1 semana"  # singular correcto
 
     def test_months_gap(self):
-        assert ai._relative_gap_es(65 * 86400) == "2 mes(es)"
+        assert ai._relative_gap_es(65 * 86400) == "2 meses"
+        assert ai._relative_gap_es(31 * 86400) == "1 mes"  # singular correcto
 
 
 class TestBuildUserContextGap:
-    """_build_user_context выставляет tiempo_desde_ultimo_mensaje по history[-1]."""
+    """_build_user_context выставляет tiempo_desde_ultimo_mensaje по времени
+    ПОСЛЕДНЕГО СООБЩЕНИЯ ANNA в history (не history[-1] вообще!). ИСПРАВЛЕНО
+    2026-09-07 на code-review: в реальном пайплайне main.py входящее сообщение лида
+    уже лежит в БД (processed=True, не удалено) к моменту вызова _run_ai —
+    db.get_conversation_history отдаёт его как САМУЮ СВЕЖУЮ запись, так что
+    history[-1] почти всегда САМ ТЕКУЩИЙ user_text (created_at ≈ момент вебхука,
+    не более debounce delay/max_wait ≈ 90-120с назад) — сравнение с ним всегда
+    давало бы gap=None, фича была бы мертворождённой в проде. Реплика Anna не может
+    быть частью необработанного залпа (её ещё нет в БД) — надёжный якорь."""
 
-    def test_none_when_no_created_at(self):
-        """history без created_at (типичный формат в юнит-тестах/моках) — gap=None,
-        старое поведение сохранено (не ломает существующие тесты)."""
-        history = [{"sender": "anna", "text": "hola"}]
+    def test_none_when_no_anna_message(self):
+        """История без единой реплики Anna (совсем новый лид) — gap=None."""
+        history = [{"sender": "lead", "text": "hola"}]
         ctx = ai._build_user_context({}, history, "hola", [])
         assert json.loads(ctx)["tiempo_desde_ultimo_mensaje"] is None
 
@@ -103,6 +112,35 @@ class TestBuildUserContextGap:
         history = [{"sender": "anna", "text": "hola", "created_at": old}]
         ctx = ai._build_user_context({}, history, "hola", [])
         assert json.loads(ctx)["tiempo_desde_ultimo_mensaje"] == "3 días"
+
+    def test_ignores_trailing_lead_burst_uses_anna_anchor(self):
+        """Реалистичная форма history из реального пайплайна (см. докстринг класса):
+        последняя реплика Anna была 4 дня назад, а ПОСЛЕ неё в history уже лежит
+        текущий (ещё не отвеченный) залп лида, вставленный в БД до debounce —
+        gap должен считаться от реплики Anna, а НЕ от history[-1] (который был бы
+        "только что", раз это фактически тот же залп что и user_text)."""
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        history = [
+            {"sender": "anna", "text": "Hola! eres soltero?", "created_at": now - timedelta(days=4)},
+            # текущий залп — уже в БД (main.py вставляет ДО debounce), created_at свежий
+            {"sender": "lead", "text": "hola, sigo aqui", "created_at": now - timedelta(seconds=90)},
+        ]
+        ctx = ai._build_user_context({}, history, "hola, sigo aqui", [])
+        assert json.loads(ctx)["tiempo_desde_ultimo_mensaje"] == "4 días"
+
+    def test_anna_reply_within_active_session_suppresses_gap(self):
+        """Диалог активен (Anna ответила минуту назад) — gap=None, не повторяем
+        "qué gusto que regresaste" на каждом ходу одной и той же сессии."""
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        history = [
+            {"sender": "anna", "text": "Qué gusto que regresaste!", "created_at": now - timedelta(days=4)},
+            {"sender": "lead", "text": "hola", "created_at": now - timedelta(minutes=2)},
+            {"sender": "anna", "text": "Perfecto, gracias", "created_at": now - timedelta(minutes=1)},
+        ]
+        ctx = ai._build_user_context({}, history, "y ahora que?", [])
+        assert json.loads(ctx)["tiempo_desde_ultimo_mensaje"] is None
 
 
 class TestPlausibleName:
@@ -1671,6 +1709,31 @@ class TestEnforceNoRegreetOnRepeat:
         result = {"action": "respond", "messages": ["Hola de nuevo!"]}
         out = ai._enforce_no_regreet_on_repeat(result, "hola", history)
         assert out["messages"] == ["Hola de nuevo!"]
+
+    def test_scans_all_bubbles_not_only_first(self):
+        """Найдено на code-review 2026-09-07: el guardrail original solo miraba
+        messages[0] — "hola de nuevo" en CUALQUIER otra posición (2do, 3er bubble)
+        se colaba sin tocar. Ahora escanea TODOS los bubbles."""
+        history = [{"sender": "lead", "text": "hola"}, {"sender": "anna", "text": "..."}]
+        result = {"action": "respond", "messages": [
+            "Perfecto, gracias.",
+            "Hola de nuevo! 😊",
+            "¿A qué te dedicas?",
+        ]}
+        out = ai._enforce_no_regreet_on_repeat(result, "hola", history)
+        assert out["messages"] == ["Perfecto, gracias.", "¿A qué te dedicas?"]
+
+    def test_strips_regreet_prefix_in_non_first_bubble(self):
+        """Frase mezclada con más texto en un bubble que NO es el primero. (El "¿"
+        se pierde junto con el prefijo — mismo comportamiento preexistente que ya
+        tenía el regex para el bubble[0], no una regresión nueva.)"""
+        history = [{"sender": "lead", "text": "hola"}, {"sender": "anna", "text": "..."}]
+        result = {"action": "respond", "messages": [
+            "Va, gracias.",
+            "¡Hola de nuevo! Eres soltero?",
+        ]}
+        out = ai._enforce_no_regreet_on_repeat(result, "hola", history)
+        assert out["messages"] == ["Va, gracias.", "Eres soltero?"]
 
 
 class TestEnforceEmojiBudget:
