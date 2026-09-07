@@ -601,6 +601,37 @@ class TestColdLeadEventGuard:
         assert result["used_scenario_id"] == 51
 
 
+class TestPostEventOnlyGate:
+    """Сценарии, применимые ТОЛЬКО к лиду, который уже был на конкретном ивенте
+    (funnel_stage='event_attended') — без этого гейта короткие/общие фразы от лида,
+    никогда не бывшего на ивенте, могут матчить на сценарии, которые ГАЛЛЮЦИНИРУЮТ
+    контекст "ты уже был на ивенте" (регресс 2026-08-24 для #24/#25/#57, найден
+    заново для #26 2026-09-07: холодный лид "me pasas el numero de alguna chica?"
+    матчил на #26 "Хочу контакт девушки С ИВЕНТА" — воспроизведено 3/3 живым тестом,
+    бот отвечал "qué bueno que conectaste en el evento!" человеку, не бывшему там)."""
+
+    async def test_scenario_26_filtered_for_non_event_attended_lead(self):
+        lead = {"funnel_stage": "pitched", "is_single": True}  # НЕ event_attended
+        n26 = _make_scenario(id=26, ai_allowed=True, score=0.75)
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n26])), \
+             patch("ai._call_openai", AsyncMock(return_value=_VALID_AI_RESPONSE)) as mock_openai:
+            await ai.generate_reply(lead, [], "me pasas el numero de alguna chica?")
+        # confident-список для AI не должен содержать #26 — проверяем через контекст
+        call_context = mock_openai.await_args.args[0]
+        assert '"id": 26' not in call_context
+
+    async def test_scenario_26_kept_for_event_attended_lead(self):
+        lead = {"funnel_stage": "event_attended", "is_single": True}
+        n26 = _make_scenario(id=26, ai_allowed=True, score=0.75)
+        ai_response = {**_VALID_AI_RESPONSE, "used_scenario_id": 26}
+        with patch("ai.search_scenarios", AsyncMock(return_value=[n26])), \
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)) as mock_openai:
+            result = await ai.generate_reply(lead, [], "me pasas el numero de la chica que conocí?")
+        call_context = mock_openai.await_args.args[0]
+        assert '"id": 26' in call_context
+        assert result["used_scenario_id"] == 26
+
+
 class TestWarmLeadEventPriceAugment:
     """Тёплый лид + смешанное сообщение (профиль + цена ивента), RAG-топ ненадёжен
     (регрессы 2026-08-21/26) → №51 ДОБАВЛЯЕТСЯ в кандидаты (не форсится top)."""

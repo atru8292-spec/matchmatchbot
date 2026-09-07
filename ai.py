@@ -1086,8 +1086,16 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     # Без этого гейта короткие сообщения вроде «hola evento» от совсем нового лида иногда
     # матчили по RAG на #24 (там просто много слова «evento» в trigger_es) — а #24 это
     # bot_then_anna, и лида форсили в эскалацию на Аню/Милу вообще без повода (регресс
-    # найден 2026-08-24 на живом тесте через мини-CRM).
-    _POST_EVENT_ONLY = {24, 25, 57}
+    # найден 2026-08-24 на живом тесте через мини-CRM). #26 добавлен 2026-09-07 (тот же
+    # класс регресса, отдельная находка): холодный лид ("me pasas el numero de alguna
+    # chica?"), НИКОГДА не бывший на ивенте, матчил на #26 ("Хочу контакт девушки С
+    # ИВЕНТА" — trigger_es "quiero el contacto de / dame su telefono" общий, без
+    # привязки к ивенту), а template_es жёстко предполагает "el lead conoció a alguien
+    # en el evento" — бот галлюцинировал "qué bueno que conectaste en el evento!"
+    # человеку, который вообще не был на ивенте (воспроизведено 3/3, живой тест).
+    # Без #26 такой запрос уходит в свободную генерацию AI, где уже есть общее правило
+    # "не давать номер холодному лиду" (anna_prompt_v5.md, неск. мест) — дыры не остаётся.
+    _POST_EVENT_ONLY = {24, 25, 26, 57}
     if lead.get("funnel_stage") != "event_attended":
         filtered = [s for s in scenarios if s.get("id") not in _POST_EVENT_ONLY]
         if len(filtered) != len(scenarios):
