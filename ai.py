@@ -1196,6 +1196,33 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
             scenarios, top = [row], row
             photo_thanks_prefix = True
 
+    # Голое/короткое упоминание "evento" — RAG-эмбеддинг для этого слова ненадёжен: часто
+    # матчит НЕ на #2 (гачо "лид спрашивает про ивент"), а на слабо связанные сценарии
+    # просто по общему слову "evento" в их trigger_es (#48 "no puedo ir", #24/#44/#30) —
+    # ни один из них не подходит для "лид впервые заговорил про ивент". Найдено 2026-09-12
+    # живым тестом (Аня, через Арину): "Hola" → "evento" — bare-score для #48 (0.424) уже
+    # выше FALLBACK_SCORE, так что контекст-фолбэк ниже НЕ срабатывает (условие "score <
+    # FALLBACK" не выполняется), а RAG остаётся неоднозначным (топ-1/топ-2 в пределах 0.05)
+    # → used=None → ни один из пост-генерационных guardrail'ов (включая
+    # _enforce_no_event_qualification_gate) не может сработать, хотя сама МОДЕЛЬ свободно
+    # решила использовать #2 (просто #2 не был среди РЕАЛЬНЫХ кандидатов, чтобы это решение
+    # на что-то опиралось). Порог 0.55 — ниже FIXED_BLOCK_SCORE (0.60), чтобы НЕ трогать
+    # реально уверенные матчи на другие ивент-сценарии (напр. "no puedo ir al evento" →
+    # #48 должен матчить намного увереннее, чем 0.55, и остаться как есть).
+    _EVENT_WORD_RE = re.compile(r"\bevento\b", re.IGNORECASE)
+    if (_EVENT_WORD_RE.search(user_text) and lead.get("funnel_stage") != "event_attended"
+            # Не трогаем, если top уже И ТАК какой-то из подходящих ивент-сценариев
+            # (не только #2 — #15/#51/#52 тоже валидны, напр. "cuanto cuesta el evento"
+            # уже матчит #51 напрямую, ломать это не нужно).
+            and (not top or top.get("id") not in _EVENT_NO_GATE_SCENARIOS)
+            and (not top or top.get("score", 0) < 0.55)):
+        row = await db.get_scenario_row(2)
+        if row:
+            logger.info("упоминание 'evento' без уверенного другого матча → форс №2 (был top=%s)",
+                        top.get("id") if top else None)
+            row["score"] = 1.0
+            scenarios, top = [row], row
+
     # Контекст-фолбэк: если голого текста не хватило (нет уверенного матча, top < FALLBACK) —
     # перезапрос с последней репликой Anna из истории («вопрос бота + ответ лида»). Чинит
     # короткие/контекстные ответы («sí soltero», «va», «ok») разом. Самодостаточные сообщения
