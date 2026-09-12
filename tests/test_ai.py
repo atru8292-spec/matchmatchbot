@@ -1335,28 +1335,29 @@ class TestEnforceLinkPresence:
 
 
 class TestEnforceNoEventQualificationGate:
-    """Сценарии-ивента (#2/#15/#51/#52) не gatean detalles/precio detrás de "¿eres
-    soltero?" — regla de la dueña "no necesita calificar primero". Найдено 2026-09-09/12
-    (Аня в живом тесте): даже после переписи текстов #2/#15/#52 без вопроса о
-    calificación, модель (ai_allowed=true) всё равно ~50% случаев сама добавляла этот
-    гейт без реального контента (цены/ссылки)."""
+    """Сценарии-ивента (#2/#15/#51/#52) не заменяют цену/ссылку редундантным
+    вопросом-разрешением ("¿te gustaría que te mande todos los detalles?") — но
+    ЛЕГИТИМНЫЙ вопрос "eres soltero?/qué edad tienes?" НЕ трогаем (испр. 2026-09-12:
+    старая версия ошибочно гейтила и его тоже — дословный фидбек владелицы "это ок
+    пусть спрашивает" был именно про soltero/edad, жалоба была только на редундантное
+    "¿Te gustaría que te mande todos los detalles?")."""
 
     @pytest.mark.parametrize("scenario_id", [2, 15, 51, 52])
-    def test_replaces_gate_without_content(self, scenario_id):
+    def test_replaces_redundant_permission_without_content(self, scenario_id):
         used = _make_scenario(id=scenario_id)
         result = {"action": "respond",
-                  "messages": ["¡Perfecto! Antes de contarte más, ¿eres soltero?"]}
+                  "messages": ["¡Justo te iba a contar! ¿Te gustaría que te mande todos los detalles?"]}
         out = ai._enforce_no_event_qualification_gate(result, used)
         text = " ".join(out["messages"])
         assert "[event_link]" in text
         assert "mxn" in text.lower() or "MXN" in text
 
     def test_noop_when_content_already_present(self):
-        """Модель спросила soltero/edad, НО заодно уже дала цену/ссылку — не блокирующе,
+        """Модель спросила разрешение, НО заодно уже дала цену/ссылку — не блокирующе,
         не трогаем (избегаем ложных срабатываний)."""
         used = _make_scenario(id=51)
         result = {"action": "respond", "messages": [
-            "El precio es 6000 MXN, aquí tu boleto: [event_link]. Por cierto, ¿eres soltero?"]}
+            "El precio es 6000 MXN, aquí tu boleto: [event_link]. ¿Te gustaría que te cuente más?"]}
         out = ai._enforce_no_event_qualification_gate(result, used)
         assert out["messages"] == result["messages"]
 
@@ -1366,21 +1367,30 @@ class TestEnforceNoEventQualificationGate:
         out = ai._enforce_no_event_qualification_gate(result, used)
         assert out["messages"] == result["messages"]
 
+    @pytest.mark.parametrize("scenario_id", [2, 15, 51, 52])
+    def test_noop_on_legitimate_soltero_edad_question(self, scenario_id):
+        """El propio "¿eres soltero?/qué edad tienes?" es LEGÍTIMO incluso para el
+        embudo de evento — no es el patrón que este guardrail corrige, se deja pasar."""
+        used = _make_scenario(id=scenario_id)
+        result = {"action": "respond",
+                  "messages": ["¡Perfecto! Antes de contarte más, ¿eres soltero? ¿Qué edad tienes?"]}
+        out = ai._enforce_no_event_qualification_gate(result, used)
+        assert out["messages"] == result["messages"]
+
     def test_noop_for_unrelated_scenario(self):
-        """Гейт соltero/edad ЛЕГИТИМЕН для сервисной воронки (не ивент) — не трогаем."""
         used = _make_scenario(id=16)
-        result = {"action": "respond", "messages": ["¿Eres soltero y qué edad tienes?"]}
+        result = {"action": "respond", "messages": ["¿Te gustaría que te cuente los detalles?"]}
         out = ai._enforce_no_event_qualification_gate(result, used)
         assert out["messages"] == result["messages"]
 
     def test_noop_when_action_not_respond(self):
         used = _make_scenario(id=51)
-        result = {"action": "escalate", "messages": ["¿Eres soltero?"]}
+        result = {"action": "escalate", "messages": ["¿Te gustaría que te mande los detalles?"]}
         out = ai._enforce_no_event_qualification_gate(result, used)
         assert out["messages"] == result["messages"]
 
     def test_noop_when_used_none(self):
-        result = {"action": "respond", "messages": ["¿Eres soltero?"]}
+        result = {"action": "respond", "messages": ["¿Te gustaría que te mande los detalles?"]}
         out = ai._enforce_no_event_qualification_gate(result, None)
         assert out["messages"] == result["messages"]
 

@@ -614,7 +614,9 @@ def _enforce_link_presence(result: dict, used: dict | None) -> dict:
 # цену/ссылку сразу, как #51/#52.
 _EVENT_NO_GATE_SCENARIOS = {2, 15, 51, 52}
 _QUALIFY_GATE_RE = re.compile(
-    r"eres soltero|qu[eé] edad tienes|cu[aá]ntos a[ñn]os tienes", re.IGNORECASE,
+    r"te gustar[ií]a que te (mand|cuent|comparta|d[ié])|"
+    r"quieres que te (mand|cuent|comparta|platique|d[ié])",
+    re.IGNORECASE,
 )
 _EVENT_CONTENT_MARKER_RE = re.compile(
     r"\[event_link\]|http|\bmxn\b|\[event_price", re.IGNORECASE,
@@ -627,18 +629,24 @@ _EVENT_GATE_OVERRIDE_BUBBLE = (
 
 
 def _enforce_no_event_qualification_gate(result: dict, used: dict | None) -> dict:
-    """Гарантия: сценарии-ивента #2/#15/#51/#52 no gatean detalles/precio detrás de
-    "¿eres soltero?"/"¿qué edad tienes?" — regla de la dueña, "no necesita calificar
-    primero". Encontrado 2026-09-09/12 en test real: incluso DESPUÉS de reescribir
-    los templates de #2/#15/#52 sin la pregunta de calificación, el modelo (ai_allowed=
-    true) seguía improvisándola por su cuenta en ~50% de las pruebas en vivo (el
-    hábito de calificar antes de dar info viene de otras partes del prompt, no solo
-    del texto del escenario) — mismo patrón de instrucción-no-fiable que el resto de
-    guardrails de esta sesión.
+    """Гарантия: сценарии-ивента #2/#15/#51/#52 не заменяют цену/ссылку РЕДУНДАНТНЫМ
+    вопросом-разрешением ("¿te gustaría que te mande todos los detalles?") вместо
+    того, чтобы просто дать инфо, раз лид уже сам спросил про ивент.
 
-    Solo actúa si la pregunta de calificación aparece SIN ningún contenido real del
-    evento (precio/link) — si el modelo YA dio la info Y además preguntó soltero/edad
-    de pasada, no es bloqueante, no tocamos nada (evita falsos positivos).
+    ВАЖНО (испр. 2026-09-12): раньше здесь ошибочно гейтился ЛЮБОЙ вопрос
+    "eres soltero?/qué edad tienes?" — это было неверным толкованием фидбека
+    владелицы. Дословная цитата: "да не я не про солетро это ок пусть
+    спрашивает" — сам вопрос soltero/edad ей ОК, жалоба была именно на
+    редундантное "¿Te gustaría que te mande todos los detalles?" ПОСЛЕ того как
+    лид уже явно попросил ивент. Найдено повторно 2026-09-12 живым тестом
+    (Аня): бот выдавал цену БЕЗ какой-либо квалификации вообще — старый регекс
+    убирал соответствующий вопрос как "гейт", хотя это ровно то, что нужно
+    было оставить. Регекс сужен на сам редундантный паттерн, soltero/edad
+    больше не трогаем.
+
+    Solo actúa si el mensaje-permiso aparece SIN ningún contenido real del
+    evento (precio/link) — si el modelo YA dio la info Y además preguntó de
+    pasada, no es bloqueante, no tocamos nada (evita falsos positivos).
     """
     if not used or used.get("id") not in _EVENT_NO_GATE_SCENARIOS:
         return result
