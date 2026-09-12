@@ -472,7 +472,9 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
     # Отдельными сообщениями ПОСЛЕ текста; пер-типовой дедуп внутри; сбой не роняет ответ.
     if result.get("send_event_photo"):
         try:
-            await actions.send_event_photos(phone)
+            # photo_caption (ai.py _maybe_announce_event_photo) — подпись К фото
+            # (Wazzup text+contentUri в одном сообщении), не отдельный текстовый баббл.
+            await actions.send_event_photos(phone, caption=result.get("photo_caption"))
         except Exception:
             logger.exception("send_event_photos упал [%s] (ответ лиду уже отправлен)", phone)
     if result.get("send_event_video"):

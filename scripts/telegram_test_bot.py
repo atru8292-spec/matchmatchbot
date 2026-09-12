@@ -143,8 +143,11 @@ async def _maybe_send_event_video(client: httpx.AsyncClient, chat_id: int, phone
             logger.info("нет видео ивента в пуле — пропуск (chat_id=%s)", chat_id)
             return
         url = items[0]["storage_url"]
-        r = await client.post(f"{API}/sendVideo",
-                              json={"chat_id": chat_id, "video": url, "reply_markup": _KEYBOARD})
+        payload = {"chat_id": chat_id, "video": url, "reply_markup": _KEYBOARD}
+        caption = result.get("video_caption")
+        if caption:
+            payload["caption"] = caption
+        r = await client.post(f"{API}/sendVideo", json=payload)
         r.raise_for_status()
         marker = db.media_marker("video", event_date) or "[video ивента отправлено]"
         await db.insert_message(phone, "outbound", "anna", marker)
@@ -178,10 +181,12 @@ async def _maybe_send_event_photo(client: httpx.AsyncClient, chat_id: int, phone
         if not items:
             logger.info("нет фото ивента в пуле — пропуск (chat_id=%s)", chat_id)
             return
-        for item in items:
-            r = await client.post(f"{API}/sendPhoto",
-                                  json={"chat_id": chat_id, "photo": item["storage_url"],
-                                        "reply_markup": _KEYBOARD})
+        caption = result.get("photo_caption")
+        for i, item in enumerate(items):
+            payload = {"chat_id": chat_id, "photo": item["storage_url"], "reply_markup": _KEYBOARD}
+            if caption and i == 0:  # подпись только на первом фото, как в actions.py
+                payload["caption"] = caption
+            r = await client.post(f"{API}/sendPhoto", json=payload)
             r.raise_for_status()
             await asyncio.sleep(1.0)  # антибан-пауза между фото (упрощённая версия sender.py)
         marker = db.media_marker("image", event_date) or "[фото ивента отправлено]"

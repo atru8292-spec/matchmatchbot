@@ -55,9 +55,12 @@ EVENT_PHOTO_COUNT = 3  # фото за раз (антибан)
 EVENT_VIDEO_COUNT = 1  # видео за раз (тяжёлое — одного достаточно)
 
 
-async def send_event_photos(phone: str, event_date: str | None = None) -> int:
-    """Прислать лиду до 3 случайных ФОТО с ивентов (если фото ещё не слали). Вернуть число."""
-    return await _send_event_media(phone, "image", EVENT_PHOTO_COUNT, event_date)
+async def send_event_photos(phone: str, event_date: str | None = None,
+                            caption: str | None = None) -> int:
+    """Прислать лиду до 3 случайных ФОТО с ивентов (если фото ещё не слали). Вернуть число.
+
+    caption — необязательная подпись к первому фото (см. ai.py _maybe_announce_event_photo)."""
+    return await _send_event_media(phone, "image", EVENT_PHOTO_COUNT, event_date, caption)
 
 
 async def send_event_video(phone: str, event_date: str | None = None,

@@ -266,6 +266,9 @@ _EVENT_VIDEO_ANNOUNCE = (
     "Te dejo también un video donde te respondo las dudas más frecuentes "
     "y te explico los detalles del evento con calma 🤍"
 )
+# Подпись к ФОТО de eventos pasados — mismo principio que el video (2026-09-12,
+# feedback владелицы: las fotos no deben ir "peladas", necesitan decir qué son).
+_EVENT_PHOTO_ANNOUNCE = "Aquí puedes ver cómo fue en nuestros eventos pasados 🤍"
 
 
 def _fixed_reply(scenario: dict) -> dict:
@@ -719,7 +722,8 @@ def _enforce_event_qualification_gate(result: dict, used: dict | None, history: 
     return result
 
 
-def _enforce_event_qualification_followup(result: dict, history: list[dict]) -> dict:
+async def _enforce_event_qualification_followup(result: dict, history: list[dict],
+                                                 used: dict | None, lead: dict) -> dict:
     """El turno anterior de Anna fue EXACTAMENTE _EVENT_QUALIFY_BUBBLE (la pregunta
     soltero/edad que _enforce_event_qualification_gate generó para el evento) — el
     lead está respondiendo a esa pregunta pendiente. Encontrado 2026-09-12 en test
@@ -729,7 +733,11 @@ def _enforce_event_qualification_followup(result: dict, history: list[dict]) -> 
     que en realidad estaba esperando. Como la pregunta pendiente es EXCLUSIVA de
     este guardrail (bubble fijo, no se usa en ningún otro lugar), si el turno
     anterior fue justo eso, damos el precio+link directo, sin importar a qué
-    escenario matcheó este turno."""
+    escenario matcheó este turno.
+
+    Este es el momento del PRIMER pitch real del evento (justo después de calificar)
+    — igual que el video va proactivo la primera vez que se cuenta el evento
+    (regla de la dueña 2026-09-12), lo activamos aquí también con su подпись."""
     if result.get("action") != "respond":
         return result
     last_anna = next((t.get("text") or "" for t in reversed(history or [])
@@ -743,6 +751,8 @@ def _enforce_event_qualification_followup(result: dict, history: list[dict]) -> 
                 "precio/link (matcheó otro escenario) → fuerzo el pitch del evento")
     result = dict(result)
     result["messages"] = ["¡Perfecto, gracias! 🤍", _EVENT_GATE_OVERRIDE_BUBBLE]
+    result["send_event_video"] = True
+    await _maybe_announce_event_video(result, used, lead)
     return result
 
 
@@ -1196,7 +1206,10 @@ async def _maybe_announce_event_video(reply: dict, scenario: dict, lead: dict) -
       • action != 'block' — при блоке main шлёт прощальное сообщение и делает return ДО
         диспетча видео (main.py), т.е. видео не уйдёт → подпись без видео была бы странной.
         Защищает от случая, если #51/#52 когда-либо станет blocks_lead=True (правкой в проде);
-      • сценарий из _EVENT_DETAIL_SCENARIOS и send_event_video выставлен;
+      • send_event_video выставлен (условие на scenario.id убрано 2026-09-12: раньше
+        было только #51/#52 — видео проактивно на #2/#15 (первый интерес к ивенту)
+        оставалось без подписи, хотя реально уходило; флаг сам по себе уже несёт всю
+        нужную бизнес-логику, ограничение по id было лишним и дырявым);
       • видео этому лиду на ЭТОТ ивент ещё НЕ слали (дедуп по дате, вар. B);
       • в пуле есть активное видео (иначе actions.send_event_video пришлёт 0).
     event_date берём из app_settings — тот же источник, что actions.send_event_video при
@@ -1206,7 +1219,7 @@ async def _maybe_announce_event_video(reply: dict, scenario: dict, lead: dict) -
     """
     if reply.get("action") == "block":
         return  # видео при блоке не уйдёт (main возвращается раньше) — подпись не нужна
-    if not reply.get("send_event_video") or scenario.get("id") not in _EVENT_DETAIL_SCENARIOS:
+    if not reply.get("send_event_video"):
         return
     phone = lead.get("phone")
     if not reply.get("messages") or not phone:
@@ -1223,6 +1236,32 @@ async def _maybe_announce_event_video(reply: dict, scenario: dict, lead: dict) -
         return
     reply["video_caption"] = _EVENT_VIDEO_ANNOUNCE
     logger.info("подпись explainer-видео выставлена для #%s, %s", scenario.get("id"), phone)
+
+
+async def _maybe_announce_event_photo(reply: dict, scenario: dict, lead: dict) -> None:
+    """Выставить reply["photo_caption"] — подпись К ФОТО ивента — тем же принципом, что
+    _maybe_announce_event_video (2026-09-12, feedback владелицы: фото не должны идти
+    "голыми"). Условия те же: action != block, send_event_photo выставлен, фото этому
+    лиду на этот ивент ещё не слали, в пуле есть активное фото."""
+    if reply.get("action") == "block":
+        return
+    if not reply.get("send_event_photo"):
+        return
+    phone = lead.get("phone")
+    if not reply.get("messages") or not phone:
+        return
+    try:
+        s = await db.get_settings(["event_date"])
+        event_date = s.get("event_date") or None
+        if await db.event_media_sent(phone, "image", event_date):
+            return
+        if not await db.random_event_media("image", 1):
+            return
+    except Exception:
+        logger.exception("подпись фото #%s: проверка упала — не выставляю", (scenario or {}).get("id"))
+        return
+    reply["photo_caption"] = _EVENT_PHOTO_ANNOUNCE
+    logger.info("подпись фото ивента выставлена для #%s, %s", (scenario or {}).get("id"), phone)
 
 
 async def _enforce_event_video(result: dict, used: dict | None, lead: dict) -> dict:
@@ -1534,7 +1573,9 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = _enforce_course_escalation(result, used, user_text, history)
     result = await _enforce_event_video(result, used, lead)
     result = _enforce_event_qualification_gate(result, used, history)
-    result = _enforce_event_qualification_followup(result, history)
+    result = await _enforce_event_qualification_followup(result, history, used, lead)
+    if result.get("send_event_photo") and "photo_caption" not in result:
+        await _maybe_announce_event_photo(result, used, lead)
     result = await _enforce_service_price_gate(result, lead)
     result = _enforce_no_regreet_on_repeat(result, user_text, history)
     result = _enforce_emoji_budget(result, history)

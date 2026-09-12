@@ -904,6 +904,53 @@ class TestEventVideoAnnounce:
         assert ai._EVENT_VIDEO_ANNOUNCE not in "\n".join(result["messages"])
 
 
+class TestEventPhotoAnnounce:
+    """Подпись a la foto del evento (2026-09-12, feedback владелицы: las fotos no
+    deben ir "peladas") — mismo principio que _maybe_announce_event_video pero para
+    send_event_photo/photo_caption."""
+
+    def _patches(self, *, already_sent: bool, pool_photo: list):
+        return (
+            patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})),
+            patch("ai.db.event_media_sent", AsyncMock(return_value=already_sent)),
+            patch("ai.db.random_event_media", AsyncMock(return_value=pool_photo)),
+        )
+
+    async def test_caption_set_when_not_sent_and_pool_nonempty(self):
+        reply = {"action": "respond", "messages": ["Tómate tu tiempo 🤍"], "send_event_photo": True}
+        lead = _make_lead(phone="wa_5215500000010")
+        p_settings, p_sent, p_pool = self._patches(already_sent=False, pool_photo=[{"storage_url": "u"}])
+        with p_settings, p_sent, p_pool:
+            await ai._maybe_announce_event_photo(reply, _make_scenario(id=2), lead)
+        assert reply["photo_caption"] == ai._EVENT_PHOTO_ANNOUNCE
+
+    async def test_no_caption_when_already_sent(self):
+        reply = {"action": "respond", "messages": ["Tómate tu tiempo 🤍"], "send_event_photo": True}
+        lead = _make_lead(phone="wa_5215500000011")
+        p_settings, p_sent, p_pool = self._patches(already_sent=True, pool_photo=[{"storage_url": "u"}])
+        with p_settings, p_sent, p_pool:
+            await ai._maybe_announce_event_photo(reply, _make_scenario(id=2), lead)
+        assert "photo_caption" not in reply
+
+    async def test_no_caption_when_pool_empty(self):
+        reply = {"action": "respond", "messages": ["Tómate tu tiempo 🤍"], "send_event_photo": True}
+        lead = _make_lead(phone="wa_5215500000012")
+        p_settings, p_sent, p_pool = self._patches(already_sent=False, pool_photo=[])
+        with p_settings, p_sent, p_pool:
+            await ai._maybe_announce_event_photo(reply, _make_scenario(id=2), lead)
+        assert "photo_caption" not in reply
+
+    async def test_no_caption_when_flag_false(self):
+        reply = {"action": "respond", "messages": ["ok"], "send_event_photo": False}
+        await ai._maybe_announce_event_photo(reply, _make_scenario(id=2), _make_lead())
+        assert "photo_caption" not in reply
+
+    async def test_no_caption_when_block(self):
+        reply = {"action": "block", "messages": ["ok"], "send_event_photo": True}
+        await ai._maybe_announce_event_photo(reply, _make_scenario(id=2), _make_lead())
+        assert "photo_caption" not in reply
+
+
 class TestGenerateReplyAI:
     """Ветка 2: ai_allowed=True (или нет уверенного матча) → OpenAI вызывается."""
 
@@ -1467,35 +1514,41 @@ class TestEnforceEventQualificationFollowup:
     pitch del evento de todas formas (encontrado 2026-09-12: sin esto, el lead se
     quedaba atorado en "¿a qué te dedicas?" del guion de servicio)."""
 
-    def test_forces_pitch_after_pending_question(self):
+    async def test_forces_pitch_after_pending_question(self):
         result = {"action": "respond", "messages": ["Va, gracias", "¿A qué te dedicas?"]}
         history = [
             {"sender": "lead", "text": "evento"},
             {"sender": "anna", "text": ai._EVENT_QUALIFY_BUBBLE},
         ]
-        out = ai._enforce_event_qualification_followup(result, history)
+        used = _make_scenario(id=2)
+        lead = _make_lead(phone="wa_5215500000099")
+        with patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})), \
+             patch("ai.db.event_media_sent", AsyncMock(return_value=False)), \
+             patch("ai.db.random_event_media", AsyncMock(return_value=[{"storage_url": "u"}])):
+            out = await ai._enforce_event_qualification_followup(result, history, used, lead)
         text = " ".join(out["messages"])
         assert "[event_link]" in text
         assert "mxn" in text.lower() or "MXN" in text
+        assert out["send_event_video"] is True
 
-    def test_noop_when_content_already_given(self):
+    async def test_noop_when_content_already_given(self):
         result = {"action": "respond", "messages": ["Va! El precio es 6,000 MXN: [event_link]"]}
         history = [{"sender": "anna", "text": ai._EVENT_QUALIFY_BUBBLE}]
-        out = ai._enforce_event_qualification_followup(result, history)
+        out = await ai._enforce_event_qualification_followup(result, history, _make_scenario(id=2), _make_lead())
         assert out["messages"] == result["messages"]
 
-    def test_noop_when_last_anna_message_is_different(self):
+    async def test_noop_when_last_anna_message_is_different(self):
         """El último mensaje de Anna no fue la pregunta específica del evento (p.ej.
         pregunta soltero del flujo de SERVICIO) — no es nuestro caso, no tocamos."""
         result = {"action": "respond", "messages": ["¿A qué te dedicas?"]}
         history = [{"sender": "anna", "text": "¿Eres soltero? ¿Qué edad tienes?"}]
-        out = ai._enforce_event_qualification_followup(result, history)
+        out = await ai._enforce_event_qualification_followup(result, history, _make_scenario(id=2), _make_lead())
         assert out["messages"] == result["messages"]
 
-    def test_noop_when_action_not_respond(self):
+    async def test_noop_when_action_not_respond(self):
         result = {"action": "escalate", "messages": ["¿A qué te dedicas?"]}
         history = [{"sender": "anna", "text": ai._EVENT_QUALIFY_BUBBLE}]
-        out = ai._enforce_event_qualification_followup(result, history)
+        out = await ai._enforce_event_qualification_followup(result, history, _make_scenario(id=2), _make_lead())
         assert out["messages"] == result["messages"]
 
 
