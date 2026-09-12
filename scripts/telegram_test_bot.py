@@ -153,6 +153,44 @@ async def _maybe_send_event_video(client: httpx.AsyncClient, chat_id: int, phone
         logger.exception("не смогла отправить видео ивента (chat_id=%s)", chat_id)
 
 
+EVENT_PHOTO_COUNT = 3  # то же значение, что actions.EVENT_PHOTO_COUNT (не импортируем
+# actions.py целиком сюда — он тянет booking/gcal и другие боевые интеграции, лишние
+# для песочницы; сам механизм send_event_photo дублируем локально, как и video).
+
+
+async def _maybe_send_event_photo(client: httpx.AsyncClient, chat_id: int, phone: str,
+                                   result: dict) -> None:
+    """Если AI просит фото ивента (send_event_photo) — реально скачать/отправить, с тем
+    же дедупом, что actions.send_event_photos в проде. НАЙДЕНО 2026-09-09 (живой тест
+    владелицы): этот флаг вообще не был подключён здесь (только send_event_video был) —
+    AI текстом обещал фото ("¡Claro! Te mando una foto..."), но физически ничего не
+    уходило, и на повторный вопрос лида модель ГАЛЛЮЦИНИРОВАЛА оправдание ("a veces
+    tarda en aparecer en WhatsApp") — бессмысленное вдобавок, раз это Telegram, не
+    WhatsApp. Сбой не должен ронять уже отправленный текстовый ответ."""
+    if not result.get("send_event_photo"):
+        return
+    try:
+        s = await db.get_settings(["event_date"])
+        event_date = s.get("event_date") or None
+        if await db.event_media_sent(phone, "image", event_date):
+            return
+        items = await db.random_event_media("image", EVENT_PHOTO_COUNT)
+        if not items:
+            logger.info("нет фото ивента в пуле — пропуск (chat_id=%s)", chat_id)
+            return
+        for item in items:
+            r = await client.post(f"{API}/sendPhoto",
+                                  json={"chat_id": chat_id, "photo": item["storage_url"],
+                                        "reply_markup": _KEYBOARD})
+            r.raise_for_status()
+            await asyncio.sleep(1.0)  # антибан-пауза между фото (упрощённая версия sender.py)
+        marker = db.media_marker("image", event_date) or "[фото ивента отправлено]"
+        await db.insert_message(phone, "outbound", "anna", marker)
+        logger.info("фото ивента отправлено (%d шт., chat_id=%s)", len(items), chat_id)
+    except Exception:
+        logger.exception("не смогла отправить фото ивента (chat_id=%s)", chat_id)
+
+
 async def _reply_via_ai(client: httpx.AsyncClient, chat_id: int, phone: str,
                         lead: dict, history: list[dict], user_text: str) -> None:
     """Прогнать user_text через реальный ai.generate_reply, отправить бабблы, сохранить."""
@@ -169,6 +207,7 @@ async def _reply_via_ai(client: httpx.AsyncClient, chat_id: int, phone: str,
         await _send(client, chat_id, b)
 
     await _maybe_send_event_video(client, chat_id, phone, result)
+    await _maybe_send_event_photo(client, chat_id, phone, result)
 
     # Обёртка (найдено 2026-09-03, code-review): без try/except исключение здесь
     # (напр. date_of_birth-строка не сконвертирована → asyncpg падает на upsert_lead)

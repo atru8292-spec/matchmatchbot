@@ -1334,6 +1334,57 @@ class TestEnforceLinkPresence:
         assert out["messages"] == ["ok"]
 
 
+class TestEnforceNoEventQualificationGate:
+    """Сценарии-ивента (#2/#15/#51/#52) не gatean detalles/precio detrás de "¿eres
+    soltero?" — regla de la dueña "no necesita calificar primero". Найдено 2026-09-09/12
+    (Аня в живом тесте): даже после переписи текстов #2/#15/#52 без вопроса о
+    calificación, модель (ai_allowed=true) всё равно ~50% случаев сама добавляла этот
+    гейт без реального контента (цены/ссылки)."""
+
+    @pytest.mark.parametrize("scenario_id", [2, 15, 51, 52])
+    def test_replaces_gate_without_content(self, scenario_id):
+        used = _make_scenario(id=scenario_id)
+        result = {"action": "respond",
+                  "messages": ["¡Perfecto! Antes de contarte más, ¿eres soltero?"]}
+        out = ai._enforce_no_event_qualification_gate(result, used)
+        text = " ".join(out["messages"])
+        assert "[event_link]" in text
+        assert "mxn" in text.lower() or "MXN" in text
+
+    def test_noop_when_content_already_present(self):
+        """Модель спросила soltero/edad, НО заодно уже дала цену/ссылку — не блокирующе,
+        не трогаем (избегаем ложных срабатываний)."""
+        used = _make_scenario(id=51)
+        result = {"action": "respond", "messages": [
+            "El precio es 6000 MXN, aquí tu boleto: [event_link]. Por cierto, ¿eres soltero?"]}
+        out = ai._enforce_no_event_qualification_gate(result, used)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_no_gate_phrase(self):
+        used = _make_scenario(id=51)
+        result = {"action": "respond", "messages": ["Con gusto te cuento del evento."]}
+        out = ai._enforce_no_event_qualification_gate(result, used)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_for_unrelated_scenario(self):
+        """Гейт соltero/edad ЛЕГИТИМЕН для сервисной воронки (не ивент) — не трогаем."""
+        used = _make_scenario(id=16)
+        result = {"action": "respond", "messages": ["¿Eres soltero y qué edad tienes?"]}
+        out = ai._enforce_no_event_qualification_gate(result, used)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_action_not_respond(self):
+        used = _make_scenario(id=51)
+        result = {"action": "escalate", "messages": ["¿Eres soltero?"]}
+        out = ai._enforce_no_event_qualification_gate(result, used)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_used_none(self):
+        result = {"action": "respond", "messages": ["¿Eres soltero?"]}
+        out = ai._enforce_no_event_qualification_gate(result, None)
+        assert out["messages"] == result["messages"]
+
+
 class TestTagEventInterest:
     """extracted.interest='event' фиксируется единой пост-генерационной точкой для
     сценариев деталей ивента (№51/№52) — что для фикс-, что для AI-ветки."""

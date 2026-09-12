@@ -606,6 +606,56 @@ def _enforce_link_presence(result: dict, used: dict | None) -> dict:
     return result
 
 
+# Сценарии, где деталь/цена ивента даётся СВОБОДНО, без гейта соltero/edad (правило
+# владельца, подтверждено 2026-08-22/26: "no necesita señal de interés previa ni
+# calificar primero"). #2/#15 переписаны 2026-09-09 после жалобы владелицы (Аня в
+# живом тесте: подтвердила интерес к ивенту дважды — "evento", потом "si" — и всё
+# равно получила "antes de darte los detalles, ¿eres soltero?"), теперь тоже дают
+# цену/ссылку сразу, как #51/#52.
+_EVENT_NO_GATE_SCENARIOS = {2, 15, 51, 52}
+_QUALIFY_GATE_RE = re.compile(
+    r"eres soltero|qu[eé] edad tienes|cu[aá]ntos a[ñn]os tienes", re.IGNORECASE,
+)
+_EVENT_CONTENT_MARKER_RE = re.compile(
+    r"\[event_link\]|http|\bmxn\b|\[event_price", re.IGNORECASE,
+)
+_EVENT_GATE_OVERRIDE_BUBBLE = (
+    "El precio del evento es de [event_price_nonmember] MXN[event_promo] e incluye "
+    "bebida de bienvenida y entrantes. Aquí está el enlace para tu boleto, con fotos "
+    "y videos de eventos pasados: [event_link] 🤍"
+)
+
+
+def _enforce_no_event_qualification_gate(result: dict, used: dict | None) -> dict:
+    """Гарантия: сценарии-ивента #2/#15/#51/#52 no gatean detalles/precio detrás de
+    "¿eres soltero?"/"¿qué edad tienes?" — regla de la dueña, "no necesita calificar
+    primero". Encontrado 2026-09-09/12 en test real: incluso DESPUÉS de reescribir
+    los templates de #2/#15/#52 sin la pregunta de calificación, el modelo (ai_allowed=
+    true) seguía improvisándola por su cuenta en ~50% de las pruebas en vivo (el
+    hábito de calificar antes de dar info viene de otras partes del prompt, no solo
+    del texto del escenario) — mismo patrón de instrucción-no-fiable que el resto de
+    guardrails de esta sesión.
+
+    Solo actúa si la pregunta de calificación aparece SIN ningún contenido real del
+    evento (precio/link) — si el modelo YA dio la info Y además preguntó soltero/edad
+    de pasada, no es bloqueante, no tocamos nada (evita falsos positivos).
+    """
+    if not used or used.get("id") not in _EVENT_NO_GATE_SCENARIOS:
+        return result
+    if result.get("action") != "respond":
+        return result
+    messages = result.get("messages") or []
+    text = " ".join(messages)
+    if not _QUALIFY_GATE_RE.search(text) or _EVENT_CONTENT_MARKER_RE.search(text):
+        return result
+    logger.info("guardrail: сценарий #%s гейтил детали ивента вопросом soltero/edad "
+                "без контента → форс прямого ответа с ценой+ссылкой", used["id"])
+    result = dict(result)
+    result["messages"] = ["¡Claro! Te cuento todos los detalles ahora mismo 🤍",
+                          _EVENT_GATE_OVERRIDE_BUBBLE]
+    return result
+
+
 _SERVICE_PRICE_PATTERN = re.compile(r"\b10[.,]?000\b")
 
 
@@ -1357,6 +1407,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         result["extracted"]["interest"] = merged_interest
     result = _enforce_nurture_stage(result, used, ambiguous)
     result = _enforce_service_qualification_gate(result, user_text, lead)
+    result = _enforce_no_event_qualification_gate(result, used)
     result = _enforce_link_presence(result, used)
     # ПОСЛЕ _enforce_link_presence: garantiza que la ссылка на билет уже в messages
     # ДО того de que decida si hace falta escalar a cursos — evita que ambos guardrails
