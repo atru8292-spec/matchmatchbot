@@ -1551,6 +1551,19 @@ class TestEnforceEventQualificationFollowup:
         out = await ai._enforce_event_qualification_followup(result, history, _make_scenario(id=2), _make_lead())
         assert out["messages"] == result["messages"]
 
+    async def test_does_not_crash_when_used_is_none(self):
+        """Regresión 2026-09-12: la respuesta del lead a la pregunta pendiente a veces
+        no matchea NINGÚN escenario confiable (used=None, p.ej. RAG ambiguo) — antes
+        esto crasheaba en _maybe_announce_event_video (scenario.get en None)."""
+        result = {"action": "respond", "messages": ["Va, gracias", "¿A qué te dedicas?"]}
+        history = [{"sender": "anna", "text": ai._EVENT_QUALIFY_BUBBLE}]
+        with patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})), \
+             patch("ai.db.event_media_sent", AsyncMock(return_value=False)), \
+             patch("ai.db.random_event_media", AsyncMock(return_value=[{"storage_url": "u"}])):
+            out = await ai._enforce_event_qualification_followup(result, history, None, _make_lead())
+        assert "[event_link]" in " ".join(out["messages"])
+        assert out["send_event_video"] is True
+
 
 class TestTagEventInterest:
     """extracted.interest='event' фиксируется единой пост-генерационной точкой для

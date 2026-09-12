@@ -1195,7 +1195,7 @@ async def _call_openai(user_context: str) -> dict:
 
 # ===== главная точка входа =====
 
-async def _maybe_announce_event_video(reply: dict, scenario: dict, lead: dict) -> None:
+async def _maybe_announce_event_video(reply: dict, scenario: dict | None, lead: dict) -> None:
     """Выставить reply["video_caption"] — подпись К ВИДЕО (не отдельный текстовый баббл) —
     ЕСЛИ видео реально уйдёт. Раньше текст дописывался в последний баббл ответа; теперь
     main.py передаёт video_caption в actions.send_event_video → sender.send_media, и
@@ -1232,13 +1232,13 @@ async def _maybe_announce_event_video(reply: dict, scenario: dict, lead: dict) -
         if not await db.random_event_media("video", 1):
             return  # пул пуст / нет активного видео — не обещаем то, что не придёт
     except Exception:
-        logger.exception("подпись видео #%s: проверка упала — не выставляю", scenario.get("id"))
+        logger.exception("подпись видео #%s: проверка упала — не выставляю", (scenario or {}).get("id"))
         return
     reply["video_caption"] = _EVENT_VIDEO_ANNOUNCE
-    logger.info("подпись explainer-видео выставлена для #%s, %s", scenario.get("id"), phone)
+    logger.info("подпись explainer-видео выставлена для #%s, %s", (scenario or {}).get("id"), phone)
 
 
-async def _maybe_announce_event_photo(reply: dict, scenario: dict, lead: dict) -> None:
+async def _maybe_announce_event_photo(reply: dict, scenario: dict | None, lead: dict) -> None:
     """Выставить reply["photo_caption"] — подпись К ФОТО ивента — тем же принципом, что
     _maybe_announce_event_video (2026-09-12, feedback владелицы: фото не должны идти
     "голыми"). Условия те же: action != block, send_event_photo выставлен, фото этому
