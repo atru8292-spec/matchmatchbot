@@ -522,6 +522,14 @@ _VALID_AI_RESPONSE = {
     "used_scenario_id": None,
 }
 
+# Историал con la pregunta soltero/edad YA hecha por Anna — para tests de otros
+# guardrails (link/video) que no quieren activar _enforce_event_qualification_gate.
+_QUALIFIED_HISTORY = [
+    {"sender": "lead", "text": "Hola"},
+    {"sender": "anna", "text": "¡Hola! Eres soltero? Qué edad tienes?"},
+    {"sender": "lead", "text": "Sí, tengo 30"},
+]
+
 
 @pytest.fixture()
 def lead():
@@ -878,7 +886,7 @@ class TestEventVideoAnnounce:
         with patch("ai.search_scenarios", AsyncMock(return_value=[n51])), \
              patch("ai._call_openai", AsyncMock(return_value=ai_response)), \
              p_settings, p_sent, p_pool:
-            result = await ai.generate_reply(lead, [], "cuánto cuesta el evento?")
+            result = await ai.generate_reply(lead, _QUALIFIED_HISTORY, "cuánto cuesta el evento?")
         assert result["send_event_video"] is True
         assert result["video_caption"] == ai._EVENT_VIDEO_ANNOUNCE
 
@@ -1277,7 +1285,7 @@ class TestEnforceLinkPresence:
                        "used_scenario_id": 51}
         with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
              patch("ai._call_openai", AsyncMock(return_value=ai_response)):
-            result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
+            result = await ai.generate_reply(lead, _QUALIFIED_HISTORY, "cuanto cuesta el evento")
         assert any("[event_link]" in m for m in result["messages"])
         assert result["messages"][0] == "El precio es 6000 MXN."
 
@@ -1288,7 +1296,7 @@ class TestEnforceLinkPresence:
                        "used_scenario_id": 51}
         with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
              patch("ai._call_openai", AsyncMock(return_value=ai_response)):
-            result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
+            result = await ai.generate_reply(lead, _QUALIFIED_HISTORY, "cuanto cuesta el evento")
         assert result["messages"] == ["Detalles del evento.", "Aquí tu boleto: [event_link] 🤍"]
 
     async def test_no_duplicate_when_resolved_url_present(self, lead, history):
@@ -1301,7 +1309,7 @@ class TestEnforceLinkPresence:
                        "used_scenario_id": 51}
         with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
              patch("ai._call_openai", AsyncMock(return_value=ai_response)):
-            result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
+            result = await ai.generate_reply(lead, _QUALIFIED_HISTORY, "cuanto cuesta el evento")
         assert result["messages"] == ["Aquí tu boleto: https://www.rusaencdmx.com/09-09-2026 🤍"]
 
     async def test_noop_for_unrelated_scenario(self, lead, history):
@@ -1321,7 +1329,7 @@ class TestEnforceLinkPresence:
                        "used_scenario_id": 51}
         with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
              patch("ai._call_openai", AsyncMock(return_value=ai_response)):
-            result = await ai.generate_reply(lead, history, "cuanto cuesta el evento")
+            result = await ai.generate_reply(lead, _QUALIFIED_HISTORY, "cuanto cuesta el evento")
         assert len(result["messages"]) == ai.MAX_MESSAGES
         assert result["messages"][:3] == ["uno", "dos", "tres"]
         assert "[event_link]" in result["messages"][-1]
@@ -1392,6 +1400,102 @@ class TestEnforceNoEventQualificationGate:
     def test_noop_when_used_none(self):
         result = {"action": "respond", "messages": ["¿Te gustaría que te mande los detalles?"]}
         out = ai._enforce_no_event_qualification_gate(result, None)
+        assert out["messages"] == result["messages"]
+
+
+class TestEnforceEventQualificationGate:
+    """(2026-09-12, revierte la decisión previa "sin gate") Precio/detalles del
+    evento (#2/#15/#51/#52) no se dan sin haber preguntado ANTES soltero/edad al
+    menos una vez en la conversación — pero solo la primera vez, no repetir."""
+
+    @pytest.mark.parametrize("scenario_id", [2, 15, 51, 52])
+    def test_replaces_content_with_question_first_time(self, scenario_id):
+        used = _make_scenario(id=scenario_id)
+        result = {"action": "respond",
+                  "messages": ["El precio es 6,000 MXN, aquí tu boleto: [event_link]"],
+                  "send_event_photo": True, "send_event_video": True}
+        history = [{"sender": "lead", "text": "evento"}]
+        out = ai._enforce_event_qualification_gate(result, used, history)
+        text = " ".join(out["messages"])
+        assert "soltero" in text.lower()
+        assert "[event_link]" not in text
+        assert out["send_event_photo"] is False
+        assert out["send_event_video"] is False
+
+    def test_noop_when_already_asked_before(self):
+        """Ya se preguntó soltero/edad en un mensaje anterior de Anna — no repetir,
+        aunque la respuesta del lead ("si") no se haya parseado a is_single/age
+        (regresión documentada que motivó quitar el gate en 2026-09-09)."""
+        used = _make_scenario(id=2)
+        result = {"action": "respond",
+                  "messages": ["El precio es 6,000 MXN, aquí tu boleto: [event_link]"]}
+        history = [
+            {"sender": "lead", "text": "evento"},
+            {"sender": "anna", "text": "¡Perfecto! ¿Eres soltero? ¿Qué edad tienes?"},
+            {"sender": "lead", "text": "si"},
+        ]
+        out = ai._enforce_event_qualification_gate(result, used, history)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_no_content_yet(self):
+        used = _make_scenario(id=2)
+        result = {"action": "respond", "messages": ["¡Qué bueno que te interesa el evento!"]}
+        out = ai._enforce_event_qualification_gate(result, used, [])
+        assert out["messages"] == result["messages"]
+
+    def test_noop_for_unrelated_scenario(self):
+        used = _make_scenario(id=16)
+        result = {"action": "respond", "messages": ["La inversión es de 6,000 MXN: [event_link]"]}
+        out = ai._enforce_event_qualification_gate(result, used, [])
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_action_not_respond(self):
+        used = _make_scenario(id=2)
+        result = {"action": "escalate", "messages": ["El precio es 6,000 MXN: [event_link]"]}
+        out = ai._enforce_event_qualification_gate(result, used, [])
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_used_none(self):
+        result = {"action": "respond", "messages": ["El precio es 6,000 MXN: [event_link]"]}
+        out = ai._enforce_event_qualification_gate(result, None, [])
+        assert out["messages"] == result["messages"]
+
+
+class TestEnforceEventQualificationFollowup:
+    """El lead responde a la pregunta soltero/edad del evento, pero el turno matcheó
+    a otro escenario (típicamente #4, genérico) que no da precio/link — forzamos el
+    pitch del evento de todas formas (encontrado 2026-09-12: sin esto, el lead se
+    quedaba atorado en "¿a qué te dedicas?" del guion de servicio)."""
+
+    def test_forces_pitch_after_pending_question(self):
+        result = {"action": "respond", "messages": ["Va, gracias", "¿A qué te dedicas?"]}
+        history = [
+            {"sender": "lead", "text": "evento"},
+            {"sender": "anna", "text": ai._EVENT_QUALIFY_BUBBLE},
+        ]
+        out = ai._enforce_event_qualification_followup(result, history)
+        text = " ".join(out["messages"])
+        assert "[event_link]" in text
+        assert "mxn" in text.lower() or "MXN" in text
+
+    def test_noop_when_content_already_given(self):
+        result = {"action": "respond", "messages": ["Va! El precio es 6,000 MXN: [event_link]"]}
+        history = [{"sender": "anna", "text": ai._EVENT_QUALIFY_BUBBLE}]
+        out = ai._enforce_event_qualification_followup(result, history)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_last_anna_message_is_different(self):
+        """El último mensaje de Anna no fue la pregunta específica del evento (p.ej.
+        pregunta soltero del flujo de SERVICIO) — no es nuestro caso, no tocamos."""
+        result = {"action": "respond", "messages": ["¿A qué te dedicas?"]}
+        history = [{"sender": "anna", "text": "¿Eres soltero? ¿Qué edad tienes?"}]
+        out = ai._enforce_event_qualification_followup(result, history)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_action_not_respond(self):
+        result = {"action": "escalate", "messages": ["¿A qué te dedicas?"]}
+        history = [{"sender": "anna", "text": ai._EVENT_QUALIFY_BUBBLE}]
+        out = ai._enforce_event_qualification_followup(result, history)
         assert out["messages"] == result["messages"]
 
 

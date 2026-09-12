@@ -606,12 +606,16 @@ def _enforce_link_presence(result: dict, used: dict | None) -> dict:
     return result
 
 
-# Сценарии, где деталь/цена ивента даётся СВОБОДНО, без гейта соltero/edad (правило
-# владельца, подтверждено 2026-08-22/26: "no necesita señal de interés previa ni
-# calificar primero"). #2/#15 переписаны 2026-09-09 после жалобы владелицы (Аня в
-# живом тесте: подтвердила интерес к ивенту дважды — "evento", потом "si" — и всё
-# равно получила "antes de darte los detalles, ¿eres soltero?"), теперь тоже дают
-# цену/ссылку сразу, как #51/#52.
+# ИСТОРИЯ (не текущее поведение): раньше здесь было "владелец подтвердил дважды —
+# ивент без гейта соltero/edad" (2026-08-22/26, #2/#15 переписаны 2026-09-09).
+# РЕВЕРСНУТО 2026-09-12 живым тестом (Аня): бот стал давать цену+ссылку СОВСЕМ без
+# квалификации, даже с первого "evento" — владелица прямо попросила вернуть вопрос
+# soltero/edad перед деталями. Название множества оставлено (используется другими
+# guardrail'ами ниже — _enforce_no_event_qualification_gate para el filler
+# redundante, _enforce_link_presence), но теперь СУЩЕСТВУЕТ отдельный
+# _enforce_event_qualification_gate que sí gatea la primera vez (ver abajo) — evita
+# repetir el bug original (preguntar de nuevo pese a confirmación repetida del lead)
+# comprobando el HISTORIAL, no is_single/age persistido.
 _EVENT_NO_GATE_SCENARIOS = {2, 15, 51, 52}
 _QUALIFY_GATE_RE = re.compile(
     r"te gustar[ií]a que te (mand|cuent|comparta|d[ié])|"
@@ -656,11 +660,89 @@ def _enforce_no_event_qualification_gate(result: dict, used: dict | None) -> dic
     text = " ".join(messages)
     if not _QUALIFY_GATE_RE.search(text) or _EVENT_CONTENT_MARKER_RE.search(text):
         return result
-    logger.info("guardrail: сценарий #%s гейтил детали ивента вопросом soltero/edad "
+    logger.info("guardrail: сценарий #%s ответил редундантным вопросом-разрешением "
                 "без контента → форс прямого ответа с ценой+ссылкой", used["id"])
     result = dict(result)
     result["messages"] = ["¡Claro! Te cuento todos los detalles ahora mismo 🤍",
                           _EVENT_GATE_OVERRIDE_BUBBLE]
+    return result
+
+
+_EVENT_QUALIFY_ASK_RE = re.compile(
+    r"eres soltero|qu[eé] edad tienes|cu[aá]ntos a[ñn]os tienes", re.IGNORECASE,
+)
+_EVENT_QUALIFY_BUBBLE = ("¡Perfecto! Antes de contarte todos los detalles, cuéntame: "
+                          "¿eres soltero? ¿Qué edad tienes?")
+
+
+def _event_qualification_already_asked(history: list[dict]) -> bool:
+    """Ya se preguntó soltero/edad para el evento en algún mensaje anterior de Anna —
+    no repetir aunque la respuesta del lead ("si", "va") no se haya parseado a
+    is_single/age. Comprobar el HISTORIAL (no lead.is_single/age persistido) evita
+    el bug original que motivó quitar este gate en 2026-09-09: el lead confirmó
+    interés DOS veces ("evento", luego "si") y aun así volvió a recibir la pregunta,
+    porque "si" no se parseaba como respuesta de calificación."""
+    for turn in history or []:
+        if turn.get("sender") == "anna" and _EVENT_QUALIFY_ASK_RE.search(turn.get("text") or ""):
+            return True
+    return False
+
+
+def _enforce_event_qualification_gate(result: dict, used: dict | None, history: list[dict]) -> dict:
+    """Гарантия (2026-09-12, revierte la decisión previa "sin gate" tras feedback en
+    vivo de la dueña — ver comentario en _EVENT_NO_GATE_SCENARIOS arriba): precio/
+    detalles del evento (#2/#15/#51/#52) no se dan sin haber preguntado ANTES
+    "eres soltero?/qué edad tienes?" al menos una vez en la conversación.
+
+    Solo la PRIMERA vez (ver _event_qualification_already_asked) — no repetir la
+    pregunta en turnos siguientes. Reemplaza TODO el mensaje (no mezcla con el
+    pitch) y apaga foto/video de este turno — no tiene sentido mandarlos junto a
+    una pregunta pendiente (mismo principio que ya aplica a las fotos en el
+    prompt: no envíes medios en el turno en que preguntas soltero/edad).
+    """
+    if not used or used.get("id") not in _EVENT_NO_GATE_SCENARIOS:
+        return result
+    if result.get("action") != "respond":
+        return result
+    if _event_qualification_already_asked(history):
+        return result
+    text = " ".join(result.get("messages") or [])
+    if not _EVENT_CONTENT_MARKER_RE.search(text):
+        return result
+    logger.info("guardrail: сценарий #%s дал детали ивента без вопроса soltero/edad "
+                "(первый раз в разговоре) → заменяю на вопрос", used["id"])
+    result = dict(result)
+    result["messages"] = [_EVENT_QUALIFY_BUBBLE]
+    result["send_event_photo"] = False
+    result["send_event_video"] = False
+    result.pop("video_caption", None)
+    return result
+
+
+def _enforce_event_qualification_followup(result: dict, history: list[dict]) -> dict:
+    """El turno anterior de Anna fue EXACTAMENTE _EVENT_QUALIFY_BUBBLE (la pregunta
+    soltero/edad que _enforce_event_qualification_gate generó para el evento) — el
+    lead está respondiendo a esa pregunta pendiente. Encontrado 2026-09-12 en test
+    real: la respuesta del lead ("si, 30") no menciona "evento" y no matchea por RAG
+    a #2/#15/#51/#52 sino a #4 ("confirmó soltero", genérico), que sigue el guion de
+    SERVICIO y pregunta profesión — el lead se queda sin el precio/link del evento
+    que en realidad estaba esperando. Como la pregunta pendiente es EXCLUSIVA de
+    este guardrail (bubble fijo, no se usa en ningún otro lugar), si el turno
+    anterior fue justo eso, damos el precio+link directo, sin importar a qué
+    escenario matcheó este turno."""
+    if result.get("action") != "respond":
+        return result
+    last_anna = next((t.get("text") or "" for t in reversed(history or [])
+                       if t.get("sender") == "anna"), "")
+    if last_anna.strip() != _EVENT_QUALIFY_BUBBLE:
+        return result
+    text = " ".join(result.get("messages") or [])
+    if _EVENT_CONTENT_MARKER_RE.search(text):
+        return result  # ya lo dio bien, no tocamos
+    logger.info("guardrail: respuesta a la pregunta soltero/edad del evento no dio "
+                "precio/link (matcheó otro escenario) → fuerzo el pitch del evento")
+    result = dict(result)
+    result["messages"] = ["¡Perfecto, gracias! 🤍", _EVENT_GATE_OVERRIDE_BUBBLE]
     return result
 
 
@@ -1451,6 +1533,8 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     # veía "faltante" y lo volvía a poner encima, borrando el mensaje de cursos).
     result = _enforce_course_escalation(result, used, user_text, history)
     result = await _enforce_event_video(result, used, lead)
+    result = _enforce_event_qualification_gate(result, used, history)
+    result = _enforce_event_qualification_followup(result, history)
     result = await _enforce_service_price_gate(result, lead)
     result = _enforce_no_regreet_on_repeat(result, user_text, history)
     result = _enforce_emoji_budget(result, history)
