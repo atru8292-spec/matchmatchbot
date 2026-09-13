@@ -628,10 +628,16 @@ _QUALIFY_GATE_RE = re.compile(
 _EVENT_CONTENT_MARKER_RE = re.compile(
     r"\[event_link\]|http|\bmxn\b|\[event_price", re.IGNORECASE,
 )
+# Encontrado 2026-09-13 (feedback de la dueña, en test real): esta versión anterior
+# solo daba precio+link, sin decir qué es el evento ni mencionar a las mujeres —
+# sonaba "flojo" comparado con el pitch normal (Slavic Latino Night, mujeres eslavas
+# solteras). Enriquecido para que el override no pierda ese gancho.
 _EVENT_GATE_OVERRIDE_BUBBLE = (
-    "El precio del evento es de [event_price_nonmember] MXN[event_promo] e incluye "
-    "bebida de bienvenida y entrantes. Aquí está el enlace para tu boleto, con fotos "
-    "y videos de eventos pasados: [event_link] 🤍"
+    "Se llama Slavic Latino Night: es una noche especial en CDMX para conocer en "
+    "persona a mujeres eslavas solteras que buscan una relación seria, en un "
+    "ambiente relajado y seguro. El precio es de [event_price_nonmember] MXN"
+    "[event_promo] e incluye bebida de bienvenida y entrantes. Aquí está el enlace "
+    "para tu boleto, con fotos y videos de eventos pasados: [event_link] 🤍"
 )
 
 
