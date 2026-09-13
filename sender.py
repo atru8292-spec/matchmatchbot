@@ -211,6 +211,15 @@ async def _send_content_uri(phone: str, url: str, where: str, delay: float,
                 json=payload,
             )
             r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        # Тело ответа Wazzup обычно содержит РЕАЛЬНУЮ причину (напр. "file too large",
+        # неверный формат) — repr(e) её не включает, только код статуса. Найдено
+        # 2026-09-13: видео 15.4 МБ упало с 400, но алерт показал только код без
+        # причины, пришлось лезть в API вручную, чтобы понять, что не так.
+        body = e.response.text[:500] if e.response is not None else ""
+        logger.exception("Wazzup %s failed: chat_id=%s, body=%s", where, chat_id, body)
+        await escalation.notify_error(f"sender.{where}", f"{e!r} | body={body}", phone)
+        return False
     except Exception as e:
         logger.exception("Wazzup %s failed: chat_id=%s", where, chat_id)
         await escalation.notify_error(f"sender.{where}", repr(e), phone)
