@@ -422,12 +422,26 @@ def _enforce_service_qualification_gate(result: dict, user_text: str, lead: dict
     подпись к фото раньше терялась целиком). Проверяем анкету по lead СЛИТОМУ с
     result['extracted'] ЭТОГО ЖЕ сообщения — иначе гейт переспросил бы то, что лид
     только что назвал в подписи и AI корректно извлёк прямо сейчас.
+
+    ВАЖНО (найдено 2026-09-13 живым тестом, тестовый номер владелицы): лид написал
+    "Evento" и почти сразу прислал фото — дебаунс склеил их в ОДНО сообщение ("Evento"
+    + [фото одобрено]), первый заход для этого лида. lead.interest ещё пуст (никогда
+    не тегался — не было предыдущего хода), а used-сценарий этого захода тоже не
+    входит в ивент-набор (модель матчит на что-то другое, раз в тексте одновременно
+    и "evento", и фото) → гейт срабатывал как для СЕРВИСА, дублировал "¿eres
+    soltero?" два хода подряд, разговор буксовал. Добавлена проверка на слово
+    "evento" в САМОМ user_text этого хода — не полагаемся только на lead.interest,
+    который может ещё не быть проставлен на первом же сообщении.
     """
-    if "[фото одобрено]" not in user_text or lead.get("interest") == "event":
+    if "[фото одобрено]" not in user_text:
+        return result
+    if lead.get("interest") == "event" or _EVENT_WORD_RE.search(user_text):
         return result
     if result.get("action") != "respond":
         return result
     merged_lead = {**lead, **(result.get("extracted") or {})}
+    if merged_lead.get("interest") == "event":
+        return result
     missing = _missing_qualification_field(merged_lead)
     if not missing:
         return result
@@ -620,6 +634,7 @@ def _enforce_link_presence(result: dict, used: dict | None) -> dict:
 # repetir el bug original (preguntar de nuevo pese a confirmación repetida del lead)
 # comprobando el HISTORIAL, no is_single/age persistido.
 _EVENT_NO_GATE_SCENARIOS = {2, 15, 51, 52}
+_EVENT_WORD_RE = re.compile(r"\bevento\b", re.IGNORECASE)
 _QUALIFY_GATE_RE = re.compile(
     r"te gustar[ií]a que te (mand|cuent|comparta|d[ié])|"
     r"quieres que te (mand|cuent|comparta|platique|d[ié])",
@@ -1380,7 +1395,6 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     # на что-то опиралось). Порог 0.55 — ниже FIXED_BLOCK_SCORE (0.60), чтобы НЕ трогать
     # реально уверенные матчи на другие ивент-сценарии (напр. "no puedo ir al evento" →
     # #48 должен матчить намного увереннее, чем 0.55, и остаться как есть).
-    _EVENT_WORD_RE = re.compile(r"\bevento\b", re.IGNORECASE)
     if (_EVENT_WORD_RE.search(user_text) and lead.get("funnel_stage") != "event_attended"
             # Не трогаем, если top уже И ТАК какой-то из подходящих ивент-сценариев
             # (не только #2 — #15/#51/#52 тоже валидны, напр. "cuanto cuesta el evento"
