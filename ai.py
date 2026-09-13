@@ -393,6 +393,7 @@ def _enforce_nurture_stage(result: dict, used: dict | None, ambiguous: bool = Fa
 # Только НЕ-ивент ветка: интерес к ивенту (interest='event') НАМЕРЕННО без гейта —
 # владелица подтвердила дважды, что цену/детали ивента можно давать любому лиду сразу.
 _QUALIFICATION_QUESTIONS = {
+    "name": "¡Oye, se me pasó preguntarte! ¿Cómo te llamas?",
     "is_single": "Oye, antes de seguir, ¿eres soltero? 😊",
     "age": "Se me pasó preguntarte, ¿qué edad tienes?",
     "profession": "Y antes de contarte más, ¿a qué te dedicas?",
@@ -400,8 +401,12 @@ _QUALIFICATION_QUESTIONS = {
 
 
 def _missing_qualification_field(lead: dict) -> str | None:
-    """Первое недостающее поле анкеты (порядок воронки: холост → возраст →
-    профессия), либо None если анкета полная."""
+    """Первое недостающее поле анкеты (порядок воронки: имя → холост → возраст →
+    профессия), либо None если анкета полная. Имя добавлено первым 2026-09-13
+    (запрос владелицы, тест в живую) — раньше имя не спрашивалось вообще на этом
+    этапе (только позже, перед видеозвонком, см. anna_prompt_v5.md)."""
+    if not lead.get("name"):
+        return "name"
     if lead.get("is_single") is not True:
         return "is_single"
     if not lead.get("age"):
@@ -797,7 +802,7 @@ _EVENT_QUALIFY_ASK_RE = re.compile(
 # pedir la foto del lead — a diferencia del embudo de SERVICIO (mismos 3 datos +
 # foto antes del pitch). Ahora el evento sigue el mismo patrón, en dos pasos.
 _EVENT_QUALIFY_BUBBLE = ("¡Perfecto! Antes de contarte todos los detalles, cuéntame: "
-                          "¿eres soltero? ¿Qué edad tienes? ¿Y a qué te dedicas?")
+                          "¿cómo te llamas? ¿Eres soltero? ¿Qué edad tienes? ¿Y a qué te dedicas?")
 _EVENT_PHOTO_REQUEST_BUBBLE = "¡Perfecto! Y para terminar, ¿me mandas una foto tuya? 😊"
 
 

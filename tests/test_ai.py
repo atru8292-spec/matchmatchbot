@@ -1865,26 +1865,34 @@ class TestEnforceServiceQualificationGate:
     одобрено]" (не к used_scenario_id — AI не всегда его репортит). Только сервис —
     ивент (interest='event') НЕ гейтится (владелица подтвердила дважды)."""
 
+    def test_missing_name_asks_name_first(self):
+        """Nombre es el primer dato del embudo desde 2026-09-13 (pedido de la
+        dueña, test en vivo) — antes ni siquiera se pedía en esta etapa."""
+        lead = {"name": None, "is_single": True, "age": 35, "profession": "abogado"}
+        result = {"action": "respond", "messages": ["Pitch completo del servicio..."]}
+        out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
+        assert out["messages"] == ["¡Gracias por tu foto! 😊", ai._QUALIFICATION_QUESTIONS["name"]]
+
     def test_missing_profession_replaces_pitch(self):
-        lead = {"is_single": True, "age": 35, "profession": None}
+        lead = {"name": "Carlos", "is_single": True, "age": 35, "profession": None}
         result = {"action": "respond", "messages": ["Pitch completo del servicio..."]}
         out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
         assert out["messages"] == ["¡Gracias por tu foto! 😊", "Y antes de contarte más, ¿a qué te dedicas?"]
 
     def test_missing_age_asks_age(self):
-        lead = {"is_single": True, "age": None, "profession": "abogado"}
+        lead = {"name": "Carlos", "is_single": True, "age": None, "profession": "abogado"}
         result = {"action": "respond", "messages": ["Pitch..."]}
         out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
         assert "edad" in out["messages"][1]
 
     def test_missing_is_single_asks_is_single(self):
-        lead = {"is_single": None, "age": 35, "profession": "abogado"}
+        lead = {"name": "Carlos", "is_single": None, "age": 35, "profession": "abogado"}
         result = {"action": "respond", "messages": ["Pitch..."]}
         out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
         assert "soltero" in out["messages"][1]
 
     def test_noop_when_qualification_complete(self):
-        lead = {"is_single": True, "age": 35, "profession": "abogado"}
+        lead = {"name": "Carlos", "is_single": True, "age": 35, "profession": "abogado"}
         result = {"action": "respond", "messages": ["Pitch completo del servicio..."]}
         out = ai._enforce_service_qualification_gate(result, "[фото одобрено]", lead)
         assert out["messages"] == ["Pitch completo del servicio..."]
@@ -1913,7 +1921,7 @@ class TestEnforceServiceQualificationGate:
         """user_text="{caption}\\n\\n[фото одобрено]" (main.py _process_photos) — гейт
         срабатывает по "in", не по точному равенству (регресс 2026-09-01: подпись к
         фото раньше терялась целиком, что и привело к этому изменению)."""
-        lead = {"is_single": True, "age": 35, "profession": None}
+        lead = {"name": "Carlos", "is_single": True, "age": 35, "profession": None}
         result = {"action": "respond", "messages": ["Pitch..."]}
         out = ai._enforce_service_qualification_gate(
             result, "trabajo de algo raro\n\n[фото одобрено]", lead)
@@ -1940,7 +1948,7 @@ class TestEnforceServiceQualificationGate:
         """Если AI ЭТИМ ЖЕ сообщением извлёк недостающее поле (из подписи к фото) —
         гейт не должен переспрашивать то, что только что пришло. lead (состояние ДО
         сообщения) сливается с result['extracted'] (это сообщение) перед проверкой."""
-        lead = {"is_single": True, "age": 35, "profession": None}
+        lead = {"name": "Carlos", "is_single": True, "age": 35, "profession": None}
         result = {"action": "respond", "messages": ["Pitch completo del servicio..."],
                   "extracted": {"profession": "abogado"}}
         out = ai._enforce_service_qualification_gate(
@@ -1951,7 +1959,7 @@ class TestEnforceServiceQualificationGate:
         """Интеграционно: неполная анкета + [фото одобрено] через generate_reply целиком,
         даже когда AI не репортит used_scenario_id (найдено 2026-09-01 — сама причина,
         по которой гейт завязан на user_text, а не на used)."""
-        lead = {"is_single": True, "age": 35, "profession": None}
+        lead = {"name": "Carlos", "is_single": True, "age": 35, "profession": None}
         scenario = _make_scenario(id=6, ai_allowed=True, mode="bot_auto", score=0.80)
         ai_response = {**_VALID_AI_RESPONSE,
                        "messages": ["¡Gracias por tu foto! 😊", "Mira, te cuento cómo funciona el servicio..."],
