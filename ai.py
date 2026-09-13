@@ -976,6 +976,42 @@ def _enforce_age_block(result: dict, lead: dict) -> dict:
     return result
 
 
+_VIDEOCALL_DATE_SIGNAL_RE = re.compile(
+    r"\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|"
+    r"ma[ñn]ana|hoy|pasado\s+ma[ñn]ana|"
+    r"enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|"
+    r"\d{1,2}\s*(?:am|pm)\b|\d{1,2}:\d{2}|a\s+las\s+\d)",
+    re.IGNORECASE,
+)
+
+
+def _enforce_videocall_proposal_needs_current_signal(result: dict, user_text: str) -> dict:
+    """Гарантия: proposed_videocall_at (флаг AI, триггерит в main.py ПОЛНОСТЬЮ
+    АВТОМАТИЧЕСКОЕ бронирование — реальное событие Google Calendar, без участия
+    человека) не принимается, если в ТЕКУЩЕМ сообщении лида нет вообще никакого
+    сигнала даты/времени.
+
+    Найдено 2026-09-13 живым тестом владелицы: лид (уже в funnel_stage=
+    'videocall_set' месяц назад, история содержит "el jueves a las 10am" из
+    СТАРОГО разговора) написал голое "Hola" — AI распарсил proposed_videocall_at
+    из старого контекста как будто это НОВОЕ предложение прямо сейчас, реально
+    забронировав звонок на ближайший четверг. Дешёвая и надёжная защита: раз
+    механизм полностью автоматический без ревью человека, требуем, чтобы ХОТЯ БЫ
+    какой-то сигнал даты/времени был в САМОМ user_text этого хода — если лид явно
+    не предложил время сейчас, не доверяем полю, каким бы уверенным ни казался AI.
+    """
+    if not result.get("proposed_videocall_at"):
+        return result
+    if _VIDEOCALL_DATE_SIGNAL_RE.search(user_text or ""):
+        return result
+    logger.warning("guardrail: proposed_videocall_at=%r без сигнала даты/времени в "
+                    "текущем сообщении %r → сбрасываю, НЕ бронирую",
+                    result["proposed_videocall_at"], user_text)
+    result = dict(result)
+    result["proposed_videocall_at"] = None
+    return result
+
+
 def _fallback_reply() -> dict:
     """Ответ при сбое OpenAI: не молчим, но эскалируем на Аню."""
     return {
@@ -1809,4 +1845,5 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = _enforce_emoji_budget(result, history)
     result = _enforce_no_self_narration(result)
     result = await _enforce_no_link_repeat(result, lead)
+    result = _enforce_videocall_proposal_needs_current_signal(result, user_text)
     return result

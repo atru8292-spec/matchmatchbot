@@ -1878,6 +1878,39 @@ class TestEnforceServiceQualificationGate:
         assert result["messages"] == ["¡Gracias por tu foto! 😊", "Y antes de contarte más, ¿a qué te dedicas?"]
 
 
+class TestEnforceVideocallProposalNeedsCurrentSignal:
+    """proposed_videocall_at dispara reserva TOTALMENTE AUTOMÁTICA (evento real de
+    Google Calendar, sin revisión humana) — encontrado 2026-09-13 en test real: el
+    AI lo extrajo de un "el jueves a las 10am" de hace un MES en el historial, ante
+    un simple "Hola" actual, reservando una llamada real que el lead no pidió en
+    este turno."""
+
+    def test_clears_when_no_signal_in_current_text(self):
+        result = {"proposed_videocall_at": "2026-09-17T16:00:00"}
+        out = ai._enforce_videocall_proposal_needs_current_signal(result, "Hola")
+        assert out["proposed_videocall_at"] is None
+
+    def test_keeps_when_day_name_present(self):
+        result = {"proposed_videocall_at": "2026-09-17T16:00:00"}
+        out = ai._enforce_videocall_proposal_needs_current_signal(result, "el jueves a las 10am")
+        assert out["proposed_videocall_at"] == "2026-09-17T16:00:00"
+
+    def test_keeps_when_time_present(self):
+        result = {"proposed_videocall_at": "2026-09-17T16:00:00"}
+        out = ai._enforce_videocall_proposal_needs_current_signal(result, "va, a las 5")
+        assert out["proposed_videocall_at"] == "2026-09-17T16:00:00"
+
+    def test_keeps_when_manana_present(self):
+        result = {"proposed_videocall_at": "2026-09-17T16:00:00"}
+        out = ai._enforce_videocall_proposal_needs_current_signal(result, "mañana estaría bien")
+        assert out["proposed_videocall_at"] == "2026-09-17T16:00:00"
+
+    def test_noop_when_no_proposal(self):
+        result = {"proposed_videocall_at": None}
+        out = ai._enforce_videocall_proposal_needs_current_signal(result, "Hola")
+        assert out["proposed_videocall_at"] is None
+
+
 class TestEnforceAgeBlock:
     """Возраст вне 28-76 → action=block, не полагаемся только на промпт (найдено
     2026-09-13: модель надёжно блокирует 80, но НЕ блокирует 22 в потоке ивента,
