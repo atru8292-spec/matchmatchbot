@@ -48,6 +48,7 @@ import httpx
 import db
 import funnel
 from config import settings
+from filters import MAX_AGE, MIN_AGE
 
 _CDMX = ZoneInfo("America/Mexico_City")
 _ES_DAYS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
@@ -513,6 +514,55 @@ def _enforce_no_regreet_on_repeat(result: dict, user_text: str, history: list[di
     return result
 
 
+_FOUNDER_INTRO_RE = re.compile(
+    r"soy anna,?\s*fundadora de match match agency\.?\s*", re.IGNORECASE,
+)
+
+
+def _already_introduced(history: list[dict]) -> bool:
+    """Ya hubo AL MENOS UN mensaje anterior de Anna en esta conversación — implementa
+    literal la regla del prompt ("si hay CUALQUIER mensaje tuyo anterior, sin
+    importar cuál, NUNCA vuelvas a presentarte"), no solo si ese mensaje anterior
+    contenía la frase de presentación. Por regla del funnel el PRIMER mensaje a
+    cualquier lead nuevo siempre incluye la presentación, así que cualquier mensaje
+    anterior de Anna ya implica que se presentó — buscar la frase literal fallaba en
+    tests/conversaciones que empiezan el historial a mitad de camino (encontrado
+    2026-09-13: con la búsqueda de frase literal, el guardrail no reconocía su
+    propio caso de prueba)."""
+    return any(t.get("sender") == "anna" and (t.get("text") or "").strip()
+               for t in history or [])
+
+
+def _enforce_no_reintroduce(result: dict, history: list[dict]) -> dict:
+    """Гарантия: 'Soy Anna, fundadora de Match Match Agency' se dice UNA SOLA vez en
+    TODA la conversación — el prompt ya lo pide explícitamente (regla reforzada
+    varias veces), pero es solo texto: encontrado 2026-09-07 en test real que "hola"
+    repetido una TERCERA vez re-disparaba el gancho completo, y reproducido de nuevo
+    2026-09-13 (3/3 en test) — el fix-solo-prompt mejoró el 2º repetido pero no
+    elimina del todo el 3º. Mismo patrón de instrucción-no-fiable que el resto de
+    guardrails de esta sesión.
+
+    En vez de solo cortar la frase de presentación (dejaría el resto del pitch
+    genérico repetido igual, que es justo el problema), reemplazamos TODO el
+    mensaje por un reconocimiento breve + la ÚLTIMA pregunta pendiente de Anna
+    (implementa literal "ve DIRECTO a la pregunta pendiente" del prompt, sin tener
+    que adivinar cuál es — ya está en el historial)."""
+    if result.get("action") not in ("respond", "escalate") or not result.get("messages"):
+        return result
+    if not _FOUNDER_INTRO_RE.search(" ".join(result["messages"])):
+        return result
+    if not _already_introduced(history):
+        return result
+    pending = _last_anna_text(history)
+    if not pending:
+        return result
+    result = dict(result)
+    result["messages"] = ["¡Hola de nuevo! 🤍", pending]
+    logger.info("guardrail: re-presentación completa en repetido → reemplazo por "
+                "pregunta pendiente en vez del gancho")
+    return result
+
+
 # Лимит эмодзи (REGLAS DE TONO, anna_prompt_v5.md: максимум 1 из 3-4 бабблов) — тот же
 # паттерн детекции, что в scripts/smoke_test.py (согласованный диапазон).
 _EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
@@ -845,6 +895,47 @@ async def _enforce_service_price_gate(result: dict, lead: dict) -> dict:
     return result
 
 
+_AGE_OUT_OF_RANGE_BUBBLES = [
+    "Gracias por tu interés 🤍 Por ahora nuestras clientas suelen buscar dentro de "
+    "otro rango de edad, así que ahorita se me complica encontrarte el match ideal.",
+    "Te dejo en mente y, si surge algo que embone contigo, con gusto te escribo ✨",
+]
+
+
+def _enforce_age_block(result: dict, lead: dict) -> dict:
+    """Гарантия: возраст вне 28-76 → action=block, не полагаемся только на промпт.
+
+    Найдено 2026-09-13 живым тестом: el prompt tiene un ejemplo detallado y
+    reforzado del edge case SUPERIOR (76 años, encontrado 2026-09-06/07 — bloqueado
+    3/3 por error) pero NINGÚN ejemplo equivalente del edge case INFERIOR (28) — el
+    LLM bloquea 80 años de forma confiable pero deja pasar 22 años sin bloquear
+    (probado 3/3), simplemente sigue el flujo normal (pide foto) como si calificara.
+    filters.decide() SÍ atraparía esto, pero solo en el SIGUIENTE turno (usa
+    lead.age persistido, no lo recién extraído en ESTE turno) — este guardrail
+    cierra ese hueco de un turno completo donde un lead ya identificado como fuera
+    de rango sigue avanzando en el embudo como si calificara.
+
+    Usa lead FUSIONADO con extracted de ESTE turno (mismo patrón que
+    _enforce_service_qualification_gate) — el lead pudo decir su edad recién ahora.
+    """
+    if result.get("action") != "respond":
+        return result
+    age = (result.get("extracted") or {}).get("age", lead.get("age"))
+    if not isinstance(age, int) or MIN_AGE <= age <= MAX_AGE:
+        return result
+    logger.info("guardrail: edad %s fuera de %s-%s → форс block (промпт не поймал)",
+                age, MIN_AGE, MAX_AGE)
+    result = dict(result)
+    result["action"] = "block"
+    result["messages"] = list(_AGE_OUT_OF_RANGE_BUBBLES)
+    result["needs_escalation"] = True
+    result["send_event_photo"] = False
+    result["send_event_video"] = False
+    result.pop("video_caption", None)
+    result.pop("photo_caption", None)
+    return result
+
+
 def _fallback_reply() -> dict:
     """Ответ при сбое OpenAI: не молчим, но эскалируем на Аню."""
     return {
@@ -1067,6 +1158,43 @@ _COURSE_ESCALATION_BUBBLE = (
     "Si el evento tampoco te queda cómodo por ahora, también tengo cursos en línea "
     f"sobre cómo conocer y conectar con mujeres eslavas: {_COURSE_LINK_PLACEHOLDER} 🤍"
 )
+_EVENT_OFFER_ON_SERVICE_OBJECTION_BUBBLE = (
+    "Oye, antes de que lo dejemos — también tengo nuestro evento Slavic Latino "
+    "Night, una opción mucho más accesible (6,000 MXN) para conocer en persona a "
+    "mujeres eslavas solteras que buscan algo serio, sin el compromiso del servicio "
+    "personalizado. ¿Te late más esa opción?"
+)
+
+
+def _enforce_event_offer_on_service_objection(result: dict, used: dict | None,
+                                              user_text: str, history: list[dict]) -> dict:
+    """2ª objeción de precio SEGUIDA sobre el SERVICIO → garantiza que se ofrezca el
+    EVENTO antes de saltar a los cursos — escalón intermedio de la escalera
+    servicio → evento → cursos (CLAUDE.md). Encontrado 2026-09-13 en test real, 3/3:
+    cuando el lead insiste tras la defensa de valor ("no me alcanza, mejor lo
+    dejamos"), el LLM saltaba DIRECTO a los cursos sin mencionar el evento ni una
+    vez — mismo patrón de instrucción-no-fiable que _enforce_course_escalation (esa
+    cubre el escalón evento→cursos, pero no este, servicio→evento, que quedó sin
+    guardrail). Reemplaza TODO el mensaje (no mezcla con la defensa de valor que ya
+    dio el LLM en el turno ANTERIOR) — igual patrón que otros gates de esta sesión.
+    """
+    if result.get("action") != "respond":
+        return result
+    if used and used.get("id") in _EVENT_DETAIL_SCENARIOS:
+        return result  # ya estamos en el escalón evento — eso lo cubre course_escalation
+    if not _is_price_objection(user_text) or not _is_price_objection(_last_lead_text(history) or ""):
+        return result
+    text = " ".join(result.get("messages") or []).lower()
+    if "evento" in text or "6,000" in text or "6000" in text:
+        return result  # ya ofreció el evento en este mismo turno
+    if not any("curso" in m.lower() or _COURSE_LINK_PLACEHOLDER in m for m in result.get("messages") or []):
+        return result  # no está saltando de escalón — no forzamos nada de más
+    logger.info("guardrail: 2ª objeción de precio (servicio) saltó directo a cursos → "
+                "fuerzo ofrecer el evento primero")
+    result = dict(result)
+    result["messages"] = [_EVENT_OFFER_ON_SERVICE_OBJECTION_BUBBLE]
+    result["send_event_photo"] = True
+    return result
 
 
 def _enforce_course_escalation(result: dict, used: dict | None, user_text: str,
@@ -1617,6 +1745,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     merged_interest = _merge_interest(result["extracted"].get("interest"), lead.get("interest"))
     if merged_interest and merged_interest != result["extracted"].get("interest"):
         result["extracted"]["interest"] = merged_interest
+    result = _enforce_age_block(result, lead)
     result = _enforce_nurture_stage(result, used, ambiguous)
     result = _enforce_service_qualification_gate(result, user_text, lead)
     result = _enforce_no_event_qualification_gate(result, used)
@@ -1626,6 +1755,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     # se pisen entre sí en el bubble final cuando ya se llegó a MAX_MESSAGES (найдено
     # 2026-09-04: course_escalation reemplazaba el bubble del link, link_presence lo
     # veía "faltante" y lo volvía a poner encima, borrando el mensaje de cursos).
+    result = _enforce_event_offer_on_service_objection(result, used, user_text, history)
     result = _enforce_course_escalation(result, used, user_text, history)
     result = await _enforce_event_video(result, used, lead)
     result = _enforce_event_qualification_gate(result, used, history)
@@ -1634,6 +1764,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         await _maybe_announce_event_photo(result, used, lead)
     result = await _enforce_service_price_gate(result, lead)
     result = _enforce_no_regreet_on_repeat(result, user_text, history)
+    result = _enforce_no_reintroduce(result, history)
     result = _enforce_emoji_budget(result, history)
     result = _enforce_no_self_narration(result)
     result = await _enforce_no_link_repeat(result, lead)

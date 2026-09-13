@@ -1878,6 +1878,93 @@ class TestEnforceServiceQualificationGate:
         assert result["messages"] == ["¡Gracias por tu foto! 😊", "Y antes de contarte más, ¿a qué te dedicas?"]
 
 
+class TestEnforceAgeBlock:
+    """Возраст вне 28-76 → action=block, не полагаемся только на промпт (найдено
+    2026-09-13: модель надёжно блокирует 80, но НЕ блокирует 22 в потоке ивента,
+    3/3 в живом тесте — асимметрия в промпте, где подробно разобран только верхний
+    edge case)."""
+
+    def test_blocks_too_young(self):
+        result = {"action": "respond", "messages": ["¡Perfecto! ¿Me mandas una foto?"],
+                  "extracted": {"age": 22}}
+        out = ai._enforce_age_block(result, _make_lead())
+        assert out["action"] == "block"
+        assert out["needs_escalation"] is True
+
+    def test_blocks_too_old(self):
+        result = {"action": "respond", "messages": ["ok"], "extracted": {"age": 80}}
+        out = ai._enforce_age_block(result, _make_lead())
+        assert out["action"] == "block"
+
+    def test_noop_for_28_inclusive(self):
+        result = {"action": "respond", "messages": ["ok"], "extracted": {"age": 28}}
+        out = ai._enforce_age_block(result, _make_lead())
+        assert out["action"] == "respond"
+
+    def test_noop_for_76_inclusive(self):
+        result = {"action": "respond", "messages": ["ok"], "extracted": {"age": 76}}
+        out = ai._enforce_age_block(result, _make_lead())
+        assert out["action"] == "respond"
+
+    def test_uses_persisted_lead_age_when_not_extracted_this_turn(self):
+        result = {"action": "respond", "messages": ["ok"], "extracted": {}}
+        out = ai._enforce_age_block(result, _make_lead(age=22))
+        assert out["action"] == "block"
+
+    def test_noop_when_age_missing(self):
+        result = {"action": "respond", "messages": ["ok"], "extracted": {}}
+        out = ai._enforce_age_block(result, _make_lead())
+        assert out["action"] == "respond"
+
+    def test_noop_when_action_not_respond(self):
+        result = {"action": "escalate", "messages": ["ok"], "extracted": {"age": 22}}
+        out = ai._enforce_age_block(result, _make_lead())
+        assert out["action"] == "escalate"
+
+    def test_resets_media_flags(self):
+        result = {"action": "respond", "messages": ["¡Perfecto!"], "extracted": {"age": 22},
+                  "send_event_photo": True, "send_event_video": True}
+        out = ai._enforce_age_block(result, _make_lead())
+        assert out["send_event_photo"] is False
+        assert out["send_event_video"] is False
+
+
+class TestEnforceNoReintroduce:
+    """'Soy Anna, fundadora...' se dice UNA sola vez en toda la conversación (найдено
+    2026-09-13, 3/3 en test real: "hola" repetido una 3ra vez re-disparaba el gancho
+    completo pese a la regla explícita del prompt)."""
+
+    _INTRO = ("¡Hola! 🤍", "Soy Anna, fundadora de Match Match Agency. Cuéntame qué buscas.")
+
+    def test_replaces_full_reintro_with_pending_question(self):
+        result = {"action": "respond", "messages": list(self._INTRO)}
+        history = [
+            {"sender": "lead", "text": "hola"},
+            {"sender": "anna", "text": "Cuéntame, eres soltero?"},
+        ]
+        out = ai._enforce_no_reintroduce(result, history)
+        assert out["messages"] == ["¡Hola de nuevo! 🤍", "Cuéntame, eres soltero?"]
+
+    def test_noop_when_no_prior_anna_message(self):
+        """Es genuinamente el primer mensaje a este lead — la presentación SÍ debe ir."""
+        result = {"action": "respond", "messages": list(self._INTRO)}
+        history = [{"sender": "lead", "text": "hola"}]
+        out = ai._enforce_no_reintroduce(result, history)
+        assert out["messages"] == list(self._INTRO)
+
+    def test_noop_when_no_reintro_in_current_reply(self):
+        result = {"action": "respond", "messages": ["¿Eres soltero?"]}
+        history = [{"sender": "anna", "text": "Hola!"}]
+        out = ai._enforce_no_reintroduce(result, history)
+        assert out["messages"] == ["¿Eres soltero?"]
+
+    def test_noop_when_action_not_respond_or_escalate(self):
+        result = {"action": "block", "messages": list(self._INTRO)}
+        history = [{"sender": "anna", "text": "Hola!"}]
+        out = ai._enforce_no_reintroduce(result, history)
+        assert out["messages"] == list(self._INTRO)
+
+
 class TestEnforceServicePriceGate:
     """Guardrail: холодному лиду (is_single != True) нельзя раскрывать цену сервиса
     ($10,000) — даже если AI ошибся вопреки промпту, заменяем весь ответ на крючок №2."""
@@ -2135,6 +2222,63 @@ class TestIsPriceObjection:
     ])
     def test_cases(self, text, expected):
         assert ai._is_price_objection(text) is expected
+
+
+class TestEnforceEventOfferOnServiceObjection:
+    """2ª objeción de precio SEGUIDA sobre el SERVICIO → garantiza que se ofrezca el
+    EVENTO antes de saltar a cursos (encontrado 2026-09-13, 3/3 en test real: el LLM
+    saltaba directo a cursos sin mencionar el evento)."""
+
+    def test_second_objection_skipping_to_courses_forces_event_offer(self):
+        used = _make_scenario(id=4)  # no es escenario de evento
+        history = [{"sender": "lead", "text": "esta caro"}]
+        result = {"action": "respond",
+                  "messages": ["Sin problema, tenemos cursos en línea: [course_link]"]}
+        out = ai._enforce_event_offer_on_service_objection(result, used, "no me alcanza", history)
+        text = " ".join(out["messages"]).lower()
+        assert "evento" in text
+        assert "6,000" in text or "6000" in text
+        assert out["send_event_photo"] is True
+
+    def test_noop_when_already_offers_event(self):
+        used = _make_scenario(id=4)
+        history = [{"sender": "lead", "text": "esta caro"}]
+        result = {"action": "respond",
+                  "messages": ["Sin problema, tenemos el evento por 6,000 MXN si prefieres."]}
+        out = ai._enforce_event_offer_on_service_objection(result, used, "no me alcanza", history)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_no_course_skip(self):
+        """No menciona cursos (sigue defendiendo el valor normalmente) — no forzamos
+        nada, todavía puede ser la primera defensa antes de bajar de escalón."""
+        used = _make_scenario(id=4)
+        history = [{"sender": "lead", "text": "esta caro"}]
+        result = {"action": "respond", "messages": ["Te entiendo, pero vale la pena."]}
+        out = ai._enforce_event_offer_on_service_objection(result, used, "no me alcanza", history)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_for_event_scenario(self):
+        """Ya estamos en el escalón evento — eso lo cubre _enforce_course_escalation,
+        no este guardrail."""
+        used = _make_scenario(id=51)
+        history = [{"sender": "lead", "text": "esta caro"}]
+        result = {"action": "respond", "messages": ["Cursos: [course_link]"]}
+        out = ai._enforce_event_offer_on_service_objection(result, used, "no me alcanza", history)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_first_objection(self):
+        used = _make_scenario(id=4)
+        history = [{"sender": "lead", "text": "y qué incluye?"}]
+        result = {"action": "respond", "messages": ["Cursos: [course_link]"]}
+        out = ai._enforce_event_offer_on_service_objection(result, used, "no me alcanza", history)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_action_not_respond(self):
+        used = _make_scenario(id=4)
+        history = [{"sender": "lead", "text": "esta caro"}]
+        result = {"action": "block", "messages": ["Cursos: [course_link]"]}
+        out = ai._enforce_event_offer_on_service_objection(result, used, "no me alcanza", history)
+        assert out["messages"] == result["messages"]
 
 
 class TestEnforceCourseEscalation:
