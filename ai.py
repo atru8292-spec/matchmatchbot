@@ -1525,6 +1525,39 @@ async def _maybe_announce_event_photo(reply: dict, scenario: dict | None, lead: 
     logger.info("подпись фото ивента выставлена для #%s, %s", (scenario or {}).get("id"), phone)
 
 
+# Vacilación sobre el evento SIN decir un "no" definitivo — el prompt ya pide
+# send_event_photo=true aquí (encontrado 2026-09-09/12: 0/3 con "lo pensaré" antes
+# del primer fix), pero encontrado DE NUEVO 2026-09-13: un simple "Pensaré" (sin
+# "lo") ya no lo disparó — el modelo se apega demasiado literal a los ejemplos del
+# prompt en vez de generalizar la intención. Guardrail de código, mismo patrón.
+_EVENT_HESITATION_RE = re.compile(
+    r"\bpensar[eé]\b|\bno\s+s[eé]\b|\btal\s+vez\b|\bquiz[aá]s?\b|"
+    r"\bd[eé]jame\s+ver(?:lo)?\b|\blo\s+veo\b|\bluego\s+(?:te\s+)?(?:aviso|digo)\b",
+    re.IGNORECASE,
+)
+
+
+def _enforce_photo_on_event_hesitation(result: dict, user_text: str, lead: dict) -> dict:
+    """Гарантия: колебание по ивенту без явного "нет" ("pensaré", "no sé", "tal
+    vez"...) → send_event_photo=true, не полагаясь только на промпт (см. комментарий
+    выше — регресс на паттерне "lo pensaré" уже находили раз, промпт-фикс не
+    обобщился на близкие формулировки). No forzamos si el turno YA tiene una
+    pregunta de calificación pendiente (mismo motivo que ya existe en el prompt:
+    no mandar fotos junto a una pregunta que espera respuesta)."""
+    if result.get("action") != "respond" or result.get("send_event_photo"):
+        return result
+    if not _EVENT_HESITATION_RE.search(user_text or ""):
+        return result
+    if lead.get("interest") not in ("event", "both"):
+        return result
+    if _EVENT_QUALIFY_ASK_RE.search(" ".join(result.get("messages") or [])):
+        return result  # пока висит вопрос soltero/edad — фото на следующий ход
+    result = dict(result)
+    result["send_event_photo"] = True
+    logger.info("guardrail: колебание по ивенту (%r) без send_event_photo → форс True", user_text)
+    return result
+
+
 async def _enforce_event_video(result: dict, used: dict | None, lead: dict) -> dict:
     """Видео explainer-ивента гарантированно прикладывается к №51/№52 (цена/детали
     ивента), не полагаясь на суждение AI — найдено 2026-09-01 живым тестом: AI выставлял
@@ -1538,6 +1571,30 @@ async def _enforce_event_video(result: dict, used: dict | None, lead: dict) -> d
     флаг здесь не гарантирует физическую отправку, только НАМЕРЕНИЕ её сделать.
     """
     if not used or used.get("id") not in _EVENT_DETAIL_SCENARIOS or result.get("action") != "respond":
+        return result
+    result = dict(result)
+    result["send_event_video"] = True
+    await _maybe_announce_event_video(result, used, lead)
+    return result
+
+
+async def _enforce_video_on_any_first_pitch(result: dict, used: dict | None, lead: dict) -> dict:
+    """Extiende la garantía de _enforce_event_video más allá de #51/#52: si el
+    mensaje ya trae contenido REAL del evento (link, no solo precio en prosa) y
+    send_event_video sigue sin activarse, lo forzamos igual — independientemente de
+    qué escenario matcheó o si el contenido vino de un guardrail nuestro o de la
+    propia generación libre del modelo.
+
+    Encontrado 2026-09-13 en test real: el lead pasó por #2/#15 (no están en
+    _EVENT_DETAIL_SCENARIOS), el modelo dio el pitch completo con link por su
+    cuenta (sin pasar por _enforce_event_qualification_followup, que solo actúa
+    cuando falta contenido) pero no marcó send_event_video — el video nunca se
+    envió pese a ser, otra vez, el primer pitch real del evento para este lead.
+    """
+    if result.get("action") != "respond" or result.get("send_event_video"):
+        return result
+    text = " ".join(result.get("messages") or [])
+    if not _EVENT_CONTENT_MARKER_RE.search(text):
         return result
     result = dict(result)
     result["send_event_video"] = True
@@ -1836,6 +1893,8 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = await _enforce_event_video(result, used, lead)
     result = _enforce_event_qualification_gate(result, used, history)
     result = await _enforce_event_qualification_followup(result, history, used, lead, user_text)
+    result = await _enforce_video_on_any_first_pitch(result, used, lead)
+    result = _enforce_photo_on_event_hesitation(result, user_text, lead)
     if result.get("send_event_photo") and "photo_caption" not in result:
         await _maybe_announce_event_photo(result, used, lead)
     result = await _enforce_service_price_gate(result, lead)

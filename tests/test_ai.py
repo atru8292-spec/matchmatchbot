@@ -904,6 +904,90 @@ class TestEventVideoAnnounce:
         assert ai._EVENT_VIDEO_ANNOUNCE not in "\n".join(result["messages"])
 
 
+class TestEnforceVideoOnAnyFirstPitch:
+    """Extiende la garantía de video más allá de #51/#52 — encontrado 2026-09-13 en
+    test real: el lead pasó por #2 (no está en _EVENT_DETAIL_SCENARIOS), el modelo
+    dio el pitch completo con link por su cuenta pero no marcó send_event_video, y
+    el video nunca se envió."""
+
+    async def test_forces_video_when_content_present_and_flag_missing(self):
+        used = _make_scenario(id=2)
+        lead = _make_lead(phone="wa_5215500000097")
+        result = {"action": "respond",
+                  "messages": ["Aquí el link para tu boleto: [event_link]"]}
+        with patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})), \
+             patch("ai.db.event_media_sent", AsyncMock(return_value=False)), \
+             patch("ai.db.random_event_media", AsyncMock(return_value=[{"storage_url": "u"}])):
+            out = await ai._enforce_video_on_any_first_pitch(result, used, lead)
+        assert out["send_event_video"] is True
+        assert out["video_caption"] == ai._EVENT_VIDEO_ANNOUNCE
+
+    async def test_noop_when_already_true(self):
+        result = {"action": "respond", "messages": ["[event_link]"], "send_event_video": True}
+        out = await ai._enforce_video_on_any_first_pitch(result, _make_scenario(id=2), _make_lead())
+        assert out is result
+
+    async def test_noop_when_no_content(self):
+        result = {"action": "respond", "messages": ["¿Eres soltero?"]}
+        out = await ai._enforce_video_on_any_first_pitch(result, _make_scenario(id=2), _make_lead())
+        assert out.get("send_event_video") is not True
+
+    async def test_noop_when_action_not_respond(self):
+        result = {"action": "escalate", "messages": ["[event_link]"]}
+        out = await ai._enforce_video_on_any_first_pitch(result, _make_scenario(id=2), _make_lead())
+        assert out is result
+
+
+class TestEnforcePhotoOnEventHesitation:
+    """Vacilación sobre el evento sin decir "no" ("pensaré", "no sé"...) →
+    send_event_photo=true, sin depender solo del prompt (encontrado 2026-09-13:
+    "Pensaré" sin "lo" no disparó el flag pese a la regla del prompt para
+    "lo pensaré")."""
+
+    def test_forces_photo_on_pensare_alone(self):
+        result = {"action": "respond", "messages": ["Tómate tu tiempo 🤍"]}
+        lead = _make_lead(interest="event")
+        out = ai._enforce_photo_on_event_hesitation(result, "Pensaré", lead)
+        assert out["send_event_photo"] is True
+
+    def test_forces_photo_on_no_se(self):
+        result = {"action": "respond", "messages": ["Sin problema 😊"]}
+        lead = _make_lead(interest="event")
+        out = ai._enforce_photo_on_event_hesitation(result, "no sé, tal vez", lead)
+        assert out["send_event_photo"] is True
+
+    def test_noop_when_interest_not_event(self):
+        result = {"action": "respond", "messages": ["ok"]}
+        lead = _make_lead(interest="agency")
+        out = ai._enforce_photo_on_event_hesitation(result, "pensaré", lead)
+        assert out.get("send_event_photo") is not True
+
+    def test_noop_when_already_true(self):
+        result = {"action": "respond", "messages": ["ok"], "send_event_photo": True}
+        lead = _make_lead(interest="event")
+        out = ai._enforce_photo_on_event_hesitation(result, "pensaré", lead)
+        assert out is result
+
+    def test_noop_when_pending_qualification_question(self):
+        """No mandamos foto en el mismo turno que preguntamos soltero/edad pendiente."""
+        result = {"action": "respond", "messages": ["¿Eres soltero? ¿Qué edad tienes?"]}
+        lead = _make_lead(interest="event")
+        out = ai._enforce_photo_on_event_hesitation(result, "pensaré", lead)
+        assert out.get("send_event_photo") is not True
+
+    def test_noop_when_no_hesitation_phrase(self):
+        result = {"action": "respond", "messages": ["ok"]}
+        lead = _make_lead(interest="event")
+        out = ai._enforce_photo_on_event_hesitation(result, "va, cuál es el link?", lead)
+        assert out.get("send_event_photo") is not True
+
+    def test_noop_when_action_not_respond(self):
+        result = {"action": "escalate", "messages": ["ok"]}
+        lead = _make_lead(interest="event")
+        out = ai._enforce_photo_on_event_hesitation(result, "pensaré", lead)
+        assert out is result
+
+
 class TestEventPhotoAnnounce:
     """Подпись a la foto del evento (2026-09-12, feedback владелицы: las fotos no
     deben ir "peladas") — mismo principio que _maybe_announce_event_video pero para
