@@ -625,8 +625,15 @@ _QUALIFY_GATE_RE = re.compile(
     r"quieres que te (mand|cuent|comparta|platique|d[ié])",
     re.IGNORECASE,
 )
+# Solo el LINK cuenta como "ya se dio la info real" — encontrado 2026-09-13 en test
+# real: el bot mencionaba el precio ("6,000 MXN") pero se quedaba estancado en
+# "¿Te gustaría que te mande el enlace?" (mismo patrón de pregunta-permiso
+# redundante que _enforce_no_event_qualification_gate ya corrige), y como "mxn"
+# solo ya contaba como contenido, ningún guardrail lo detectaba — el lead nunca
+# recibía el link. Antes incluía \bmxn\b|\[event_price, quitado a propósito: el
+# precio solo, sin el link, no es una respuesta completa.
 _EVENT_CONTENT_MARKER_RE = re.compile(
-    r"\[event_link\]|http|\bmxn\b|\[event_price", re.IGNORECASE,
+    r"\[event_link\]|http", re.IGNORECASE,
 )
 # Encontrado 2026-09-13 (feedback de la dueña, en test real): esta versión anterior
 # solo daba precio+link, sin decir qué es el evento ni mencionar a las mujeres —
@@ -680,8 +687,22 @@ def _enforce_no_event_qualification_gate(result: dict, used: dict | None) -> dic
 _EVENT_QUALIFY_ASK_RE = re.compile(
     r"eres soltero|qu[eé] edad tienes|cu[aá]ntos a[ñn]os tienes", re.IGNORECASE,
 )
+# Encontrado 2026-09-13 (feedback de la dueña, test real de tg_1009982311): el evento
+# calificaba solo soltero/edad y daba el pitch directo, sin preguntar profesión ni
+# pedir la foto del lead — a diferencia del embudo de SERVICIO (mismos 3 datos +
+# foto antes del pitch). Ahora el evento sigue el mismo patrón, en dos pasos.
 _EVENT_QUALIFY_BUBBLE = ("¡Perfecto! Antes de contarte todos los detalles, cuéntame: "
-                          "¿eres soltero? ¿Qué edad tienes?")
+                          "¿eres soltero? ¿Qué edad tienes? ¿Y a qué te dedicas?")
+_EVENT_PHOTO_REQUEST_BUBBLE = "¡Perfecto! Y para terminar, ¿me mandas una foto tuya? 😊"
+
+
+def _normalize_bubble(text: str) -> str:
+    """Quita emoji y espacios extra antes de comparar bubbles fijos. Necesario porque
+    _enforce_emoji_budget puede recortar el emoji de un bubble ANTES de que quede
+    guardado en el historial (si la conversación ya viene cargada de emoji) —
+    encontrado 2026-09-13 en test real: una comparación exacta con el emoji incluido
+    en la constante dejaba de reconocer su propio bubble en el turno siguiente."""
+    return re.sub(r"[ \t]{2,}", " ", _EMOJI_RE.sub("", text or "")).strip()
 
 
 def _event_qualification_already_asked(history: list[dict]) -> bool:
@@ -729,36 +750,51 @@ def _enforce_event_qualification_gate(result: dict, used: dict | None, history: 
 
 
 async def _enforce_event_qualification_followup(result: dict, history: list[dict],
-                                                 used: dict | None, lead: dict) -> dict:
-    """El turno anterior de Anna fue EXACTAMENTE _EVENT_QUALIFY_BUBBLE (la pregunta
-    soltero/edad que _enforce_event_qualification_gate generó para el evento) — el
-    lead está respondiendo a esa pregunta pendiente. Encontrado 2026-09-12 en test
-    real: la respuesta del lead ("si, 30") no menciona "evento" y no matchea por RAG
-    a #2/#15/#51/#52 sino a #4 ("confirmó soltero", genérico), que sigue el guion de
-    SERVICIO y pregunta profesión — el lead se queda sin el precio/link del evento
-    que en realidad estaba esperando. Como la pregunta pendiente es EXCLUSIVA de
-    este guardrail (bubble fijo, no se usa en ningún otro lugar), si el turno
-    anterior fue justo eso, damos el precio+link directo, sin importar a qué
-    escenario matcheó este turno.
+                                                 used: dict | None, lead: dict,
+                                                 user_text: str) -> dict:
+    """Avanza el embudo de 2 pasos del evento (soltero/edad/profesión → foto → pitch),
+    reconociendo el turno anterior de Anna por su bubble EXACTO (fijo, no se usa en
+    ningún otro lugar) — evita depender de is_single/age/profession persistidos
+    (ver _event_qualification_already_asked) y de a qué escenario matcheó este turno
+    por RAG (encontrado 2026-09-12: la respuesta del lead a menudo matchea #4
+    genérico, que sigue el guion de SERVICIO en vez de dar precio/foto del evento).
 
-    Este es el momento del PRIMER pitch real del evento (justo después de calificar)
-    — igual que el video va proactivo la primera vez que se cuenta el evento
-    (regla de la dueña 2026-09-12), lo activamos aquí también con su подпись."""
+    Paso 1 → 2: el turno anterior fue _EVENT_QUALIFY_BUBBLE (soltero/edad/profesión) →
+    pedir la foto del lead (_EVENT_PHOTO_REQUEST_BUBBLE), sin dar precio todavía.
+    Paso 2 → pitch: el turno anterior fue _EVENT_PHOTO_REQUEST_BUBBLE Y este turno
+    trae "[фото одобрено]" (main.py lo inserta cuando la foto pasó el filtro AI) →
+    ahora sí, precio+link+video (mismo momento "primer pitch real" que antes)."""
     if result.get("action") != "respond":
         return result
-    last_anna = next((t.get("text") or "" for t in reversed(history or [])
-                       if t.get("sender") == "anna"), "")
-    if last_anna.strip() != _EVENT_QUALIFY_BUBBLE:
+    last_anna = _normalize_bubble(next((t.get("text") or "" for t in reversed(history or [])
+                       if t.get("sender") == "anna"), ""))
+
+    if last_anna == _normalize_bubble(_EVENT_QUALIFY_BUBBLE):
+        text = " ".join(result.get("messages") or [])
+        if _EVENT_CONTENT_MARKER_RE.search(text):
+            return result  # ya lo dio bien, no tocamos
+        logger.info("guardrail: respuesta a soltero/edad/profesión del evento no pidió "
+                    "foto (matcheó otro escenario) → fuerzo pedir la foto")
+        result = dict(result)
+        result["messages"] = [_EVENT_PHOTO_REQUEST_BUBBLE]
+        result["send_event_photo"] = False
+        result["send_event_video"] = False
+        result.pop("video_caption", None)
         return result
-    text = " ".join(result.get("messages") or [])
-    if _EVENT_CONTENT_MARKER_RE.search(text):
-        return result  # ya lo dio bien, no tocamos
-    logger.info("guardrail: respuesta a la pregunta soltero/edad del evento no dio "
-                "precio/link (matcheó otro escenario) → fuerzo el pitch del evento")
-    result = dict(result)
-    result["messages"] = ["¡Perfecto, gracias! 🤍", _EVENT_GATE_OVERRIDE_BUBBLE]
-    result["send_event_video"] = True
-    await _maybe_announce_event_video(result, used, lead)
+
+    if last_anna == _normalize_bubble(_EVENT_PHOTO_REQUEST_BUBBLE):
+        if "[фото одобрено]" not in user_text:
+            return result  # el lead no mandó/aprobó foto todavía — dejamos que el AI maneje este turno
+        text = " ".join(result.get("messages") or [])
+        if _EVENT_CONTENT_MARKER_RE.search(text):
+            return result  # ya lo dio bien
+        logger.info("guardrail: foto aprobada tras pedirla para el evento → fuerzo el pitch")
+        result = dict(result)
+        result["messages"] = ["¡Perfecto, gracias! 🤍", _EVENT_GATE_OVERRIDE_BUBBLE]
+        result["send_event_video"] = True
+        await _maybe_announce_event_video(result, used, lead)
+        return result
+
     return result
 
 
@@ -1579,7 +1615,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = _enforce_course_escalation(result, used, user_text, history)
     result = await _enforce_event_video(result, used, lead)
     result = _enforce_event_qualification_gate(result, used, history)
-    result = await _enforce_event_qualification_followup(result, history, used, lead)
+    result = await _enforce_event_qualification_followup(result, history, used, lead, user_text)
     if result.get("send_event_photo") and "photo_caption" not in result:
         await _maybe_announce_event_photo(result, used, lead)
     result = await _enforce_service_price_gate(result, lead)
