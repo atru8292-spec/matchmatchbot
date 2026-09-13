@@ -459,6 +459,46 @@ def _enforce_service_qualification_gate(result: dict, user_text: str, lead: dict
 # остальной текст обычно нормальный, дело только в неуместном приветствии.
 _REGREET_RE = re.compile(r"^\W*¡?\s*hola\s+de\s+nuevo\W*", re.IGNORECASE)
 
+# Cliché "que quieras avanzar" (найдено 2026-09-13 ДВАЖДЫ подряд en test real: prohibido
+# vía prompt la frase exacta "¡Qué gusto que quieras avanzar!", el modelo respondió con
+# "¡Me encanta que quieras avanzar!" — mismo problema, distinto adjetivo. Prompt-only
+# demostró no ser fiable para esto dos veces seguidas → guardrail de código.
+_AVANZAR_CLICHE_RE = re.compile(
+    r"^[¡!]?\s*[^.!?]{0,40}?\bque\s+quieras\s+avanzar\b[!¡]?\s*", re.IGNORECASE,
+)
+
+
+def _enforce_no_avanzar_cliche(result: dict) -> dict:
+    """Corta el bubble-plantilla "<algo> que quieras avanzar!" (cualquier adjetivo/
+    verbo antes de "que") — reacción genérica de chatbot corporativo ante que el
+    lead acepte una llamada/fecha, en vez de reaccionar a lo específico que dijo.
+    Mismo patrón que _enforce_no_regreet_on_repeat: cortamos solo la frase, no todo
+    el bubble (el resto del mensaje suele ser válido — p.ej. sigue el pedido de
+    nombre/correo). Si tras cortar la frase solo queda emoji/nada, descartamos el
+    bubble ENTERO (dejar un bubble de puro emoji suelto se ve raro)."""
+    if result.get("action") not in ("respond", "escalate") or not result.get("messages"):
+        return result
+    messages = list(result["messages"])
+    changed = False
+    out: list[str] = []
+    for m in messages:
+        stripped = _AVANZAR_CLICHE_RE.sub("", m).strip()
+        if stripped == m:
+            out.append(m)
+            continue
+        changed = True
+        core = _EMOJI_RE.sub("", stripped).strip()
+        if core:
+            out.append(stripped[0].upper() + stripped[1:])
+    if not changed:
+        return result
+    if not out:
+        return result
+    result = dict(result)
+    result["messages"] = out
+    logger.info("guardrail: убрала клише '...que quieras avanzar'")
+    return result
+
 
 def _is_repeated_lead_message(user_text: str, history: list[dict]) -> bool:
     """Текущее сообщение лида дословно совпадает с его же предыдущим ходом — вероятно
@@ -1765,6 +1805,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = await _enforce_service_price_gate(result, lead)
     result = _enforce_no_regreet_on_repeat(result, user_text, history)
     result = _enforce_no_reintroduce(result, history)
+    result = _enforce_no_avanzar_cliche(result)
     result = _enforce_emoji_budget(result, history)
     result = _enforce_no_self_narration(result)
     result = await _enforce_no_link_repeat(result, lead)

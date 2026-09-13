@@ -1965,6 +1965,42 @@ class TestEnforceNoReintroduce:
         assert out["messages"] == list(self._INTRO)
 
 
+class TestEnforceNoAvanzarCliche:
+    """Cliché "<algo> que quieras avanzar!" — encontrado 2026-09-13 DOS VECES
+    seguidas en test real: prohibida la frase exacta con "qué gusto", el modelo
+    reapareció con "me encanta" + el mismo "avanzar". La palabra en sí es el
+    problema, prompt-only falló dos veces → guardrail de código."""
+
+    def test_strips_cliche_qué_gusto(self):
+        result = {"action": "respond",
+                  "messages": ["¡Qué gusto que quieras avanzar!", "Dame tu nombre porfa"]}
+        out = ai._enforce_no_avanzar_cliche(result)
+        assert out["messages"] == ["Dame tu nombre porfa"]
+
+    def test_strips_cliche_me_encanta_leaves_only_emoji_drops_bubble(self):
+        result = {"action": "respond",
+                  "messages": ["¡Me encanta que quieras avanzar! 🤍",
+                               "¿Me pasas tu nombre completo y correo?"]}
+        out = ai._enforce_no_avanzar_cliche(result)
+        assert out["messages"] == ["¿Me pasas tu nombre completo y correo?"]
+
+    def test_keeps_real_content_after_stripping(self):
+        result = {"action": "respond",
+                  "messages": ["¡Qué gusto que quieras avanzar! Cuéntame tu correo."]}
+        out = ai._enforce_no_avanzar_cliche(result)
+        assert out["messages"] == ["Cuéntame tu correo."]
+
+    def test_noop_when_no_cliche(self):
+        result = {"action": "respond", "messages": ["¡Perfecto, el 21 de septiembre! 🤍"]}
+        out = ai._enforce_no_avanzar_cliche(result)
+        assert out["messages"] == result["messages"]
+
+    def test_noop_when_action_not_respond_or_escalate(self):
+        result = {"action": "block", "messages": ["¡Qué gusto que quieras avanzar!"]}
+        out = ai._enforce_no_avanzar_cliche(result)
+        assert out["messages"] == result["messages"]
+
+
 class TestEnforceServicePriceGate:
     """Guardrail: холодному лиду (is_single != True) нельзя раскрывать цену сервиса
     ($10,000) — даже если AI ошибся вопреки промпту, заменяем весь ответ на крючок №2."""
