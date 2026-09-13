@@ -1593,24 +1593,46 @@ class TestEnforceEventQualificationGate:
 
 
 class TestEnforceEventQualificationFollowup:
-    """Embudo de 2 pasos del evento: soltero/edad/profesión → pide foto del lead →
-    (foto aprobada) → pitch. Reconoce el paso por el bubble EXACTO del turno anterior
-    de Anna, no por a qué escenario matcheó este turno (encontrado 2026-09-12: la
-    respuesta del lead a menudo matchea #4 genérico, que sigue el guion de SERVICIO)."""
+    """Embudo de 3 pasos del evento: nombre/soltero → edad/profesión → pide foto del
+    lead → (foto aprobada) → pitch. Partido en pasos cortos 2026-09-13 (antes eran
+    4 preguntas en un solo bubble, la dueña lo marcó como "se ve a formulario").
+    Reconoce el paso por el bubble EXACTO del turno anterior de Anna, no por a qué
+    escenario matcheó este turno (encontrado 2026-09-12: la respuesta del lead a
+    menudo matchea #4 genérico, que sigue el guion de SERVICIO)."""
 
-    async def test_step1_to_2_asks_for_photo(self):
-        """Turno anterior fue la pregunta soltero/edad/profesión → pedir foto, sin
-        dar precio todavía (aunque el escenario matcheado sí lo hubiera dado)."""
-        result = {"action": "respond", "messages": ["Va, gracias", "¿A qué te dedicas?"]}
+    async def test_step1_to_2_asks_age_profession(self):
+        """Turno anterior fue nombre/soltero → preguntar edad/profesión, sin dar
+        precio todavía (aunque el escenario matcheado sí lo hubiera dado)."""
+        result = {"action": "respond", "messages": ["Va, gracias", "El precio es..."]}
         history = [
             {"sender": "lead", "text": "evento"},
             {"sender": "anna", "text": ai._EVENT_QUALIFY_BUBBLE},
         ]
         out = await ai._enforce_event_qualification_followup(
-            result, history, _make_scenario(id=2), _make_lead(), "si soltero, 30, ingeniero")
+            result, history, _make_scenario(id=2), _make_lead(), "Carlos, si soltero")
+        assert out["messages"] == [ai._EVENT_AGE_PROFESSION_BUBBLE]
+        assert out["send_event_photo"] is False
+        assert out["send_event_video"] is False
+
+    async def test_step2_to_3_asks_for_photo(self):
+        """Turno anterior fue edad/profesión → pedir foto, sin dar precio todavía."""
+        result = {"action": "respond", "messages": ["Va, gracias", "¿A qué te dedicas?"]}
+        history = [
+            {"sender": "lead", "text": "30, ingeniero"},
+            {"sender": "anna", "text": ai._EVENT_AGE_PROFESSION_BUBBLE},
+        ]
+        out = await ai._enforce_event_qualification_followup(
+            result, history, _make_scenario(id=2), _make_lead(), "30, ingeniero")
         assert out["messages"] == [ai._EVENT_PHOTO_REQUEST_BUBBLE]
         assert out["send_event_photo"] is False
         assert out["send_event_video"] is False
+
+    async def test_step2_noop_when_content_already_given(self):
+        result = {"action": "respond", "messages": ["Va! El precio es 6,000 MXN: [event_link]"]}
+        history = [{"sender": "anna", "text": ai._EVENT_AGE_PROFESSION_BUBBLE}]
+        out = await ai._enforce_event_qualification_followup(
+            result, history, _make_scenario(id=2), _make_lead(), "30, ingeniero")
+        assert out["messages"] == result["messages"]
 
     async def test_step1_noop_when_content_already_given(self):
         result = {"action": "respond", "messages": ["Va! El precio es 6,000 MXN: [event_link]"]}
@@ -1638,7 +1660,7 @@ class TestEnforceEventQualificationFollowup:
                 result, history, used, lead, "[фото одобрено]")
         assert "[event_link]" in " ".join(out["messages"])
 
-    async def test_step2_without_photo_approved_is_noop(self):
+    async def test_step3_without_photo_approved_is_noop(self):
         """Turno anterior fue pedir la foto, pero este turno NO trae "[фото одобрено]"
         (el lead no mandó foto o aún no pasó el filtro) — dejamos que el AI maneje
         este turno normalmente, no forzamos nada."""
@@ -1648,7 +1670,7 @@ class TestEnforceEventQualificationFollowup:
             result, history, _make_scenario(id=2), _make_lead(), "ahorita no tengo una a la mano")
         assert out["messages"] == result["messages"]
 
-    async def test_step2_to_pitch_after_photo_approved(self):
+    async def test_step3_to_pitch_after_photo_approved(self):
         result = {"action": "respond", "messages": ["Ok"]}
         history = [{"sender": "anna", "text": ai._EVENT_PHOTO_REQUEST_BUBBLE}]
         used = _make_scenario(id=2)
@@ -1663,7 +1685,7 @@ class TestEnforceEventQualificationFollowup:
         assert "mxn" in text.lower() or "MXN" in text
         assert out["send_event_video"] is True
 
-    async def test_step2_noop_when_content_already_given(self):
+    async def test_step3_noop_when_content_already_given(self):
         result = {"action": "respond", "messages": ["Va! El precio es 6,000 MXN: [event_link]"]}
         history = [{"sender": "anna", "text": ai._EVENT_PHOTO_REQUEST_BUBBLE}]
         out = await ai._enforce_event_qualification_followup(

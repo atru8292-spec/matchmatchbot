@@ -798,11 +798,17 @@ _EVENT_QUALIFY_ASK_RE = re.compile(
     r"eres soltero|qu[eé] edad tienes|cu[aá]ntos a[ñn]os tienes", re.IGNORECASE,
 )
 # Encontrado 2026-09-13 (feedback de la dueña, test real de tg_1009982311): el evento
-# calificaba solo soltero/edad y daba el pitch directo, sin preguntar profesión ni
-# pedir la foto del lead — a diferencia del embudo de SERVICIO (mismos 3 datos +
-# foto antes del pitch). Ahora el evento sigue el mismo patrón, en dos pasos.
+# calificaba solo soltero/edad y daba el pitch directo, sin preguntar nombre,
+# profesión ni pedir la foto del lead — a diferencia del embudo de SERVICIO (mismos
+# datos + foto antes del pitch). Ahora el evento sigue el mismo patrón, en pasos.
+#
+# 4 preguntas en UN bubble (nombre+soltero+edad+profesión juntas) se probó primero
+# y la dueña lo marcó como "se ve como formulario, no como charla" (2026-09-13,
+# mismo motivo que la regla general del prompt sobre no pegar preguntas sueltas)
+# — partido en DOS bubbles más cortos y naturales.
 _EVENT_QUALIFY_BUBBLE = ("¡Perfecto! Antes de contarte todos los detalles, cuéntame: "
-                          "¿cómo te llamas? ¿Eres soltero? ¿Qué edad tienes? ¿Y a qué te dedicas?")
+                          "¿cómo te llamas? ¿Eres soltero?")
+_EVENT_AGE_PROFESSION_BUBBLE = "¡Va! Y una última cosa: ¿qué edad tienes y a qué te dedicas?"
 _EVENT_PHOTO_REQUEST_BUBBLE = "¡Perfecto! Y para terminar, ¿me mandas una foto tuya? 😊"
 
 
@@ -869,9 +875,11 @@ async def _enforce_event_qualification_followup(result: dict, history: list[dict
     por RAG (encontrado 2026-09-12: la respuesta del lead a menudo matchea #4
     genérico, que sigue el guion de SERVICIO en vez de dar precio/foto del evento).
 
-    Paso 1 → 2: el turno anterior fue _EVENT_QUALIFY_BUBBLE (soltero/edad/profesión) →
-    pedir la foto del lead (_EVENT_PHOTO_REQUEST_BUBBLE), sin dar precio todavía.
-    Paso 2 → pitch: el turno anterior fue _EVENT_PHOTO_REQUEST_BUBBLE Y este turno
+    Paso 1 → 2: el turno anterior fue _EVENT_QUALIFY_BUBBLE (nombre/soltero) →
+    preguntar edad/profesión (_EVENT_AGE_PROFESSION_BUBBLE), sin dar precio todavía.
+    Paso 2 → 3: el turno anterior fue _EVENT_AGE_PROFESSION_BUBBLE → pedir la foto
+    del lead (_EVENT_PHOTO_REQUEST_BUBBLE), sin dar precio todavía.
+    Paso 3 → pitch: el turno anterior fue _EVENT_PHOTO_REQUEST_BUBBLE Y este turno
     trae "[фото одобрено]" (main.py lo inserta cuando la foto pasó el filtro AI) →
     ahora sí, precio+link+video (mismo momento "primer pitch real" que antes)."""
     if result.get("action") != "respond":
@@ -883,7 +891,20 @@ async def _enforce_event_qualification_followup(result: dict, history: list[dict
         text = " ".join(result.get("messages") or [])
         if _EVENT_CONTENT_MARKER_RE.search(text):
             return result  # ya lo dio bien, no tocamos
-        logger.info("guardrail: respuesta a soltero/edad/profesión del evento no pidió "
+        logger.info("guardrail: respuesta a nombre/soltero del evento no preguntó "
+                    "edad/profesión (matcheó otro escenario) → fuerzo la siguiente pregunta")
+        result = dict(result)
+        result["messages"] = [_EVENT_AGE_PROFESSION_BUBBLE]
+        result["send_event_photo"] = False
+        result["send_event_video"] = False
+        result.pop("video_caption", None)
+        return result
+
+    if last_anna == _normalize_bubble(_EVENT_AGE_PROFESSION_BUBBLE):
+        text = " ".join(result.get("messages") or [])
+        if _EVENT_CONTENT_MARKER_RE.search(text):
+            return result  # ya lo dio bien, no tocamos
+        logger.info("guardrail: respuesta a edad/profesión del evento no pidió "
                     "foto (matcheó otro escenario) → fuerzo pedir la foto")
         result = dict(result)
         result["messages"] = [_EVENT_PHOTO_REQUEST_BUBBLE]
