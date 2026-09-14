@@ -1483,11 +1483,13 @@ async def _call_openai(user_context: str) -> dict:
 # ===== главная точка входа =====
 
 async def _maybe_announce_event_video(reply: dict, scenario: dict | None, lead: dict) -> None:
-    """Выставить reply["video_caption"] — подпись К ВИДЕО (не отдельный текстовый баббл) —
-    ЕСЛИ видео реально уйдёт. Раньше текст дописывался в последний баббл ответа; теперь
-    main.py передаёт video_caption в actions.send_event_video → sender.send_media, и
-    Wazzup шлёт его как caption вместе с самим видео (contentUri) в одном сообщении —
-    так подпись физически прикреплена к видео, а не висит отдельной строкой раньше него.
+    """Выставить reply["video_caption"] — подпись К ВИДЕО — ЕСЛИ видео реально уйдёт.
+    Раньше текст дописывался в последний баббл ответа; теперь main.py передаёт
+    video_caption в actions.send_event_video → sender.send_media, которая шлёт её
+    ОТДЕЛЬНЫМ текстовым сообщением ПРЯМО ПЕРЕД видео (испр. 2026-09-13: раньше
+    думали, что Wazzup поддерживает text+contentUri в одном запросе как caption —
+    реальный прод-алерт показал, что нет, Wazzup отклоняет это как
+    INVALID_MESSAGE_DATA; sender.py сам разбивает на два сообщения).
 
     Не обещаем то, что не отправится. Подпись выставляем только когда выполнены ВСЕ условия:
       • action != 'block' — при блоке main шлёт прощальное сообщение и делает return ДО

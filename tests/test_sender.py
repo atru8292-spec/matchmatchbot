@@ -586,23 +586,32 @@ class TestSendMediaMarker:
 
 
 class TestSendMediaCaption:
-    """caption — подпись к видео/фото в ОДНОМ запросе (text + contentUri), не отдельный
-    текстовый баббл. Например анонс explainer-видео (ai.py _maybe_announce_event_video)."""
+    """caption — подпись к видео/фото ОТДЕЛЬНЫМ текстовым сообщением ПЕРЕД медиа, не
+    в одном запросе с contentUri. Найдено 2026-09-13 в проде (живой алерт с телом
+    ответа Wazzup): text+contentUri в ОДНОМ запросе Wazzup отклоняет как
+    INVALID_MESSAGE_DATA — раньше предполагалось (неверно), что можно их совместить."""
 
-    async def test_caption_included_in_payload(self, monkeypatch, db_pool):
+    async def test_caption_sent_as_separate_message_before_media(self, monkeypatch, db_pool):
         cls = _make_http_client_cls()
         monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
         monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
         await sender.send_media("wa_1", "https://s/v.mp4", "video", caption="Aquí respondo dudas 🤍")
-        body = cls._post_mock.call_args.kwargs["json"]
-        assert body["contentUri"] == "https://s/v.mp4"
-        assert body["text"] == "Aquí respondo dudas 🤍"
+        calls = cls._post_mock.call_args_list
+        assert len(calls) == 2
+        caption_body = calls[0].kwargs["json"]
+        media_body = calls[1].kwargs["json"]
+        assert caption_body["text"] == "Aquí respondo dudas 🤍"
+        assert "contentUri" not in caption_body
+        assert media_body["contentUri"] == "https://s/v.mp4"
+        assert "text" not in media_body
 
-    async def test_no_caption_no_text_key(self, monkeypatch, db_pool):
-        """Без caption — как раньше, поле text вообще отсутствует."""
+    async def test_no_caption_single_call_no_text_key(self, monkeypatch, db_pool):
+        """Без caption — как раньше, один запрос, поле text вообще отсутствует."""
         cls = _make_http_client_cls()
         monkeypatch.setattr(sender.httpx, "AsyncClient", cls)
         monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
         await sender.send_media("wa_1", "https://s/v.mp4", "video")
-        body = cls._post_mock.call_args.kwargs["json"]
+        calls = cls._post_mock.call_args_list
+        assert len(calls) == 1
+        body = calls[0].kwargs["json"]
         assert "text" not in body

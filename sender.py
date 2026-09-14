@@ -183,23 +183,28 @@ async def _send_content_uri(phone: str, url: str, where: str, delay: float,
 
     Фото и видео шлются одним и тем же полем contentUri (Wazzup определяет тип по файлу).
     delay — антибан-пауза перед отправкой, вызывающий сам решает какая (обычная или
-    короткая для галереи, см. compute_media_delay). caption — необязательная подпись
-    (поле text вместе с contentUri в ОДНОМ запросе на отправку — не то же самое, что
-    редактирование уже отправленного сообщения, где Wazzup не даёт менять и text, и
-    contentUri разом).
+    короткая для галереи, см. compute_media_delay).
+
+    caption — необязательная подпись, отправляется ОТДЕЛЬНЫМ текстовым сообщением
+    ПЕРЕД медиа (не то же сообщение). Найдено 2026-09-13 в проде (живой алерт с
+    телом ответа Wazzup): text+contentUri в ОДНОМ запросе Wazzup отклоняет как
+    INVALID_MESSAGE_DATA (поля ["text","contentUri"]) — раньше предполагалось, что
+    Wazzup сам прикрепляет caption к медиа, это оказалось неверно для НОВОГО
+    сообщения (не только для редактирования уже отправленного, как думали раньше).
     """
     if not url:
         return False
     chat_id = phone.replace("wa_", "", 1)
     await asyncio.sleep(delay)
+    if caption:
+        await send_one(chat_id, caption)
+        await asyncio.sleep(1.0)  # короткая пауза перед самим медиа, как между обычными бабблами
     payload = {
         "channelId": settings.wazzup_channel_id,
         "chatType": "whatsapp",
         "chatId": chat_id,
         "contentUri": url,
     }
-    if caption:
-        payload["text"] = caption
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(
