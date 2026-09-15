@@ -304,6 +304,13 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
         logger.info("РЕШЕНИЕ silent [%s]: %s", phone, decision.reason)
         return
 
+    if decision.action == "silent_language":
+        # Лид пишет по-английски — бот молчит (не отвечает на английском), сразу алертит
+        # Аню/Милу, чтобы ответили лично (решение владелицы 2026-09-15). AI не вызываем.
+        logger.info("РЕШЕНИЕ silent_language [%s]: %s", phone, decision.reason)
+        await escalation.notify_english_lead(lead, combined)
+        return
+
     if decision.action == "optout":
         # Лид явно попросил не писать. Одно тёплое подтверждение + do_not_contact навсегда
         # (block_lead: флаг + стадия lost + гасит next_followup_at). Дальше — полная тишина

@@ -1163,6 +1163,20 @@ class TestEscalationIntegration:
         esc_mock.assert_not_awaited()
         err_mock.assert_not_awaited()
 
+    async def test_silent_language_calls_notify_english_lead(self, monkeypatch):
+        """_apply_decision silent_language → notify_english_lead(lead, combined) —
+        бот молчит на английском, но алертит (решение владелицы 2026-09-15)."""
+        eng_mock = AsyncMock()
+        monkeypatch.setattr(main.escalation, "notify_english_lead", eng_mock)
+
+        lead = {"phone": "wa_eng1", "whatsapp_name": "John"}
+        decision = filters.Decision(action="silent_language", reason="лид пишет по-английски",
+                                    alert_manager=True)
+
+        await main._apply_decision("wa_eng1", decision, lead, "How much does it cost?")
+
+        eng_mock.assert_awaited_once_with(lead, "How much does it cost?")
+
     # 14. blocked → notify_block вызван
 
     async def test_blocked_calls_notify_block(self, monkeypatch):

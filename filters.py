@@ -57,6 +57,31 @@ _AGGRESSION_NEGATED_RE = re.compile(
 # Кириллица — признак нецелевого лида (агентство работает с мексиканцами по-испански).
 _CYRILLIC_RE = re.compile(r"[а-яёА-ЯЁ]")
 
+# Лид пишет по-английски (2026-09-15, решение владелицы: бот на английском не отвечает
+# вообще — молчит и сразу алертит Аню/Милу, без AI-вызова). Консервативная эвристика —
+# требуем НЕСКОЛЬКО английских стоп-слов И ноль испанских, чтобы не ловить ложно короткие/
+# смешанные сообщения ("Hola, how are you" — испанский стоп-слово "hola" есть → не триггерит).
+_ENGLISH_STOPWORDS_RE = re.compile(
+    r"\b(the|and|you|your|how much|what|when|where|hello|hi|thanks|thank you|price|cost|"
+    r"event|please|interested|looking for|available|schedule|meeting|much does|does it|"
+    r"i want|i am|i'm|can you|do you)\b",
+    re.IGNORECASE,
+)
+_SPANISH_STOPWORDS_RE = re.compile(
+    r"\b(el|la|los|las|de|que|y|en|un|una|es|para|con|por|no|s[ií]|m[aá]s|cu[aá]nto|"
+    r"cu[aá]ndo|hola|gracias|quiero|busco|c[oó]mo|porfa|porque|est[aá])\b",
+    re.IGNORECASE,
+)
+
+
+def is_english(text: str) -> bool:
+    """Detecta inglés con heurística conservadora — requiere >=2 señales en inglés Y
+    CERO señales en español, para evitar falsos positivos en texto corto o mixto."""
+    text = text or ""
+    if _SPANISH_STOPWORDS_RE.search(text):
+        return False
+    return len(_ENGLISH_STOPWORDS_RE.findall(text)) >= 2
+
 # Заявление об оплате (блок 13). Только claim-формы («я оплатил»), НЕ вопрос про оплату
 # ("cómo es el pago?"): 'pago'/'pagar' без claim-контекста намеренно не ловим.
 _PAYMENT_RE = re.compile(
@@ -113,7 +138,7 @@ _OPTOUT_RE = re.compile(
 @dataclass(frozen=True)
 class Decision:
     """Результат детерминированного решения по залпу лида."""
-    action: str                 # respond | silent_whitelist | silent | blocked | rejected | needs_ai
+    action: str                 # respond | silent_whitelist | silent | silent_language | blocked | rejected | needs_ai
     reason: str                 # краткая причина (для лога/алерта/эскалации)
     alert_manager: bool = False # нужно ли уведомить Аню (сам алерт — блок 8)
     block_permanent: bool = False  # блок навсегда (do_not_contact + manual надолго)
@@ -242,6 +267,10 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
             return Decision("silent", "молчу — русский номер +7, не целевой регион")
         if has_cyrillic(text):
             return Decision("silent", "молчу — кириллица/русский язык, не целевой лид")
+        # Английский — решение владелицы 2026-09-15: бот не отвечает на английском вообще,
+        # молчит и сразу алертит (не тратим AI-вызов на язык, которым бот не владеет).
+        if is_english(text):
+            return Decision("silent_language", "лид пишет по-английски", alert_manager=True)
 
     # 2) Escort/секс-услуги → блок навсегда (с ПЕРВОГО упоминания).
     if is_escort_mention(text):

@@ -11,7 +11,7 @@ import pytest
 
 import filters
 from filters import (Decision, decide, is_aggression, is_escort_mention, is_russian_number,
-                     has_cyrillic, has_instagram)
+                     has_cyrillic, has_instagram, is_english)
 
 
 # ===========================================================================
@@ -720,6 +720,58 @@ class TestHasCyrillic:
     def test_none_safe(self):
         """None → False, без исключения."""
         assert has_cyrillic(None) is False  # type: ignore[arg-type]
+
+
+class TestIsEnglish:
+    """is_english — эвристика: >=2 английских стоп-слова И ноль испанских (решение
+    владелицы 2026-09-15: бот не отвечает на английском, молчит + алертит)."""
+
+    def test_clear_english_true(self):
+        assert is_english("Hi, I saw your event on instagram, how much does it cost?") is True
+
+    def test_clear_spanish_false(self):
+        assert is_english("Hola, cuanto cuesta el evento?") is False
+
+    def test_mixed_with_spanish_stopword_false(self):
+        """Hola presente → no triggerea aunque haya palabras en inglés después."""
+        assert is_english("Hola, how are you") is False
+
+    def test_single_english_word_false(self):
+        """Solo 1 señal en inglés — insuficiente, evita falso positivo en saludo corto."""
+        assert is_english("Hi") is False
+
+    def test_two_english_signals_true(self):
+        assert is_english("How much is the event and when is it?") is True
+
+    def test_empty_string_false(self):
+        assert is_english("") is False
+
+    def test_none_safe(self):
+        assert is_english(None) is False  # type: ignore[arg-type]
+
+
+class TestDecideSilentByEnglish:
+    """decide: texto en inglés (sin señales en español) → action='silent_language'."""
+
+    def test_english_text_silent_language(self):
+        d = decide({}, False, "Hi, how much does the event cost?", "wa_5215551234567")
+        assert d.action == "silent_language"
+
+    def test_english_alert_manager_true(self):
+        """A diferencia de silent por idioma/región — este SÍ alerta (decisión de la dueña)."""
+        d = decide({}, False, "Hi, how much does the event cost?", "wa_5215551234567")
+        assert d.alert_manager is True
+
+    def test_bypass_phone_skips_english_check(self):
+        """Número de prueba (bypass_phones) — no se filtra por idioma."""
+        d = decide({}, False, "Hi, how much does the event cost?", "wa_5215551234567",
+                   bypass_phones=frozenset({"wa_5215551234567"}))
+        assert d.action != "silent_language"
+
+    def test_mixed_spanish_english_not_silenced(self):
+        """Saludo en español + palabras en inglés sueltas — no se considera inglés puro."""
+        d = decide({}, False, "Hola, how much es el evento?", "wa_5215551234567")
+        assert d.action != "silent_language"
 
 
 class TestDecideSilentByPhone:

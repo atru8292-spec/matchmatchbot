@@ -203,6 +203,19 @@ async def notify_vip(lead: dict) -> None:
     await _send_business_alert(text, vip_action_kb(phone) if phone else None)
 
 
+async def notify_english_lead(lead: dict, last_msg: str) -> None:
+    """Лид пишет по-английски — бот молчит (не отвечает на английском), нужен человек
+    (решение владелицы 2026-09-15)."""
+    text = (
+        "🌐 Лид пишет по-английски — бот молчит\n"
+        f"{_lead_name(lead)}\n"
+        f'Последнее сообщение: "{last_msg}"\n'
+        f"👉 Открыть чат: {_wa_link((lead or {}).get('phone', ''))}"
+    )
+    phone = (lead or {}).get("phone", "")
+    await _send_business_alert(text, vip_action_kb(phone) if phone else None)
+
+
 async def notify_guest_list_issue(lead: dict, tab: str, reason: str) -> None:
     """Гость оплатил ивент, но бот не смог вписать его в лист — Аня вписывает вручную."""
     why = {
