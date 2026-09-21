@@ -92,9 +92,9 @@ class TestPureHelpers:
                                   "America/Mexico_City", "07:00", "14:00") is True
         assert booking._in_window(datetime(2026, 7, 10, 3, 0, tzinfo=CDMX),
                                   "America/Mexico_City", "07:00", "14:00") is False
-        # конец окна НЕ включается (13:45 старт → конец 14:15 > 14:00)
+        # конец окна ВКЛЮЧАЕТСЯ (2026-09-21, подтверждено дуэньей: последний час можно бронировать)
         assert booking._in_window(datetime(2026, 7, 10, 14, 0, tzinfo=CDMX),
-                                  "America/Mexico_City", "07:00", "14:00") is False
+                                  "America/Mexico_City", "07:00", "14:00") is True
 
     def test_in_window_converts_other_timezone(self):
         # Мила en Moscú 15:00-22:00 (MSK sin horario de verano) — CDMX 10:00 = Moscú 19:00 → dentro
@@ -136,6 +136,19 @@ class TestPureHelpers:
         }
         # unión: min inicio (Мила, 6am CDMX) a max fin (Аня/Рита, 2pm)
         assert booking._hours_text(schedules, NOW) == "6am a 2pm"
+
+    async def test_hours_text_now_reads_settings_and_computes_union(self, monkeypatch):
+        # Аня extendida a 16:00 (pedido dueña 2026-09-21), Мила/Рита siguen en 14:00
+        # (CDMX) — unión debe ser 7am (min inicio) a 4pm (max fin, el de Аня).
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "assignee_anya_tz": "America/Mexico_City", "assignee_anya_start": "07:00",
+            "assignee_anya_end": "16:00",
+            "assignee_mila_tz": "America/Mexico_City", "assignee_mila_start": "07:00",
+            "assignee_mila_end": "14:00",
+            "assignee_rita_tz": "America/Mexico_City", "assignee_rita_start": "07:00",
+            "assignee_rita_end": "14:00",
+        }))
+        assert await booking.hours_text_now() == "7am a 4pm"
 
     def test_fmt_es_full(self):
         s = booking.fmt_es(datetime(2026, 7, 10, 17, 0, tzinfo=CDMX))

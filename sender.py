@@ -19,6 +19,7 @@ from datetime import datetime
 
 import httpx
 
+import booking
 import db
 import escalation
 from config import settings
@@ -148,6 +149,27 @@ async def _fill_event_vars(text: str) -> str:
     return text
 
 
+async def _fill_booking_vars(text: str, phone: str | None = None) -> str:
+    """[horario_llamada] → ventana real de las 3 agendas (booking.hours_text_now()),
+    para que el prompt lo mencione PROACTIVAMENTE al preguntar día/hora de la
+    videollamada (pedido directo de la dueña, 2026-09-21), igual mecanismo que
+    _fill_event_vars. Sin el token en el texto, no toca la BD.
+
+    booking._load_schedules ya absorbe los fallos de BD (fallback a defaults sin
+    relanzar) — este except solo cubre un bug real (ej. atributo/None inesperado).
+    Alertamos igual: mostrarle al lead un horario fijo aquí sería repetir EXACTO el
+    bug que esta feature vino a eliminar (el «8am a 10pm» inventado de #53)."""
+    if "[horario_llamada]" not in text:
+        return text
+    try:
+        hours = await booking.hours_text_now()
+    except Exception as e:
+        logger.exception("sender: no pude leer horario_llamada, dejo el fallback")
+        await escalation.notify_error("sender._fill_booking_vars", repr(e), phone)
+        hours = "7am a 2pm"
+    return text.replace("[horario_llamada]", f"{hours}, hora de Ciudad de México")
+
+
 async def _fill_link_placeholders(text: str, phone: str | None = None,
                                   allow_repeat: bool = False) -> str | None:
     """Подставить ссылки из app_settings в [course_link]/[event_link].
@@ -270,7 +292,8 @@ async def render_bubbles(messages: list, phone: str | None = None,
     """
     out = []
     for text in messages:
-        text = await _fill_event_vars(text)          # переменные события (№2/№15/№51)
+        text = await _fill_event_vars(text)           # переменные события (№2/№15/№51)
+        text = await _fill_booking_vars(text, phone)  # [horario_llamada] видеозвонка
         # ссылки (course/event); пусто ИЛИ уже слали (дедуп) → дроп баббла
         text = await _fill_link_placeholders(text, phone, allow_repeat_links)
         if text and text.strip():

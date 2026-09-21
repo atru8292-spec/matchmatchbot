@@ -50,7 +50,7 @@
     "lead": {"funnel_stage": "qualified", "is_single": true, "age": 33, "profession": "abogado", "photo_received": true, "interest": "event"},
     "history": [
       {"sender": "lead", "text": "hola, cuanto cuesta el evento"},
-      {"sender": "anna", "text": "El precio es de 6000 MXN... la ubicacion es Nusr-Et, St. Regis... link: https://www.rusaencdmx.com/09-09-2026"},
+      {"sender": "anna", "text": "El precio es de 6000 MXN... la ubicacion es Polanco, CDMX... link: https://www.rusaencdmx.com/14-10-26-slavic-latino-night"},
       {"sender": "lead", "text": "soy soltero, tengo 33"},
       {"sender": "anna", "text": "Perfecto, gracias! A que te dedicas?"},
       {"sender": "lead", "text": "abogado"},

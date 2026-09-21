@@ -103,13 +103,19 @@ async def _load_schedules() -> dict[str, tuple[str, str, str]]:
 
 
 def _in_window(dt: datetime, tz_str: str, start_hhmm: str, end_hhmm: str) -> bool:
-    """dt (tz-aware, cualquier zona) cae dentro de [start, end) en SU horario local — la
-    conversión usa la fecha real de dt, así que el horario de verano se resuelve solo."""
+    """dt (tz-aware, cualquier zona) cae dentro de [start, end] en SU horario local — la
+    conversión usa la fecha real de dt, así que el horario de verano se resuelve solo.
+
+    end_hhmm SÍ se puede reservar (cierre inclusivo, confirmado por la dueña 2026-09-21:
+    "las 16:00 también deben poder reservar, es la última hora") — la llamada arranca a esa
+    hora y corre DURATION más allá del cierre nominal, igual que ya pasa con cualquier slot
+    cercano al borde (ej. 13:45 con cierre 14:00); no hay razón para tratar el borde exacto
+    distinto al resto."""
     local = dt.astimezone(_zone(tz_str))
     mod = local.hour * 60 + local.minute
     sh, sm = _parse_hhmm(start_hhmm)
     eh, em = _parse_hhmm(end_hhmm)
-    return sh * 60 + sm <= mod < eh * 60 + em
+    return sh * 60 + sm <= mod <= eh * 60 + em
 
 
 def _covering_names(dt: datetime, schedules: dict[str, tuple[str, str, str]]) -> list[str]:
@@ -121,6 +127,15 @@ def _fmt_hour12(h: int, m: int) -> str:
     ampm = "am" if h < 12 else "pm"
     h12 = h % 12 or 12
     return f"{h12}:{m:02d}{ampm}" if m else f"{h12}{ampm}"
+
+
+async def hours_text_now() -> str:
+    """Ventana global (unión) de las 3 agendas, para el token [horario_llamada]
+    (sender.py) — mostrarla PROACTIVAMENTE la primera vez que se pregunta día/hora,
+    en vez de solo como corrección tras una hora fuera de rango (pedido directo de
+    la dueña, 2026-09-21: evitar la vuelta de "esa hora no aplica")."""
+    schedules = await _load_schedules()
+    return _hours_text(schedules, datetime.now(CDMX))
 
 
 def _hours_text(schedules: dict[str, tuple[str, str, str]], ref: datetime) -> str:

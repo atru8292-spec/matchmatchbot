@@ -536,6 +536,32 @@ class TestLinkPlaceholders:
         assert sent == 1   # первый баббл ушёл, второй (только ссылка, пусто) — нет
 
 
+class TestBookingVars:
+    async def test_fills_horario_llamada(self, monkeypatch, db_pool):
+        monkeypatch.setattr(sender.booking, "hours_text_now", AsyncMock(return_value="7am a 4pm"))
+        out = await sender._fill_booking_vars("¿Cuándo te queda? Atiendo de [horario_llamada]")
+        assert out == "¿Cuándo te queda? Atiendo de 7am a 4pm, hora de Ciudad de México"
+
+    async def test_no_placeholder_no_call(self, monkeypatch, db_pool):
+        hours_mock = AsyncMock()
+        monkeypatch.setattr(sender.booking, "hours_text_now", hours_mock)
+        out = await sender._fill_booking_vars("Hola guapo")
+        assert out == "Hola guapo"
+        hours_mock.assert_not_awaited()
+
+    async def test_fallback_and_alert_on_failure(self, monkeypatch, db_pool):
+        # booking._load_schedules ya absorbe fallos de BD sin relanzar — este except
+        # solo cubre un bug real; aun así, NUNCA mostrar un horario fijo sin avisar
+        # (repetiría el bug "8am a 10pm" que esta feature vino a eliminar).
+        monkeypatch.setattr(sender.booking, "hours_text_now",
+                            AsyncMock(side_effect=RuntimeError("boom")))
+        notify = AsyncMock()
+        monkeypatch.setattr(sender.escalation, "notify_error", notify)
+        out = await sender._fill_booking_vars("Atiendo de [horario_llamada]", phone="wa_1")
+        assert out == "Atiendo de 7am a 2pm, hora de Ciudad de México"
+        notify.assert_awaited_once_with("sender._fill_booking_vars", "RuntimeError('boom')", "wa_1")
+
+
 class TestLinkPlaceholdersTwoPass:
     async def test_both_present_one_empty_drops_whole_bubble(self, monkeypatch, db_pool):
         monkeypatch.setattr(sender.db, "get_settings",
