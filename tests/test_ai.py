@@ -1533,6 +1533,19 @@ class TestEnforceNoEventQualificationGate:
         out = ai._enforce_no_event_qualification_gate(result, None)
         assert out["messages"] == result["messages"]
 
+    def test_both_interest_override_mentions_service(self):
+        """(2026-09-23, test real) interest='both' — el override de arriba solo hablaba
+        del evento, perdiendo la mención al servicio que "Ambigüedad AMBOS" exige. Debe
+        mencionar el servicio (sin el precio de $10,000 — no se da recién aquí)."""
+        used = _make_scenario(id=2)
+        result = {"action": "respond", "extracted": {"interest": "both"},
+                  "messages": ["¡Justo te iba a contar! ¿Te gustaría que te mande todos los detalles?"]}
+        out = ai._enforce_no_event_qualification_gate(result, used)
+        text = " ".join(out["messages"])
+        assert "[event_link]" in text
+        assert "servicio" in text.lower()
+        assert "10,000" not in text and "10000" not in text
+
 
 class TestEnforceEventQualificationGate:
     """(2026-09-12, revierte la decisión previa "sin gate") Precio/detalles del
@@ -1590,6 +1603,22 @@ class TestEnforceEventQualificationGate:
         result = {"action": "respond", "messages": ["El precio es 6,000 MXN: [event_link]"]}
         out = ai._enforce_event_qualification_gate(result, None, [])
         assert out["messages"] == result["messages"]
+
+    @pytest.mark.parametrize("scenario_id", [2, 15, 51, 52])
+    def test_noop_when_interest_both(self, scenario_id):
+        """(2026-09-23, test real) interest='both' — lead ya mostró interés en evento
+        Y servicio (típicamente pidiendo las dos cifras a la vez, regla "Ambigüedad
+        AMBOS" del prompt) — el gate NO debe reemplazar el pitch por soltero/edad,
+        aunque sea la primera vez en la conversación. Antes de esta excepción, el
+        gate sustituía SIEMPRE el mensaje, sin mirar el interés extraído."""
+        used = _make_scenario(id=scenario_id)
+        result = {"action": "respond",
+                  "messages": ["El precio es 6,000 MXN, aquí tu boleto: [event_link]"],
+                  "extracted": {"interest": "both"},
+                  "send_event_photo": True, "send_event_video": True}
+        out = ai._enforce_event_qualification_gate(result, used, [])
+        assert out["messages"] == result["messages"]
+        assert out["send_event_photo"] is True and out["send_event_video"] is True
 
 
 class TestEnforceEventQualificationFollowup:
@@ -1992,6 +2021,184 @@ class TestEnforceServiceQualificationGate:
         assert result["messages"] == ["¡Gracias por tu foto! 😊", "Y antes de contarte más, ¿a qué te dedicas?"]
 
 
+class TestEnforceQualificationBeforeBooking:
+    """(2026-09-23, auditoría lógica) proposed_videocall_at no se confirma si falta
+    CUALQUIER dato de la anketa (name/is_single/age/profession/email) — encontrado en
+    test real: is_single=True pero age/profession NUNCA preguntados, lead dio
+    nombre+correo+día/hora en un turno y el bot agendó una llamada real sin edad ni
+    profesión confirmadas."""
+
+    _FULL = {"name": "Carlos", "is_single": True, "age": 35, "profession": "abogado",
+             "email": "carlos@gmail.com"}
+
+    def test_noop_when_full_qualification(self):
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["ok"], "extracted": {}}
+        out = ai._enforce_qualification_before_booking(result, self._FULL)
+        assert out["proposed_videocall_at"] == "2026-09-25T17:00:00"
+        assert out["messages"] == ["ok"]
+
+    @pytest.mark.parametrize("missing_field,expected_snippet", [
+        ("name", "cómo te llamas"),
+        ("is_single", "soltero"),
+        ("age", "edad"),
+        ("profession", "dedicas"),
+    ])
+    def test_blocks_when_field_missing(self, missing_field, expected_snippet):
+        lead = dict(self._FULL)
+        lead[missing_field] = None if missing_field != "is_single" else False
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["ok"], "extracted": {}}
+        out = ai._enforce_qualification_before_booking(result, lead)
+        assert out["proposed_videocall_at"] is None
+        text = " ".join(out["messages"]).lower()
+        assert expected_snippet in text
+
+    def test_blocks_when_email_missing(self):
+        lead = dict(self._FULL)
+        lead["email"] = None
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["ok"], "extracted": {}}
+        out = ai._enforce_qualification_before_booking(result, lead)
+        assert out["proposed_videocall_at"] is None
+        assert "correo" in " ".join(out["messages"]).lower()
+
+    def test_uses_extracted_merged_this_turn(self):
+        """El dato faltante pudo darse recién en ESTE turno (extracted), no solo en
+        el lead persistido — no debe bloquear si ya llegó junto con el día/hora."""
+        lead = dict(self._FULL)
+        lead["age"] = None
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["ok"], "extracted": {"age": 35}}
+        out = ai._enforce_qualification_before_booking(result, lead)
+        assert out["proposed_videocall_at"] == "2026-09-25T17:00:00"
+
+    def test_resets_stale_videocall_set_funnel_stage(self):
+        lead = dict(self._FULL)
+        lead["age"] = None
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "funnel_stage": "videocall_set", "messages": ["ok"], "extracted": {}}
+        out = ai._enforce_qualification_before_booking(result, lead)
+        assert out["funnel_stage"] is None
+
+    def test_resets_media_flags_when_blocking(self):
+        """(code-review 2026-09-23) mismo patrón que _enforce_age_block: al reemplazar
+        el mensaje, apaga foto/video huérfanos del turno original."""
+        lead = dict(self._FULL)
+        lead["age"] = None
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["ok"], "extracted": {}, "send_event_photo": True,
+                  "send_event_video": True, "photo_caption": "x", "video_caption": "y"}
+        out = ai._enforce_qualification_before_booking(result, lead)
+        assert out["send_event_photo"] is False and out["send_event_video"] is False
+        assert "photo_caption" not in out and "video_caption" not in out
+
+    def test_noop_when_no_proposal(self):
+        result = {"action": "respond", "proposed_videocall_at": None, "messages": ["ok"],
+                  "extracted": {}}
+        out = ai._enforce_qualification_before_booking(result, {})
+        assert out == result
+
+    def test_noop_when_action_not_respond(self):
+        """(code-review 2026-09-23) escalate/block no deben pisarse — mismo patrón
+        que el resto de guardrails del archivo."""
+        lead = dict(self._FULL)
+        lead["age"] = None
+        result = {"action": "escalate", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["te escalo con Anna"], "extracted": {}}
+        out = ai._enforce_qualification_before_booking(result, lead)
+        assert out == result
+
+
+class TestEnforcePriceShownBeforeBooking:
+    """(2026-09-23, pedido directo de la dueña: "перед записью на звонок надо сказать
+    цену точно") proposed_videocall_at nunca se confirma sin que el precio del
+    servicio ($10,000 USD) se haya mencionado al menos una vez, ni en el historial ni
+    en este turno — encontrado en test real: lead ya calificado dijo "va, me interesa,
+    agendemos el jueves a las 5pm" sin que el precio se hubiera mencionado NUNCA, y el
+    bot agendó directo pidiendo solo el correo."""
+
+    def test_blocks_and_gives_price_when_never_mentioned(self):
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"]}
+        history = [{"sender": "lead", "text": "va, me interesa, agendemos"}]
+        out = ai._enforce_price_shown_before_booking(result, history, {"is_single": True})
+        assert out["proposed_videocall_at"] is None
+        text = " ".join(out["messages"])
+        assert "10,000" in text
+
+    def test_keeps_when_price_already_in_history(self):
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"]}
+        history = [{"sender": "anna", "text": "La inversión es desde $10,000 USD."}]
+        out = ai._enforce_price_shown_before_booking(result, history, {"is_single": True})
+        assert out["proposed_videocall_at"] == "2026-09-25T17:00:00"
+        assert out["messages"] == result["messages"]
+
+    def test_keeps_when_price_in_current_message(self):
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["La inversión es desde $10,000 USD. Te confirmo el jueves a las 5pm 🤍"]}
+        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
+        assert out["proposed_videocall_at"] == "2026-09-25T17:00:00"
+
+    def test_noop_when_no_proposal(self):
+        result = {"action": "respond", "proposed_videocall_at": None, "messages": ["ok"]}
+        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
+        assert out == result
+
+    def test_noop_when_action_not_respond(self):
+        """(code-review 2026-09-23) escalate/block no deben pisarse — mismo patrón
+        que el resto de guardrails del archivo."""
+        result = {"action": "escalate", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["te escalo con Anna"]}
+        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
+        assert out == result
+
+    def test_cold_lead_no_price_leaked_booking_silently_cancelled(self):
+        """(code-review 2026-09-23) is_single != True — NO inyectamos el precio aquí,
+        sería repetir exactamente lo que _enforce_service_price_gate ya bloqueó para
+        leads fríos. Solo cancelamos la reserva, sin agregar el precio al mensaje."""
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"]}
+        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": None})
+        assert out["proposed_videocall_at"] is None
+        text = " ".join(out["messages"])
+        assert "10,000" not in text
+        assert out["messages"] == result["messages"]  # no reescribe el contenido
+
+    def test_does_not_overwrite_event_content_with_price_bubble(self):
+        """(code-review 2026-09-23, caso teórico) el mensaje ya trae contenido real
+        del evento ([event_link]) — no lo pisamos con la burbuja de precio del
+        servicio, solo cancelamos la reserva."""
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["El precio del evento es 6,000 MXN: [event_link]"]}
+        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
+        assert out["proposed_videocall_at"] is None
+        assert out["messages"] == result["messages"]
+
+    def test_resets_stale_videocall_set_funnel_stage(self):
+        """(code-review 2026-09-23) si el modelo puso funnel_stage='videocall_set' en
+        el mismo turno que la reserva que acabamos de cancelar, debe resetearse — ese
+        stage solo es válido tras una reserva REAL (booking.py), no solo porque el
+        modelo lo mencionó junto a una propuesta descartada."""
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "funnel_stage": "videocall_set",
+                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"]}
+        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
+        assert out["funnel_stage"] is None
+
+    def test_resets_media_flags_when_giving_price(self):
+        """(code-review 2026-09-23) mismo patrón que _enforce_age_block: al reemplazar
+        el mensaje con la burbuja de precio, apaga foto/video huérfanos."""
+        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
+                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"],
+                  "send_event_photo": True, "send_event_video": True,
+                  "photo_caption": "x", "video_caption": "y"}
+        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
+        assert out["send_event_photo"] is False and out["send_event_video"] is False
+        assert "photo_caption" not in out and "video_caption" not in out
+
+
 class TestEnforceVideocallProposalNeedsCurrentSignal:
     """proposed_videocall_at dispara reserva TOTALMENTE AUTOMÁTICA (evento real de
     Google Calendar, sin revisión humana) — encontrado 2026-09-13 en test real: el
@@ -2003,6 +2210,13 @@ class TestEnforceVideocallProposalNeedsCurrentSignal:
         result = {"proposed_videocall_at": "2026-09-17T16:00:00"}
         out = ai._enforce_videocall_proposal_needs_current_signal(result, "Hola")
         assert out["proposed_videocall_at"] is None
+
+    def test_clears_resets_stale_videocall_set_funnel_stage(self):
+        """(code-review 2026-09-23) mismo reset que en _enforce_price_shown_before_booking
+        — no dejar 'videocall_set' persistido sin una reserva real."""
+        result = {"proposed_videocall_at": "2026-09-17T16:00:00", "funnel_stage": "videocall_set"}
+        out = ai._enforce_videocall_proposal_needs_current_signal(result, "Hola")
+        assert out["funnel_stage"] is None
 
     def test_keeps_when_day_name_present(self):
         result = {"proposed_videocall_at": "2026-09-17T16:00:00"}
@@ -2037,6 +2251,18 @@ class TestEnforceAgeBlock:
         out = ai._enforce_age_block(result, _make_lead())
         assert out["action"] == "block"
         assert out["needs_escalation"] is True
+
+    def test_blocks_and_cancels_pending_videocall_booking(self):
+        """(code-review 2026-09-23) si el modelo puso edad inválida Y una reserva de
+        videollamada en el MISMO turno, el bloqueo debe cancelar la reserva también
+        — sin esto, main.py podía agendar una llamada real para un lead recién
+        bloqueado por edad (main.py llama a booking ANTES de mirar action=='block')."""
+        result = {"action": "respond", "messages": ["ok"], "extracted": {"age": 22},
+                  "proposed_videocall_at": "2026-09-25T17:00:00", "funnel_stage": "videocall_set"}
+        out = ai._enforce_age_block(result, _make_lead())
+        assert out["action"] == "block"
+        assert out["proposed_videocall_at"] is None
+        assert out["funnel_stage"] is None
 
     def test_blocks_too_old(self):
         result = {"action": "respond", "messages": ["ok"], "extracted": {"age": 80}}

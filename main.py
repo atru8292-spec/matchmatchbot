@@ -409,7 +409,14 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
     # #53 автозапись видеозвонка: AI распарсил конкретный день+час → бронируем сами
     # (Google-событие + Meet + подтверждение лиду), без участия Ани. Обрабатываем ДО
     # обычной ветки action, т.к. сообщение лиду формируется детерминированно по исходу.
-    if result.get("proposed_videocall_at"):
+    #
+    # action == "respond": защита в глубину (найдено 2026-09-23, аудит логики) — si
+    # algún guardrail de ai.py alguna vez pone action='block'/'escalate' (ej. edad
+    # fuera de 28-76) SIN limpiar proposed_videocall_at (bug real encontrado en
+    # _enforce_age_block, corregido aparte), esta condición extra evita reservar una
+    # llamada real de todos modos. Nunca debería agendarse una llamada si el lead
+    # no va a recibir un "respond" normal.
+    if result.get("proposed_videocall_at") and result.get("action") == "respond":
         await _handle_videocall_booking(phone, lead, combined, result["proposed_videocall_at"])
         return
 

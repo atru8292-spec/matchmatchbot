@@ -756,6 +756,16 @@ _EVENT_GATE_OVERRIDE_BUBBLE = (
     "[event_promo] e incluye bebida de bienvenida y entrantes. Aquí está el enlace "
     "para tu boleto, con fotos y videos de eventos pasados: [event_link] 🤍"
 )
+# interest='both' — el override de arriba solo habla del evento, perdiendo la mención
+# al servicio que "Ambigüedad AMBOS" (anna_prompt_v5.md) exige mantener. SIN precio del
+# servicio aquí (no es la primera vez que se menciona el $10,000 en este turno — mismo
+# criterio que _enforce_service_price_gate: precio del servicio no se da recién en el
+# primer intercambio, solo se anuncia que existe).
+_EVENT_GATE_OVERRIDE_BUBBLE_BOTH = _EVENT_GATE_OVERRIDE_BUBBLE + (
+    " Y si además buscas algo más a fondo, también tengo un servicio de matchmaking "
+    "personal con presentaciones seleccionadas a mano, eso lo vemos con calma en una "
+    "videollamada, cuando quieras."
+)
 
 
 def _enforce_no_event_qualification_gate(result: dict, used: dict | None) -> dict:
@@ -789,8 +799,10 @@ def _enforce_no_event_qualification_gate(result: dict, used: dict | None) -> dic
     logger.info("guardrail: сценарий #%s ответил редундантным вопросом-разрешением "
                 "без контента → форс прямого ответа с ценой+ссылкой", used["id"])
     result = dict(result)
-    result["messages"] = ["¡Claro! Te cuento todos los detalles ahora mismo 🤍",
-                          _EVENT_GATE_OVERRIDE_BUBBLE]
+    override = (_EVENT_GATE_OVERRIDE_BUBBLE_BOTH
+                if result.get("extracted", {}).get("interest") == "both"
+                else _EVENT_GATE_OVERRIDE_BUBBLE)
+    result["messages"] = ["¡Claro! Te cuento todos los detalles ahora mismo 🤍", override]
     return result
 
 
@@ -845,10 +857,21 @@ def _enforce_event_qualification_gate(result: dict, used: dict | None, history: 
     pitch) y apaga foto/video de este turno — no tiene sentido mandarlos junto a
     una pregunta pendiente (mismo principio que ya aplica a las fotos en el
     prompt: no envíes medios en el turno en que preguntas soltero/edad).
+
+    EXCEPCIÓN (encontrado 2026-09-23 en test real): interest='both' (lead mostró
+    interés en evento Y servicio, típicamente pidiendo AMBAS cifras a la vez) —
+    este gate reemplazaba SIEMPRE el pitch por "¿cómo te llamas? ¿Eres soltero?",
+    incluso cuando el modelo ya había dado correctamente las dos cifras (regla de
+    negocio "Ambigüedad AMBOS" en anna_prompt_v5.md, confirmada por la dueña) — el
+    gate no distinguía ese caso del de un lead que solo quiere el evento. Sin esta
+    excepción, ningún ajuste de prompt podía arreglarlo (el gate corre DESPUÉS de
+    generar y sustituye el mensaje entero, sin mirar el texto real del modelo).
     """
     if not used or used.get("id") not in _EVENT_NO_GATE_SCENARIOS:
         return result
     if result.get("action") != "respond":
+        return result
+    if result.get("extracted", {}).get("interest") == "both":
         return result
     if _event_qualification_already_asked(history):
         return result
@@ -929,7 +952,10 @@ async def _enforce_event_qualification_followup(result: dict, history: list[dict
     return result
 
 
-_SERVICE_PRICE_PATTERN = re.compile(r"\b10[.,]?000\b")
+_SERVICE_PRICE_PATTERN = re.compile(
+    r"\b10[.,]?000\b|\b10\s*mil\b|\$?\s*10\s*k\b", re.IGNORECASE
+)  # code-review 2026-09-23: "$10,000"/"10.000" además de "10 mil"/"10k" (falso
+   # negativo antes → _enforce_price_shown_before_booking reintentaba de más).
 
 
 async def _enforce_service_price_gate(result: dict, lead: dict) -> dict:
@@ -991,7 +1017,7 @@ def _enforce_age_block(result: dict, lead: dict) -> dict:
         return result
     logger.info("guardrail: edad %s fuera de %s-%s → форс block (промпт не поймал)",
                 age, MIN_AGE, MAX_AGE)
-    result = dict(result)
+    result = _clear_videocall_proposal(result)
     result["action"] = "block"
     result["messages"] = list(_AGE_OUT_OF_RANGE_BUBBLES)
     result["needs_escalation"] = True
@@ -1009,6 +1035,117 @@ _VIDEOCALL_DATE_SIGNAL_RE = re.compile(
     r"\d{1,2}\s*(?:am|pm)\b|\d{1,2}:\d{2}|a\s+las\s+\d)",
     re.IGNORECASE,
 )
+
+
+def _clear_videocall_proposal(result: dict) -> dict:
+    """Cancela una reserva de videollamada a medio generar: limpia proposed_videocall_at
+    Y, si el modelo también puso funnel_stage='videocall_set' en el mismo turno, lo
+    resetea — ese stage solo debe persistir tras una reserva REAL (booking.py, en
+    éxito), nunca solo porque el modelo lo mencionó junto a una propuesta que
+    nosotros mismos descartamos (encontrado en code-review 2026-09-23: sin este
+    reset, un lead podía quedar marcado 'videocall_set' sin ningún evento real en
+    Google Calendar, disparando de más el follow-up de "no-show" 24h después,
+    ver funnel.FOLLOWUP_FIRST_DELAY_HOURS)."""
+    result = dict(result)
+    result["proposed_videocall_at"] = None
+    if result.get("funnel_stage") == "videocall_set":
+        result["funnel_stage"] = None
+    return result
+
+
+def _enforce_qualification_before_booking(result: dict, lead: dict) -> dict:
+    """Гарантия (2026-09-23, auditoría lógica tras el fix de precio): proposed_videocall_at
+    tampoco se confirma si falta CUALQUIER dato de la anketa obligatoria (name/
+    is_single/age/profession/email) — no solo el precio.
+
+    Encontrado en test real: un lead con is_single=True pero age/profession NUNCA
+    preguntados en toda la conversación (el modelo se saltó esos pasos) dio
+    nombre+correo+día/hora en un mismo turno, y el bot agendó una llamada REAL sin
+    haber confirmado la edad (filtro duro de negocio, 28-76) ni la profesión.
+    _enforce_age_block (arriba) solo bloquea una edad INVÁLIDA ya extraída — no
+    cubre "nunca se preguntó", el mismo hueco que _missing_qualification_field ya
+    resuelve para el paso 2/3 (foto/pitch); aquí se extiende al paso de reserva.
+
+    Usa lead FUSIONADO con extracted de ESTE turno — el lead pudo dar el dato
+    faltante recién en este mismo mensaje."""
+    if result.get("action") != "respond":
+        return result
+    if not result.get("proposed_videocall_at"):
+        return result
+    merged_lead = {**lead, **(result.get("extracted") or {})}
+    missing = _missing_qualification_field(merged_lead)
+    if not missing and not merged_lead.get("email"):
+        missing = "email"
+    if not missing:
+        return result
+    logger.warning("guardrail: proposed_videocall_at con anketa incompleta (falta %s) "
+                    "→ bloqueo reserva, pregunto lo que falta", missing)
+    result = _clear_videocall_proposal(result)
+    question = (_QUALIFICATION_QUESTIONS.get(missing)
+                or "¿me compartes tu correo electrónico para poder agendar? 🤍")
+    result["messages"] = [question]
+    result["send_event_photo"] = False
+    result["send_event_video"] = False
+    result.pop("video_caption", None)
+    result.pop("photo_caption", None)
+    return result
+
+
+def _enforce_price_shown_before_booking(result: dict, history: list[dict], lead: dict) -> dict:
+    """Гарантия (2026-09-23, pedido directo de la dueña: "перед записью на звонок надо
+    сказать цену точно"): proposed_videocall_at (dispara reserva 100% automática en
+    Google Calendar, sin revisión humana, ver _enforce_videocall_proposal_needs_current_signal
+    abajo) nunca se confirma sin que el precio del servicio ($10,000 USD) se haya
+    mencionado AL MENOS una vez en la conversación, ni en el historial de Anna ni en
+    este mismo turno.
+
+    Encontrado en test real: un lead ya calificado (name/is_single/age/profession/foto)
+    dijo "va, me interesa, agendemos el jueves a las 5pm" — el precio NUNCA se había
+    mencionado en toda la conversación, y el bot agendó directo, pidiendo solo el
+    correo. El lead llegaría a la llamada sin saber la inversión.
+
+    IMPORTANTE (code-review 2026-09-23): si el lead NO está confirmado soltero
+    (is_single != True), NO inyectamos el precio aquí — sería repetir exactamente lo
+    que _enforce_service_price_gate (arriba) ya se encargó de bloquear para leads
+    fríos. En ese caso solo cancelamos la reserva en silencio, sin agregar precio.
+
+    TAMBIÉN (code-review 2026-09-23): si el mensaje ya trae contenido real del EVENTO
+    ([event_link]/http — mismo marcador que _EVENT_CONTENT_MARKER_RE), NO lo pisamos
+    con la burbuja de precio del servicio — sonaría fuera de tono mezclado con un
+    pitch de evento. Solo cancelamos la reserva, dejamos el contenido del evento tal
+    cual (caso teórico: el lead mezcló "sí quiero el evento" con un día/hora concreto)."""
+    if result.get("action") != "respond":
+        return result
+    if not result.get("proposed_videocall_at"):
+        return result
+    current_text = " ".join(result.get("messages") or [])
+    if _SERVICE_PRICE_PATTERN.search(current_text):
+        return result
+    if any(t.get("sender") == "anna" and _SERVICE_PRICE_PATTERN.search(t.get("text") or "")
+           for t in history or []):
+        return result
+    result = _clear_videocall_proposal(result)
+    if (lead or {}).get("is_single") is not True:
+        logger.warning("guardrail: proposed_videocall_at sin precio Y sin is_single "
+                        "confirmado → bloqueo reserva, NO doy el precio (lead frío)")
+        return result
+    if _EVENT_CONTENT_MARKER_RE.search(current_text):
+        logger.warning("guardrail: proposed_videocall_at sin precio, pero el mensaje "
+                        "ya es del EVENTO → bloqueo reserva, NO piso el contenido")
+        return result
+    logger.warning("guardrail: proposed_videocall_at sin precio mencionado nunca en la "
+                    "conversación → bloqueo reserva, doy precio primero")
+    result["messages"] = [
+        "¡Perfecto! Antes de agendar, te cuento: la inversión en el acompañamiento "
+        "personal es desde $10,000 USD, con 15 mujeres eslavas (hasta 20) elegidas a "
+        "mano a lo largo de unos 6 meses.",
+        "¿Seguimos con la videollamada? Dime otra vez qué día y hora te queda 🤍",
+    ]
+    result["send_event_photo"] = False
+    result["send_event_video"] = False
+    result.pop("video_caption", None)
+    result.pop("photo_caption", None)
+    return result
 
 
 def _enforce_videocall_proposal_needs_current_signal(result: dict, user_text: str) -> dict:
@@ -1033,9 +1170,7 @@ def _enforce_videocall_proposal_needs_current_signal(result: dict, user_text: st
     logger.warning("guardrail: proposed_videocall_at=%r без сигнала даты/времени в "
                     "текущем сообщении %r → сбрасываю, НЕ бронирую",
                     result["proposed_videocall_at"], user_text)
-    result = dict(result)
-    result["proposed_videocall_at"] = None
-    return result
+    return _clear_videocall_proposal(result)
 
 
 def _fallback_reply() -> dict:
@@ -1932,5 +2067,13 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     result = _enforce_emoji_budget(result, history)
     result = _enforce_no_self_narration(result)
     result = await _enforce_no_link_repeat(result, lead)
+    # Orden importa (code-review 2026-09-23): el gate de señal-actual PRIMERO — si no
+    # hay fecha/hora en ESTE turno, ya cancela la propuesta y deja pasar la respuesta
+    # real del modelo sin tocarla. Los otros dos gates de reserva corren después y por
+    # eso mismo normalmente son no-op en el caso "Hola" suelto (proposed_videocall_at
+    # ya en None). Anketa ANTES que precio — si falta cualquier dato, eso importa más
+    # que si ya se dio el precio (auditoría lógica 2026-09-23).
     result = _enforce_videocall_proposal_needs_current_signal(result, user_text)
+    result = _enforce_qualification_before_booking(result, lead)
+    result = _enforce_price_shown_before_booking(result, history, lead)
     return result

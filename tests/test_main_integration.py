@@ -970,6 +970,51 @@ class TestRunAI:
         gen_mock.assert_awaited_once()
 
 
+class TestRunAiVideocallBookingDispatch:
+    """(2026-09-23, auditoría lógica) proposed_videocall_at solo dispara la reserva
+    real (booking.resolve_and_book) cuando action=='respond'. Encontrado en
+    code-review: main.py llamaba a _handle_videocall_booking mirando SOLO
+    proposed_videocall_at, sin chequear action — si algún guardrail de ai.py pusiera
+    action='block' (ej. edad fuera de 28-76) sin limpiar proposed_videocall_at, se
+    agendaría una llamada real para un lead que se acababa de bloquear."""
+
+    def _mock_common(self, monkeypatch):
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
+        monkeypatch.setattr(db, "update_lead_fields", AsyncMock())
+        monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        monkeypatch.setattr(db, "get_scenario_title", AsyncMock(return_value=None))
+        monkeypatch.setattr(main.sender, "send", AsyncMock(return_value=1))
+        monkeypatch.setattr(db, "reset_followup_timer", AsyncMock())
+        booking_mock = AsyncMock()
+        monkeypatch.setattr(main, "_handle_videocall_booking", booking_mock)
+        return booking_mock
+
+    async def test_respond_with_proposal_books(self, monkeypatch):
+        booking_mock = self._mock_common(monkeypatch)
+        result = {"messages": ["¡Perfecto!"], "funnel_stage": "qualified", "action": "respond",
+                  "extracted": {}, "needs_escalation": False, "used_scenario_id": 53,
+                  "proposed_videocall_at": "2026-09-25T17:00:00"}
+        monkeypatch.setattr(ai, "generate_reply", AsyncMock(return_value=result))
+
+        await main._run_ai("wa_test", {}, "jueves a las 5pm")
+
+        booking_mock.assert_awaited_once()
+
+    async def test_block_with_proposal_does_not_book(self, monkeypatch):
+        """Caso del bug: action='block' pero proposed_videocall_at quedó puesto
+        (guardrail no lo limpió) — NO debe agendarse."""
+        booking_mock = self._mock_common(monkeypatch)
+        result = {"messages": ["Lo siento, no calificas."], "funnel_stage": None, "action": "block",
+                  "extracted": {"age": 22}, "needs_escalation": True, "used_scenario_id": 5,
+                  "proposed_videocall_at": "2026-09-25T17:00:00"}
+        monkeypatch.setattr(ai, "generate_reply", AsyncMock(return_value=result))
+
+        await main._run_ai("wa_test", {}, "tengo 22 años, agendemos jueves 5pm")
+
+        booking_mock.assert_not_awaited()
+
+
 class TestRunAIFailureIsolation:
     """Падение _run_ai не должно пробрасываться (сообщения уже processed, поток должен жить)."""
 
