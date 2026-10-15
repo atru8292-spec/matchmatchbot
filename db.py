@@ -20,6 +20,7 @@ from asyncpg.exceptions import UniqueViolationError
 
 import funnel
 from config import settings
+from phones import canonical_phone, phone_variants, sql_canonical
 
 logger = logging.getLogger("matchmatch.db")
 
@@ -110,16 +111,44 @@ def _validate_columns(fields: dict) -> None:
         raise ValueError(f"Недопустимые колонки leads: {sorted(unknown)}")
 
 
+# Сравнение whitelist ↔ лид по канону номера: импорт HubSpot лежит как 'wa_52…',
+# Wazzup шлёт 'wa_521…' — это один номер (см. phones.py). Точное '=' их не матчит.
+_WL_JOIN = f"{sql_canonical('w.phone')} = {sql_canonical('l.phone')}"
+
 # ===== Запросы =====
 
 async def get_lead_by_phone(phone: str) -> dict | None:
-    """Вернуть лида по телефону (бизнес-ключ) или None."""
+    """Вернуть лида по телефону (бизнес-ключ) или None.
+
+    Ищем по всем формам номера (wa_521…/wa_52… — один мексиканский номер);
+    точное совпадение приоритетнее."""
+    variants = phone_variants(phone) or [phone]
     try:
-        row = await _get_pool().fetchrow("SELECT * FROM leads WHERE phone = $1", phone)
+        row = await _get_pool().fetchrow(
+            "SELECT * FROM leads WHERE phone = ANY($1::text[]) "
+            "ORDER BY (phone = $2) DESC LIMIT 1", variants, phone)
     except Exception:
         logger.exception("get_lead_by_phone failed: phone=%s", phone)
         raise
     return dict(row) if row else None
+
+
+async def resolve_lead_phone(phone: str) -> str:
+    """Под каким ключом лид УЖЕ хранится (другая форма того же номера) — иначе phone как есть.
+
+    Нужен, чтобы входящее в другом формате (wa_52… vs wa_521…) не создало дубль лида.
+    Хранимый формат не меняем. Сбой БД → phone как есть (поведение как раньше)."""
+    variants = phone_variants(phone)
+    if len(variants) < 2:
+        return phone
+    try:
+        found = await _get_pool().fetchval(
+            "SELECT phone FROM leads WHERE phone = ANY($1::text[]) "
+            "ORDER BY (phone = $2) DESC LIMIT 1", variants, phone)
+    except Exception:
+        logger.exception("resolve_lead_phone failed: phone=%s", phone)
+        return phone
+    return found or phone
 
 
 async def upsert_lead(phone: str, **fields) -> dict:
@@ -369,7 +398,7 @@ async def due_followups(no_followup_stages: list[str], max_followups: int,
             "       l.whatsapp_name, l.name, "
             # анкета-сигналы + звонок + теги → для стадийного выбора догона (funnel.followup_scenario_for)
             "       l.email, l.date_of_birth, l.country, l.desired_partner_age, l.videocall_at, l.tags "
-            "FROM leads l LEFT JOIN bot_whitelist w ON w.phone = l.phone "
+            f"FROM leads l LEFT JOIN bot_whitelist w ON {_WL_JOIN} "
             "WHERE l.next_followup_at IS NOT NULL AND l.next_followup_at <= now() "
             "  AND l.mode = 'auto' AND COALESCE(l.do_not_contact, false) = false "
             "  AND l.funnel_stage <> ALL($1::text[]) "
@@ -505,7 +534,7 @@ async def event_recipients(exclude_stages: list[str], kind: str, event_date: str
     try:
         rows = await _get_pool().fetch(
             "SELECT l.phone, l.whatsapp_name, l.name, l.funnel_stage "
-            "FROM leads l LEFT JOIN bot_whitelist w ON w.phone = l.phone "
+            f"FROM leads l LEFT JOIN bot_whitelist w ON {_WL_JOIN} "
             "WHERE l.selected_service = 'event' "
             "  AND l.mode = 'auto' "
             "  AND COALESCE(l.do_not_contact, false) = false "
@@ -513,10 +542,11 @@ async def event_recipients(exclude_stages: list[str], kind: str, event_date: str
             "  AND w.phone IS NULL "
             "  AND NOT EXISTS (SELECT 1 FROM events e WHERE e.lead_phone = l.phone "
             "                  AND e.event_type = $2 AND e.meta->>'event_date' = $3) "
-            "  AND l.phone <> ALL($5::text[]) "
+            f"  AND {sql_canonical('l.phone')} <> ALL($5::text[]) "
             "ORDER BY l.created_at "
             "LIMIT $4",
-            exclude_stages, kind, event_date, limit, list(exclude_phones),
+            exclude_stages, kind, event_date, limit,
+            [c for c in (canonical_phone(p) for p in exclude_phones) if c],
         )
     except Exception:
         logger.exception("event_recipients failed: kind=%s event_date=%s", kind, event_date)
@@ -638,7 +668,7 @@ async def due_videocall_reminders(window_start, window_end, limit: int = 30) -> 
     try:
         rows = await _get_pool().fetch(
             "SELECT l.phone, l.whatsapp_name, l.name, l.videocall_at "
-            "FROM leads l LEFT JOIN bot_whitelist w ON w.phone = l.phone "
+            f"FROM leads l LEFT JOIN bot_whitelist w ON {_WL_JOIN} "
             "WHERE l.videocall_at IS NOT NULL AND l.videocall_reminded_at IS NULL "
             "  AND l.videocall_at >= $1 AND l.videocall_at <= $2 "
             "  AND l.mode = 'auto' AND COALESCE(l.do_not_contact, false) = false "
@@ -966,9 +996,14 @@ async def get_scenario_row(scenario_id) -> dict | None:
 
 
 async def is_whitelisted(phone: str) -> bool:
-    """Есть ли номер в bot_whitelist (бот для него молчит)."""
+    """Есть ли номер в bot_whitelist (бот для него молчит). Сравнение по канону:
+    запись 'wa_52…' срабатывает для входящего 'wa_521…' и наоборот."""
+    variants = phone_variants(phone)
+    if not variants:
+        return False
     try:
-        row = await _get_pool().fetchrow("SELECT 1 FROM bot_whitelist WHERE phone = $1", phone)
+        row = await _get_pool().fetchrow(
+            "SELECT 1 FROM bot_whitelist WHERE phone = ANY($1::text[])", variants)
     except Exception:
         logger.exception("is_whitelisted failed: phone=%s", phone)
         raise
@@ -985,13 +1020,19 @@ WHITELIST_NO_ALERT_REASONS = frozenset({"personal_contact"})
 async def whitelist_no_alert(phone: str) -> bool:
     """True, если номер в whitelist с reason из WHITELIST_NO_ALERT_REASONS (тишина без алерта).
 
-    Сбой → False (безопаснее оставить алерт, чем проглотить его по ошибке БД)."""
+    Сбой → False (безопаснее оставить алерт, чем проглотить его по ошибке БД).
+    Если номер лежит в двух формах с разными reason — тишина только когда ВСЕ записи
+    personal_contact (VIP-алерт не глушим)."""
+    variants = phone_variants(phone)
+    if not variants:
+        return False
     try:
-        r = await _get_pool().fetchval("SELECT reason FROM bot_whitelist WHERE phone = $1", phone)
+        rows = await _get_pool().fetch(
+            "SELECT reason FROM bot_whitelist WHERE phone = ANY($1::text[])", variants)
     except Exception:
         logger.exception("whitelist_no_alert failed: phone=%s", phone)
         return False
-    return r in WHITELIST_NO_ALERT_REASONS
+    return bool(rows) and all(r["reason"] in WHITELIST_NO_ALERT_REASONS for r in rows)
 
 
 def _wa_phone(phone: str) -> str:
@@ -1013,10 +1054,18 @@ async def add_to_whitelist(phone: str, reason: str, added_by: str) -> None:
     """Добавить номер в bot_whitelist (бот замолчит, VIP ведёт Аня лично).
 
     Повторное добавление того же номера не падает — обновляет reason/added_by
-    (ON CONFLICT). Телефон нормализуется в 'wa_<digits>'.
+    (ON CONFLICT). Телефон канонизируется (мексиканский → 'wa_521…'). Если номер уже
+    лежит в другой форме (старый импорт 'wa_52…') — обновляем ТУ запись, пару не создаём.
     """
-    key = _wa_phone(phone)
+    key = canonical_phone(phone)
+    if not key:
+        raise ValueError(f"Невозможно нормализовать телефон: {phone!r}")
     try:
+        existing = await _get_pool().fetchval(
+            "SELECT phone FROM bot_whitelist WHERE phone = ANY($1::text[]) "
+            "ORDER BY (phone = $2) DESC LIMIT 1", phone_variants(key), key)
+        if existing:
+            key = existing
         await _get_pool().execute(
             "INSERT INTO bot_whitelist (phone, reason, added_by) VALUES ($1, $2, $3) "
             "ON CONFLICT (phone) DO UPDATE SET reason = EXCLUDED.reason, "
@@ -1030,10 +1079,14 @@ async def add_to_whitelist(phone: str, reason: str, added_by: str) -> None:
 
 
 async def remove_from_whitelist(phone: str) -> None:
-    """Убрать номер из bot_whitelist (бот снова отвечает). Телефон нормализуется."""
-    key = _wa_phone(phone)
+    """Убрать номер из bot_whitelist (бот снова отвечает). Удаляются ВСЕ формы номера
+    (wa_52…/wa_521…), иначе оставшаяся пара продолжала бы глушить бота."""
+    key = canonical_phone(phone)
+    if not key:
+        raise ValueError(f"Невозможно нормализовать телефон: {phone!r}")
     try:
-        result = await _get_pool().execute("DELETE FROM bot_whitelist WHERE phone = $1", key)
+        result = await _get_pool().execute(
+            "DELETE FROM bot_whitelist WHERE phone = ANY($1::text[])", phone_variants(key))
     except Exception:
         logger.exception("remove_from_whitelist failed: phone=%s", key)
         raise
@@ -1075,11 +1128,23 @@ async def get_test_bypass_phones() -> list[dict]:
         return []
 
 
+async def bypass_phone_set() -> frozenset[str]:
+    """Все тестовые bypass-номера по канону: ENV (SILENT_BYPASS_PHONES) ∪ мини-CRM.
+
+    Единая точка для ответов (main) и исключения из рассылок (scheduler). Сбой чтения
+    CRM-списка → только ENV (get_test_bypass_phones сам ловит ошибки)."""
+    from phones import canonical_set
+    crm = [i.get("phone") for i in await get_test_bypass_phones()]
+    return settings.silent_bypass_set | canonical_set(crm)
+
+
 async def add_test_bypass_phone(phone: str, label: str) -> list[dict]:
     """Добавить/обновить тестовый номер (по телефону — апсерт). Вернуть новый список."""
-    key = _wa_phone(phone)
+    key = canonical_phone(phone)
+    if not key:
+        raise ValueError(f"Невозможно нормализовать телефон: {phone!r}")
     items = await get_test_bypass_phones()
-    items = [i for i in items if i.get("phone") != key]
+    items = [i for i in items if canonical_phone(i.get("phone")) != key]
     items.append({"phone": key, "label": (label or "").strip()})
     await set_setting(_TEST_BYPASS_KEY, json.dumps(items, ensure_ascii=False))
     return items
@@ -1087,8 +1152,10 @@ async def add_test_bypass_phone(phone: str, label: str) -> list[dict]:
 
 async def remove_test_bypass_phone(phone: str) -> list[dict]:
     """Убрать тестовый номер из bypass-списка. Вернуть новый список."""
-    key = _wa_phone(phone)
-    items = [i for i in await get_test_bypass_phones() if i.get("phone") != key]
+    key = canonical_phone(phone)
+    if not key:
+        raise ValueError(f"Невозможно нормализовать телефон: {phone!r}")
+    items = [i for i in await get_test_bypass_phones() if canonical_phone(i.get("phone")) != key]
     await set_setting(_TEST_BYPASS_KEY, json.dumps(items, ensure_ascii=False))
     return items
 
@@ -1291,7 +1358,7 @@ _LEADS_SELECT = (
     "m.text AS last_message_text, m.sender AS last_message_sender, "
     "m.direction AS last_message_direction, m.created_at AS last_message_created_at "
     "FROM leads l "
-    "LEFT JOIN bot_whitelist w ON w.phone = l.phone "
+    f"LEFT JOIN bot_whitelist w ON {_WL_JOIN} "
     "LEFT JOIN LATERAL ("
     "  SELECT text, sender, direction, created_at FROM messages "
     "  WHERE lead_phone = l.phone ORDER BY created_at DESC LIMIT 1"
@@ -1311,7 +1378,8 @@ def _leads_where(stages, mode, interest, since, search, exclude_clients=False) -
     where: list[str] = []
     args: list = []
     if exclude_clients:
-        where.append("NOT EXISTS (SELECT 1 FROM bot_whitelist bw WHERE bw.phone = l.phone)")
+        where.append("NOT EXISTS (SELECT 1 FROM bot_whitelist bw "
+                     f"WHERE {sql_canonical('bw.phone')} = {sql_canonical('l.phone')})")
     if stages:
         args.append(list(stages))
         where.append(f"l.funnel_stage = ANY(${len(args)}::text[])")
@@ -1328,9 +1396,16 @@ def _leads_where(stages, mode, interest, since, search, exclude_clients=False) -
         esc = search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         args.append(f"%{esc}%")
         p = len(args)
+        # Номер целиком (≥10 цифр, любые пробелы/+/дефисы) — ищем по последним 10 цифрам:
+        # так '5255…', '52 1 55…' и '55…' находят и 'wa_521…', и 'wa_52…'.
+        digits = re.sub(r"\D", "", search)
+        phone_clause = ""
+        if len(digits) >= 10:
+            args.append(f"%{digits[-10:]}")
+            phone_clause = f" OR l.phone LIKE ${len(args)}"
         where.append(
             f"(l.name ILIKE ${p} ESCAPE '\\' OR l.whatsapp_name ILIKE ${p} ESCAPE '\\' "
-            f"OR l.phone ILIKE ${p} ESCAPE '\\')"
+            f"OR l.phone ILIKE ${p} ESCAPE '\\'{phone_clause})"
         )
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     return where_sql, args
@@ -1473,7 +1548,7 @@ async def list_whitelist_with_names(limit: int = 500) -> list[dict]:
     try:
         rows = await _get_pool().fetch(
             "SELECT w.phone, w.reason, w.added_by, w.added_at, l.name, l.whatsapp_name "
-            "FROM bot_whitelist w LEFT JOIN leads l ON l.phone = w.phone "
+            f"FROM bot_whitelist w LEFT JOIN leads l ON {_WL_JOIN} "
             "ORDER BY w.added_at DESC LIMIT $1",
             limit,
         )
@@ -1583,12 +1658,15 @@ async def save_manual_message(phone: str, text: str, delivered: bool) -> dict:
 
 async def get_whitelist_entry(phone: str) -> dict | None:
     """Запись whitelist по телефону (reason/added_by/added_at) или None. Телефон
-    нормализуется в 'wa_<digits>' — как хранит add_to_whitelist."""
-    key = _wa_phone(phone)
+    канонизируется; ищем по всем формам номера (wa_52…/wa_521…), точная — приоритетнее."""
+    key = canonical_phone(phone)
+    if not key:
+        raise ValueError(f"Невозможно нормализовать телефон: {phone!r}")
     try:
         row = await _get_pool().fetchrow(
-            "SELECT phone, reason, added_by, added_at FROM bot_whitelist WHERE phone = $1",
-            key,
+            "SELECT phone, reason, added_by, added_at FROM bot_whitelist "
+            "WHERE phone = ANY($1::text[]) ORDER BY (phone = $2) DESC LIMIT 1",
+            phone_variants(key), _wa_phone(phone),
         )
     except Exception:
         logger.exception("get_whitelist_entry failed: phone=%s", key)

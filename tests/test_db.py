@@ -92,8 +92,17 @@ class TestGetLeadByPhone:
         assert phone not in sql
         # Плейсхолдер присутствует
         assert "$1" in sql
-        # Номер — первый позиционный параметр
-        assert params[0] == phone
+        # Номер — первый позиционный параметр (список форм номера), точный — вторым
+        assert params[0] == ["wa_" + phone]
+        assert params[1] == phone
+
+    async def test_mexican_both_forms_searched(self, pool):
+        """wa_52… и wa_521… — один номер: ищем по обеим формам, точная приоритетнее."""
+        pool.fetchrow.return_value = None
+        await db.get_lead_by_phone("wa_525512345678")
+        sql, *params = pool.fetchrow.call_args.args
+        assert "ANY" in sql
+        assert set(params[0]) == {"wa_5215512345678", "wa_525512345678"}
 
 
 # ---------------------------------------------------------------------------
@@ -594,34 +603,52 @@ class TestIsWhitelisted:
         sql, *params = pool.fetchrow.call_args.args
         assert phone not in sql
         assert "$1" in sql
-        assert params[0] == phone
+        assert params[0] == [phone]
+
+    async def test_mexican_both_forms_checked(self, pool):
+        """Запись 'wa_52…' (импорт HubSpot) должна срабатывать для входящего 'wa_521…'."""
+        pool.fetchrow.return_value = None
+        await db.is_whitelisted("wa_5215512345678")
+        params = pool.fetchrow.call_args.args[1:]
+        assert set(params[0]) == {"wa_5215512345678", "wa_525512345678"}
+
+    async def test_garbage_phone_false_no_sql(self, pool):
+        """Пустой/бесцифровой номер → False без запроса (не падает)."""
+        assert await db.is_whitelisted("") is False
+        assert await db.is_whitelisted("wa_") is False
+        pool.fetchrow.assert_not_called()
 
 
 class TestWhitelistNoAlert:
     async def test_true_for_personal_contact(self, pool):
         """reason personal_contact → тишина без алерта."""
-        pool.fetchval.return_value = "personal_contact"
+        pool.fetch.return_value = [{"reason": "personal_contact"}]
         assert await db.whitelist_no_alert("wa_1") is True
 
     async def test_false_for_vip_reason(self, pool):
         """Прочий reason (VIP-клиент) → алерт остаётся."""
-        pool.fetchval.return_value = "cliente VIP"
+        pool.fetch.return_value = [{"reason": "cliente VIP"}]
         assert await db.whitelist_no_alert("wa_1") is False
 
+    async def test_false_when_mixed_reasons(self, pool):
+        """Номер в двух формах: personal_contact + VIP → алерт не глушим."""
+        pool.fetch.return_value = [{"reason": "personal_contact"}, {"reason": "VIP"}]
+        assert await db.whitelist_no_alert("wa_5215512345678") is False
+
     async def test_false_when_not_whitelisted(self, pool):
-        """Нет записи (reason=None) → False."""
-        pool.fetchval.return_value = None
+        """Нет записи → False."""
+        pool.fetch.return_value = []
         assert await db.whitelist_no_alert("wa_1") is False
 
     async def test_false_on_db_error(self, pool):
         """Сбой БД → False (безопаснее оставить алерт, чем проглотить)."""
-        pool.fetchval.side_effect = RuntimeError("boom")
+        pool.fetch.side_effect = RuntimeError("boom")
         assert await db.whitelist_no_alert("wa_1") is False
 
     async def test_sql_reads_bot_whitelist(self, pool):
-        pool.fetchval.return_value = None
+        pool.fetch.return_value = []
         await db.whitelist_no_alert("wa_1")
-        assert "bot_whitelist" in pool.fetchval.call_args.args[0]
+        assert "bot_whitelist" in pool.fetch.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1104,6 +1131,11 @@ class TestGetScenarioTemplate:
 
 
 class TestAddToWhitelist:
+    @pytest.fixture(autouse=True)
+    def _no_existing(self, pool):
+        """По умолчанию номера ещё нет в whitelist ни в какой форме."""
+        pool.fetchval.return_value = None
+
     async def test_inserts_into_bot_whitelist(self, pool):
         """SQL — INSERT в bot_whitelist с ON CONFLICT (повторное добавление не падает)."""
         await db.add_to_whitelist("wa_521234567890", "VIP-клиент", "anna")
@@ -1113,11 +1145,18 @@ class TestAddToWhitelist:
         assert "ON CONFLICT" in sql
 
     async def test_phone_normalized_to_wa_digits(self, pool):
-        """Любой формат телефона → 'wa_<digits>' (как ищет is_whitelisted)."""
-        await db.add_to_whitelist("+52 123 456-7890", "VIP", "anna")
+        """Мексика 52 + 10 цифр → канон 'wa_521…' (формат Wazzup)."""
+        await db.add_to_whitelist("+52 55 1234-5678", "VIP", "anna")
 
         params = pool.execute.call_args.args[1:]
-        assert params[0] == "wa_521234567890"
+        assert params[0] == "wa_5215512345678"
+
+    async def test_existing_other_form_updated_not_paired(self, pool):
+        """Номер уже лежит как 'wa_52…' → обновляем ТУ запись, пару 'wa_521…' не создаём."""
+        pool.fetchval.return_value = "wa_525512345678"
+        await db.add_to_whitelist("wa_5215512345678", "personal_contact", "x")
+        params = pool.execute.call_args.args[1:]
+        assert params[0] == "wa_525512345678"
 
     async def test_already_wa_prefixed_stays_same(self, pool):
         """Вход уже 'wa_...' → не задваивается префикс."""
@@ -1161,11 +1200,11 @@ class TestRemoveFromWhitelist:
         assert "DELETE FROM bot_whitelist" in sql
 
     async def test_phone_normalized(self, pool):
-        """Телефон нормализуется в 'wa_<digits>' перед DELETE."""
-        await db.remove_from_whitelist("+52 123 456-7890")
+        """Удаляются обе формы мексиканского номера (иначе пара продолжит глушить бота)."""
+        await db.remove_from_whitelist("+52 55 1234-5678")
 
         params = pool.execute.call_args.args[1:]
-        assert params[0] == "wa_521234567890"
+        assert set(params[0]) == {"wa_5215512345678", "wa_525512345678"}
 
     async def test_phone_passed_as_param(self, pool):
         """phone параметром $1, не в SQL."""
@@ -1173,7 +1212,7 @@ class TestRemoveFromWhitelist:
 
         sql, *params = pool.execute.call_args.args
         assert "wa_1" not in sql
-        assert params[0] == "wa_1"
+        assert params[0] == ["wa_1"]
 
     async def test_db_error_raises(self, pool):
         pool.execute.side_effect = RuntimeError("db down")
@@ -1489,7 +1528,7 @@ class TestEventRecipients:
         assert "LIMIT" in sql
         assert "ORDER BY" in sql              # детерминированный порядок между тиками
         assert "NOT EXISTS" in sql            # дедуп уже отправленных — в самом SQL
-        assert "l.phone <> ALL" in sql        # тестовые/bypass-номера исключены
+        assert "<> ALL($5" in sql             # тестовые/bypass-номера исключены (по канону)
         assert params == [["lost", "rejected"], "remind_1d", "2026-08-15", 30, []]
 
     async def test_exclude_phones_passed_through(self, pool):

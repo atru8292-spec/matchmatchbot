@@ -6,6 +6,7 @@ on_flush пока просто читает склеенный залп из Б�
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -104,12 +105,11 @@ async def _process_burst_impl(phone: str) -> None:
         bot_paused = False
 
     # bypass = ENV (silent_bypass_phones, требует деплоя) ∪ тестовые номера из мини-CRM
-    # (app_settings, правятся мгновенно без деплоя — см. db.get_test_bypass_phones).
+    # (app_settings, правятся мгновенно без деплоя), всё по канону номера.
     try:
-        crm_bypass = {i["phone"] for i in await db.get_test_bypass_phones() if i.get("phone")}
+        bypass_phones = await db.bypass_phone_set()
     except Exception:
-        crm_bypass = set()
-    bypass_phones = settings.silent_bypass_set | crm_bypass
+        bypass_phones = settings.silent_bypass_set
 
     decision = filters.decide(lead, whitelisted, combined, phone,
                               bypass_phones, whitelist_no_alert=wl_no_alert,
@@ -731,6 +731,13 @@ async def _handle_incoming(msg) -> None:
         if not db.is_ready():
             logger.warning("Webhook: БД не готова, сообщение %s не сохранено", nm.external_message_id)
             return
+
+        # Тот же номер мог уже храниться в другой форме (wa_52… vs wa_521…) — пишем в
+        # существующего лида, не плодим дубль. Новый лид — в формате Wazzup как есть.
+        phone = await db.resolve_lead_phone(nm.phone)
+        if phone != nm.phone:
+            logger.info("inbound: номер %s найден у лида как %s", nm.phone, phone)
+            nm = dataclasses.replace(nm, phone=phone)
 
         # Лид должен существовать ДО вставки сообщения: messages.lead_phone имеет
         # FK на leads.phone. upsert создаёт лида (или обновляет имя); status/mode/

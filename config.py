@@ -130,14 +130,10 @@ class Settings(BaseSettings):
 
     @property
     def silent_bypass_set(self) -> frozenset[str]:
-        """Нормализованные 'wa_<digits>' номера-исключения silent-фильтра."""
-        import re as _re
-        out = set()
-        for raw in self.silent_bypass_phones.split(","):
-            digits = _re.sub(r"\D", "", raw)
-            if digits:
-                out.add("wa_" + digits)
-        return frozenset(out)
+        """Канонические 'wa_<digits>' номера-исключения silent-фильтра (мексиканские
+        приводятся к 'wa_521…' — см. phones.canonical_phone)."""
+        from phones import canonical_set
+        return canonical_set(self.silent_bypass_phones.split(","))
 
 
 settings = Settings()

@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from phones import canonical_phone, canonical_set
+
 # Возрастной фильтр (владелец поднял верхнюю границу 2026-07-26): 28-76 включительно.
 MIN_AGE = 28
 MAX_AGE = 76
@@ -238,6 +240,8 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     lead = lead or {}
     text = user_text or ""
     name = lead.get("whatsapp_name") or lead.get("name") or "лид"
+    # bypass сравниваем по канону: 'wa_52…' и 'wa_521…' — один мексиканский номер.
+    is_bypass = bool(phone) and canonical_phone(phone) in canonical_set(bypass_phones)
 
     # 1) Whitelist → бот молчит. VIP-клиент: + алерт «написал клиент». personal_contact
     #    (личная база Anna): без алерта — она и так ведёт эти чаты в WhatsApp вручную.
@@ -254,7 +258,7 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
         return Decision("optout", "лид попросил не писать (opt-out)", alert_manager=True)
     # Глобальная пауза (тех. режим) — ПОСЛЕ whitelist/opt-out (согласие лида и VIP-алерты чтим
     #    даже на паузе), молчим всем остальным, кроме тестовых bypass-номеров. Без алерта.
-    if bot_paused and phone not in bypass_phones:
+    if bot_paused and not is_bypass:
         return Decision("silent", "бот на паузе (тех. режим) — молчу")
     if _manual_active(lead):
         return Decision("silent", f"manual mode — менеджер ведёт: {name}")
@@ -262,7 +266,7 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     # 1.5) Не целевой регион/язык (русский номер +7 или кириллица) → тихо молчим.
     #      НЕ блокируем (не дисквалификация, вдруг ошибка) — просто не тратим AI-вызов.
     #      Номера из bypass_phones (тестовые/доверенные) проверку пропускают.
-    if phone not in bypass_phones:
+    if not is_bypass:
         if is_russian_number(phone):
             return Decision("silent", "молчу — русский номер +7, не целевой регион")
         if has_cyrillic(text):
