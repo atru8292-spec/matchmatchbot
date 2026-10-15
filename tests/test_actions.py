@@ -31,9 +31,17 @@ class TestStageForService:
 
 
 class TestMaybeSendInvitation:
+    async def test_skips_when_event_inactive(self, monkeypatch):
+        """Ивент выключен (2026-10-15) → приглашение не шлём, даже если картинка готова."""
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "invitation_url": "https://x/inv.jpg", "invitation_ready": "1", "event_active": "0"}))
+        send = AsyncMock(); monkeypatch.setattr(sender, "send_image", send)
+        assert await actions.maybe_send_invitation("wa_1") is False
+        send.assert_not_awaited()
+
     async def test_sends_when_ready(self, monkeypatch):
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
-            "invitation_url": "https://x/inv.jpg", "invitation_ready": "1"}))
+            "invitation_url": "https://x/inv.jpg", "invitation_ready": "1", "event_active": "1"}))
         send = AsyncMock(return_value=True)
         monkeypatch.setattr(sender, "send_image", send)
         ok = await actions.maybe_send_invitation("wa_1")

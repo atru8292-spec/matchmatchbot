@@ -1668,3 +1668,12 @@ class TestListLeadsForExportIncludesClients:
         await db.list_leads_for_export()
         sql = pool.fetch.call_args.args[0]
         assert "NOT EXISTS (SELECT 1 FROM bot_whitelist" not in sql
+
+
+class TestEventLeadCandidatesWhitelist:
+    async def test_excludes_whitelist_by_canon(self, pool):
+        """Ручная рассылка дня ивента не должна брать whitelist (2026-10-15)."""
+        pool.fetch.return_value = []
+        await db.event_lead_candidates()
+        sql = pool.fetch.call_args.args[0]
+        assert "bot_whitelist" in sql and "w.phone IS NULL" in sql and "wa_521" in sql

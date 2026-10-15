@@ -46,6 +46,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 import db
+import escalation
 import funnel
 from config import settings
 from filters import MAX_AGE, MIN_AGE
@@ -1397,7 +1398,7 @@ _COURSE_ESCALATION_BUBBLE = (
 )
 _EVENT_OFFER_ON_SERVICE_OBJECTION_BUBBLE = (
     "Oye, antes de que lo dejemos — también tengo nuestro evento Slavic Latino "
-    "Night, una opción mucho más accesible (6,000 MXN) para conocer en persona a "
+    "Night, una opción mucho más accesible ([event_price_nonmember] MXN) para conocer en persona a "
     "mujeres eslavas solteras que buscan algo serio, sin el compromiso del servicio "
     "personalizado. ¿Te late más esa opción?"
 )
@@ -1649,7 +1650,9 @@ async def _maybe_announce_event_video(reply: dict, scenario: dict | None, lead: 
     if not reply.get("messages") or not phone:
         return
     try:
-        s = await db.get_settings(["event_date"])
+        s = await db.get_settings(["event_date", "event_active"])
+        if s.get("event_active") != "1":
+            return  # ивент выключен — actions не пришлёт видео, подпись не нужна
         event_date = s.get("event_date") or None
         if await db.event_media_sent(phone, "video", event_date):
             return  # уже слали видео на этот ивент — подпись не нужна
@@ -1675,7 +1678,9 @@ async def _maybe_announce_event_photo(reply: dict, scenario: dict | None, lead: 
     if not reply.get("messages") or not phone:
         return
     try:
-        s = await db.get_settings(["event_date"])
+        s = await db.get_settings(["event_date", "event_active"])
+        if s.get("event_active") != "1":
+            return  # ивент выключен — actions не пришлёт фото, подпись не нужна
         event_date = s.get("event_date") or None
         if await db.event_media_sent(phone, "image", event_date):
             return
@@ -2004,8 +2009,14 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     try:
         raw = await _call_openai(context)
         result = _validate_output(raw)
-    except Exception:
+    except Exception as e:
         logger.exception("OpenAI/парсинг упал → fallback + escalate")
+        # Аня получит эскалацию по лиду (main), а разработке — техалерт о причине
+        # (иначе сбой OpenAI/ключа виден только как «лид готов к следующему шагу»).
+        try:
+            await escalation.notify_error("ai.generate_reply", repr(e), lead.get("phone"))
+        except Exception:
+            logger.exception("notify_error из ai.generate_reply упал")
         return _fallback_reply()
 
     # Handoff-сценарии (bot_then_anna) эскалируем детерминированно, не полагаясь на то,

@@ -782,7 +782,7 @@ class TestEventVideoAnnounce:
     def _patches(self, *, already_sent: bool, pool_video: list):
         """Общие моки БД для ветки анонса."""
         return (
-            patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})),
+            patch("ai.db.get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"})),
             patch("ai.db.event_media_sent", AsyncMock(return_value=already_sent)),
             patch("ai.db.random_event_media", AsyncMock(return_value=pool_video)),
         )
@@ -915,7 +915,7 @@ class TestEnforceVideoOnAnyFirstPitch:
         lead = _make_lead(phone="wa_5215500000097")
         result = {"action": "respond",
                   "messages": ["Aquí el link para tu boleto: [event_link]"]}
-        with patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})), \
+        with patch("ai.db.get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"})), \
              patch("ai.db.event_media_sent", AsyncMock(return_value=False)), \
              patch("ai.db.random_event_media", AsyncMock(return_value=[{"storage_url": "u"}])):
             out = await ai._enforce_video_on_any_first_pitch(result, used, lead)
@@ -995,7 +995,7 @@ class TestEventPhotoAnnounce:
 
     def _patches(self, *, already_sent: bool, pool_photo: list):
         return (
-            patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})),
+            patch("ai.db.get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"})),
             patch("ai.db.event_media_sent", AsyncMock(return_value=already_sent)),
             patch("ai.db.random_event_media", AsyncMock(return_value=pool_photo)),
         )
@@ -1682,7 +1682,7 @@ class TestEnforceEventQualificationFollowup:
         history = [{"sender": "anna", "text": stripped}]
         used = _make_scenario(id=2)
         lead = _make_lead(phone="wa_5215500000098")
-        with patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})), \
+        with patch("ai.db.get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"})), \
              patch("ai.db.event_media_sent", AsyncMock(return_value=False)), \
              patch("ai.db.random_event_media", AsyncMock(return_value=[{"storage_url": "u"}])):
             out = await ai._enforce_event_qualification_followup(
@@ -1704,7 +1704,7 @@ class TestEnforceEventQualificationFollowup:
         history = [{"sender": "anna", "text": ai._EVENT_PHOTO_REQUEST_BUBBLE}]
         used = _make_scenario(id=2)
         lead = _make_lead(phone="wa_5215500000099")
-        with patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})), \
+        with patch("ai.db.get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"})), \
              patch("ai.db.event_media_sent", AsyncMock(return_value=False)), \
              patch("ai.db.random_event_media", AsyncMock(return_value=[{"storage_url": "u"}])):
             out = await ai._enforce_event_qualification_followup(
@@ -1743,7 +1743,7 @@ class TestEnforceEventQualificationFollowup:
         esto crasheaba en _maybe_announce_event_video (scenario.get en None)."""
         result = {"action": "respond", "messages": ["Ok"]}
         history = [{"sender": "anna", "text": ai._EVENT_PHOTO_REQUEST_BUBBLE}]
-        with patch("ai.db.get_settings", AsyncMock(return_value={"event_date": "2026-08-15"})), \
+        with patch("ai.db.get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"})), \
              patch("ai.db.event_media_sent", AsyncMock(return_value=False)), \
              patch("ai.db.random_event_media", AsyncMock(return_value=[{"storage_url": "u"}])):
             out = await ai._enforce_event_qualification_followup(
@@ -2646,7 +2646,8 @@ class TestEnforceEventOfferOnServiceObjection:
         out = ai._enforce_event_offer_on_service_objection(result, used, "no me alcanza", history)
         text = " ".join(out["messages"]).lower()
         assert "evento" in text
-        assert "6,000" in text or "6000" in text
+        # цена — токеном из app_settings (2026-10-15), не захардкоженной цифрой
+        assert "[event_price_nonmember]" in text
         assert out["send_event_photo"] is True
 
     def test_noop_when_already_offers_event(self):
@@ -2868,3 +2869,18 @@ class TestEnforceNoLinkRepeat:
         with patch("ai.db.link_already_sent", AsyncMock(side_effect=RuntimeError("db down"))):
             out = await ai._enforce_no_link_repeat(result, lead)
         assert out["messages"] == result["messages"]
+
+
+class TestFallbackAlertsDeveloper:
+    async def test_openai_failure_fallback_and_tech_alert(self):
+        """Сбой OpenAI → лид получает нейтральный fallback, разработке уходит техалерт."""
+        lead = {"phone": "wa_5215512345678"}
+        alert = AsyncMock()
+        with patch("ai.search_scenarios", AsyncMock(return_value=[])), \
+             patch("ai._call_openai", AsyncMock(side_effect=RuntimeError("429 quota"))), \
+             patch("ai.escalation.notify_error", alert):
+            result = await ai.generate_reply(lead, [], "hola")
+        assert result["action"] == "escalate"
+        assert result["messages"] and "429" not in " ".join(result["messages"])
+        alert.assert_awaited_once()
+        assert alert.await_args.args[2] == "wa_5215512345678"

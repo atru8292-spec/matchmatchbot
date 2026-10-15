@@ -43,7 +43,10 @@ async def maybe_send_invitation(phone: str) -> bool:
     Пока invitation_ready != '1' или нет URL — не шлём (картинка под каждый ивент своя,
     отправляем только после подтверждения готовности). Вернуть True если отправлено.
     """
-    s = await db.get_settings([INVITATION_URL_KEY, INVITATION_READY_KEY])
+    s = await db.get_settings([INVITATION_URL_KEY, INVITATION_READY_KEY, "event_active"])
+    if s.get("event_active") != "1":
+        logger.info("ивент выключен (event_active≠1) — приглашение не шлём %s", phone)
+        return False
     if s.get(INVITATION_READY_KEY) != "1" or not s.get(INVITATION_URL_KEY):
         logger.info("приглашение не готово (ready=%s, url=%s) — не шлём %s",
                     s.get(INVITATION_READY_KEY), bool(s.get(INVITATION_URL_KEY)), phone)
@@ -83,8 +86,12 @@ async def _send_event_media(phone: str, media_type: str, count: int,
     caption — подпись, ставится только на ПЕРВОЕ отправленное медиа (для видео count
     всегда 1, так что без разницы; для фото-галереи не повторяем на каждой штуке).
     """
+    s = await db.get_settings(["event_date", "event_active"])
+    # Ивент выключен (прошёл / не анонсирован) — медиа ивента не шлём никому.
+    if s.get("event_active") != "1":
+        logger.info("ивент выключен (event_active≠1) — медиа (%s) не шлём %s", media_type, phone)
+        return 0
     if event_date is None:
-        s = await db.get_settings(["event_date"])
         event_date = s.get("event_date") or None
     if await db.event_media_sent(phone, media_type, event_date):
         logger.info("медиа ивента (%s) уже слалось %s (ивент %s) — пропуск (дедуп)",

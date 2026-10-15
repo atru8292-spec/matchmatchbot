@@ -904,6 +904,7 @@ class TestDayOf:
     """Напоминание дня ивента: предпросмотр + ручная отправка (mini_api day-of)."""
 
     _SETTINGS = {
+        "event_active": "1",
         "event_date": "2026-07-22", "event_time": "8:30 PM", "event_start": "8:30 PM",
         "event_end": "12:00 AM", "event_address": "Roma Norte",
         "event_link": "https://tix.example/22",

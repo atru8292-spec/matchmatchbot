@@ -609,13 +609,16 @@ async def event_reminder_sent_at(phone: str, kind: str, event_date: str):
 async def event_lead_candidates(limit: int = 200) -> list[dict]:
     """Кандидаты для ручного напоминания дня ивента: selected_service='event' и бот
     им пишет (не do_not_contact). БЕЗ фильтров авто-рассылки (mode/стадия) — Аня
-    выбирает сама; whitelist-клиенты сюда не попадают (у них нет selected_service='event').
+    выбирает сама. Whitelist (клиенты/личные контакты Ани) исключаем явно: у старых
+    лидов, перенесённых в whitelist, selected_service='event' может остаться (2026-10-15).
     """
     try:
         rows = await _get_pool().fetch(
-            "SELECT phone, whatsapp_name, name, funnel_stage FROM leads "
-            "WHERE selected_service = 'event' AND COALESCE(do_not_contact, false) = false "
-            "ORDER BY funnel_stage, name LIMIT $1",
+            "SELECT l.phone, l.whatsapp_name, l.name, l.funnel_stage FROM leads l "
+            f"LEFT JOIN bot_whitelist w ON {_WL_JOIN} "
+            "WHERE l.selected_service = 'event' AND COALESCE(l.do_not_contact, false) = false "
+            "  AND w.phone IS NULL "
+            "ORDER BY l.funnel_stage, l.name LIMIT $1",
             limit,
         )
     except Exception:

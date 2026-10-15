@@ -418,9 +418,23 @@ class TestMainBookingFlow:
 # ===== Медиа ивентов: два инструмента (send_event_photos / send_event_video) =====
 
 class TestEventMediaActions:
+    @pytest.mark.parametrize("active", [None, "0"])
+    async def test_inactive_event_sends_no_media(self, monkeypatch, active):
+        """Ивент выключен (2026-10-15) → ни фото, ни видео ивента, в пул даже не ходим."""
+        import actions, sender
+        vals = {"event_date": "2026-10-14"}
+        if active is not None:
+            vals["event_active"] = active
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=vals))
+        rnd = AsyncMock(); monkeypatch.setattr(db, "random_event_media", rnd)
+        sm = AsyncMock(); monkeypatch.setattr(sender, "send_media", sm)
+        assert await actions.send_event_photos("wa_1") == 0
+        assert await actions.send_event_video("wa_1", event_date="2026-10-14") == 0
+        rnd.assert_not_called(); sm.assert_not_called()
+
     async def test_photos_sends_up_to_3_if_not_sent(self, monkeypatch):
         import actions, sender
-        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"}))
         ems = AsyncMock(return_value=False); monkeypatch.setattr(db, "event_media_sent", ems)
         monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
             {"storage_url": "https://s/1.jpg", "media_type": "image"},
@@ -436,7 +450,7 @@ class TestEventMediaActions:
 
     async def test_video_sends_one_if_not_sent(self, monkeypatch):
         import actions, sender
-        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"}))
         monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
             {"storage_url": "https://s/v.mp4", "media_type": "video"}]))
@@ -446,23 +460,24 @@ class TestEventMediaActions:
         assert db.random_event_media.call_args.args == ("video", actions.EVENT_VIDEO_COUNT)
 
     async def test_explicit_event_date_skips_settings_lookup(self, monkeypatch):
-        """Явный event_date (путь планировщика) → в настройки не ходим, дату пробрасываем."""
+        """Явный event_date (путь планировщика) → дату из настроек не берём, пробрасываем явную.
+        (Настройки читаем всё равно — проверить event_active, 2026-10-15.)"""
         import actions, sender
-        gs = AsyncMock(); monkeypatch.setattr(db, "get_settings", gs)
+        gs = AsyncMock(return_value={"event_active": "1", "event_date": "2000-01-01"})
+        monkeypatch.setattr(db, "get_settings", gs)
         ems = AsyncMock(return_value=False); monkeypatch.setattr(db, "event_media_sent", ems)
         monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
             {"storage_url": "https://s/1.jpg", "media_type": "image"}]))
         sm = AsyncMock(return_value=True); monkeypatch.setattr(sender, "send_media", sm)
         n = await actions.send_event_photos("wa_1", event_date="2026-09-20")
         assert n == 1
-        gs.assert_not_called()  # дату передали явно — settings не трогаем
         assert ems.call_args.args == ("wa_1", "image", "2026-09-20")
         assert sm.call_args.args[3] == "2026-09-20"
 
     async def test_dedup_per_type_skips(self, monkeypatch):
         """Тип уже слали на этот ивент → пропуск, в пул даже не ходим."""
         import actions, sender
-        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"}))
         monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=True))
         rnd = AsyncMock(); monkeypatch.setattr(db, "random_event_media", rnd)
         sm = AsyncMock(); monkeypatch.setattr(sender, "send_media", sm)
@@ -472,7 +487,7 @@ class TestEventMediaActions:
 
     async def test_no_media_of_type_sends_nothing(self, monkeypatch):
         import actions, sender
-        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"}))
         monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[]))
         sm = AsyncMock(); monkeypatch.setattr(sender, "send_media", sm)
@@ -482,7 +497,7 @@ class TestEventMediaActions:
     async def test_video_caption_reaches_send_media(self, monkeypatch):
         """caption (ai.py video_caption) доходит до sender.send_media как подпись к видео."""
         import actions, sender
-        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"}))
         monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
             {"storage_url": "https://s/v.mp4", "media_type": "video"}]))
@@ -494,7 +509,7 @@ class TestEventMediaActions:
     async def test_photo_gallery_caption_only_on_first(self, monkeypatch):
         """Галерея из нескольких фото — caption (если бы был) только на первом, не дублируем."""
         import actions, sender
-        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_date": "2026-08-15"}))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"event_active": "1", "event_date": "2026-08-15"}))
         monkeypatch.setattr(db, "event_media_sent", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "random_event_media", AsyncMock(return_value=[
             {"storage_url": "https://s/1.jpg", "media_type": "image"},

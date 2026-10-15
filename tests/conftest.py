@@ -14,6 +14,10 @@ os.environ["TG_MANAGER_BOT_TOKEN"] = ""
 os.environ["TG_MANAGER_CHAT_ID"] = ""
 os.environ["TG_ALERTS_BOT_TOKEN"] = ""
 os.environ["TG_ALERTS_CHAT_ID"] = ""
+# Пустые ключи OpenAI/Wazzup (2026-10-15): даже если тест забудет замокать вызов,
+# реальный запрос уйдёт без ключа и упадёт 401 — не тратит деньги и не пишет лидам.
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["WAZZUP_TOKEN"] = ""
 # Секрет-заглушка: поле обязательно (без дефолта). Без этого в CI без .env импорт
 # settings упал бы ValidationError; а локально в URL тестов подставлялся бы реальный
 # прод-секрет. setdefault не перетирает, если переменная уже задана в окружении.

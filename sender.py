@@ -154,14 +154,27 @@ def _fmt_date_es(iso: str) -> str:
     return f"{d.day} de {_ES_MONTHS[d.month - 1]} de {d.year}"
 
 
-async def _fill_event_vars(text: str) -> str:
+async def _fill_event_vars(text: str) -> str | None:
     """Подставить переменные события [event_address]/[event_date]/… из app_settings.
 
-    Незаданный ключ → пустая строка (как _fill_event в планировщике). Запрос в БД —
+    Ивент выключен или нужный ключ пуст → None (баббл не отправляется). Запрос в БД —
     только если в тексте реально есть такой плейсхолдер. event_date форматируется
     из ISO в испанскую дату (_fmt_date_es).
     """
     present = [k for k in _EVENT_VAR_KEYS if f"[{k}]" in text]
+    if not present and "[event_promo]" not in text and "[event_link]" not in text:
+        return text
+    # Ивент выключен (прошёл/не анонсирован) или нужное значение не задано — баббл с
+    # датой/ценой/адресом/ссылкой ивента НЕ отправляем (None = дроп), а не шлём «дыру»
+    # вида «El precio es de  MXN» или дату прошедшего ивента.
+    s = await db.get_settings(["event_active"] + present)
+    if s.get("event_active") != "1":
+        logger.info("ивент выключен — баббл с данными ивента не отправляю: %r", text[:120])
+        return None
+    if any(not (s.get(k) or "").strip() for k in present):
+        logger.warning("пустое значение ивента %s — баббл не отправляю: %r",
+                       [k for k in present if not (s.get(k) or "").strip()], text[:120])
+        return None
     # [event_promo] — условный: зачёркнутая старая цена (WhatsApp/Telegram рендерят
     # ~текст~ как strikethrough нативно, без разметки/parse_mode), если задана
     # event_price_old, иначе пустая строка (акция кончилась → Аня очистила поле →
@@ -327,6 +340,8 @@ async def render_bubbles(messages: list, phone: str | None = None,
     out = []
     for text in messages:
         text = await _fill_event_vars(text)           # переменные события (№2/№15/№51)
+        if text is None:
+            continue  # ивент выключен / значение не задано → баббл не отправляем
         text = await _fill_booking_vars(text, phone)  # [horario_llamada] видеозвонка
         # ссылки (course/event); пусто ИЛИ уже слали (дедуп) → дроп баббла
         text = await _fill_link_placeholders(text, phone, allow_repeat_links)
