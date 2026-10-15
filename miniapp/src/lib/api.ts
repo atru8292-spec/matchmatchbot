@@ -137,12 +137,19 @@ function del(path: string) {
 }
 
 // ===== Экран «Клиенты» (whitelist) =====
-export async function fetchClients(): Promise<WhitelistClient[]> {
+// Поиск на сервере: клиентов тысячи, а номер может лежать как wa_52… или wa_521…
+// (бэкенд ищет по последним 10 цифрам). total — сколько всего под поиском.
+export interface ClientsPage { clients: WhitelistClient[]; total: number }
+
+export async function fetchClients(search = ""): Promise<ClientsPage> {
   if (USE_MOCKS) {
     await new Promise((r) => setTimeout(r, 200));
-    return mockClients();
+    const all = mockClients();
+    return { clients: all, total: all.length };
   }
-  return (await apiFetch<{ clients: WhitelistClient[] }>("/whitelist")).clients;
+  const r = await apiFetch<{ clients: WhitelistClient[]; total?: number }>(
+    "/whitelist", { search: search.trim() || undefined });
+  return { clients: r.clients, total: r.total ?? r.clients.length };
 }
 
 export const clientActions = {

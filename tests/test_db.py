@@ -1677,3 +1677,22 @@ class TestEventLeadCandidatesWhitelist:
         await db.event_lead_candidates()
         sql = pool.fetch.call_args.args[0]
         assert "bot_whitelist" in sql and "w.phone IS NULL" in sql and "wa_521" in sql
+
+
+class TestWhitelistSearch:
+    def test_digits_search_by_last_10(self):
+        """Любой формат номера → поиск по последним 10 цифрам (wa_52…/wa_521… оба найдутся)."""
+        where, args = db._whitelist_search_where("+52 1 55 1234 5678")
+        assert "w.phone LIKE $2" in where and args[1] == "%5512345678%"
+
+    def test_name_search_no_phone_clause(self):
+        """Имя без цифр → только ILIKE, номер не сравниваем (раньше '' матчил всех)."""
+        where, args = db._whitelist_search_where("Carlos")
+        assert "LIKE $2" not in where and args == ["%Carlos%"]
+
+    def test_empty_search_no_where(self):
+        assert db._whitelist_search_where("  ") == ("", [])
+
+    def test_like_metachars_escaped(self):
+        _, args = db._whitelist_search_where("50%_x")
+        assert args[0] == "%50\\%\\_x%"

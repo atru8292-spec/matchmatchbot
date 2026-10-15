@@ -23,7 +23,7 @@ export function LeadsScreen({ onOpenLead }: Props) {
   const debouncedSearch = useDebounced(search, 250);
 
   const query = useMemo(
-    () => ({ search: debouncedSearch, stage: stages, sort: "recent" as const }),
+    () => ({ search: debouncedSearch, stage: stages, sort: "recent" as const, limit: 100 }),
     [debouncedSearch, stages],
   );
 

@@ -44,7 +44,7 @@ export function LeadRow({ lead, onOpen }: Props) {
         </p>
 
         {/* Строка 3: стадия + пометки + телефон */}
-        <div className="mt-1.5 flex items-center gap-1.5">
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           <StageBadge stage={lead.funnelStage} label={lead.funnelStageLabel} />
           {lead.mode === "manual" && (
             <span className="inline-flex items-center gap-1 rounded-full bg-elevated px-1.5 py-0.5 text-[11px] font-medium text-muted">

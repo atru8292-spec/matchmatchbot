@@ -1572,20 +1572,51 @@ async def count_pending_escalations() -> int:
 
 # ===== Мини-CRM: экран «Клиенты» (whitelist) (/api/mini/whitelist) =====
 
-async def list_whitelist_with_names(limit: int = 500) -> list[dict]:
+def _whitelist_search_where(search: str | None) -> tuple[str, list]:
+    """WHERE для поиска в «Клиентах»: имя/note (ILIKE) ИЛИ номер (≥4 цифр — по хвосту
+    до 10 цифр, так 'wa_52…' и 'wa_521…' находятся одним запросом)."""
+    s = (search or "").strip()
+    if not s:
+        return "", []
+    esc = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    args: list = [f"%{esc}%"]
+    clause = ("(l.name ILIKE $1 ESCAPE '\\' OR l.whatsapp_name ILIKE $1 ESCAPE '\\' "
+              "OR w.note ILIKE $1 ESCAPE '\\'")
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 4:
+        args.append(f"%{digits[-10:]}%")
+        clause += " OR w.phone LIKE $2"
+    return "WHERE " + clause + ")", args
+
+
+async def list_whitelist_with_names(limit: int = 500, search: str | None = None) -> list[dict]:
     """Whitelist для экрана «Клиенты»: имя лида (если он есть в leads) + причина/
-    кто добавил/дата. Новые сверху. bot_whitelist.phone == leads.phone (оба wa_)."""
+    кто добавил/дата. Новые сверху. Связь с leads — по канону номера (wa_52…/wa_521…).
+    search — серверный поиск по имени/номеру (в таблице тысячи записей)."""
+    where, args = _whitelist_search_where(search)
     try:
         rows = await _get_pool().fetch(
             "SELECT w.phone, w.reason, w.added_by, w.added_at, l.name, l.whatsapp_name "
-            f"FROM bot_whitelist w LEFT JOIN leads l ON {_WL_JOIN} "
-            "ORDER BY w.added_at DESC LIMIT $1",
-            limit,
+            f"FROM bot_whitelist w LEFT JOIN leads l ON {_WL_JOIN} {where} "
+            f"ORDER BY w.added_at DESC LIMIT ${len(args) + 1}",
+            *args, limit,
         )
     except Exception:
         logger.exception("list_whitelist_with_names failed")
         raise
     return [dict(r) for r in rows]
+
+
+async def count_whitelist(search: str | None = None) -> int:
+    """Сколько записей в «Клиентах» (под поиском или всего) — для счётчика в CRM."""
+    where, args = _whitelist_search_where(search)
+    try:
+        return int(await _get_pool().fetchval(
+            f"SELECT count(*) FROM bot_whitelist w LEFT JOIN leads l ON {_WL_JOIN} {where}",
+            *args))
+    except Exception:
+        logger.exception("count_whitelist failed")
+        raise
 
 
 # ===== Мини-CRM: карточка лида — таймлайн, заметки, действия (/api/mini/lead/*) =====

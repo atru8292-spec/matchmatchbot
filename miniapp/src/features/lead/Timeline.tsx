@@ -30,7 +30,7 @@ function isPhotoPlaceholder(item: TimelineItem): boolean {
 // у messages/lead_photos нет общего id, но обе стороны пишутся в том же порядке,
 // в котором лид прислал фото (см. main._process_photos).
 export function Timeline({ items, photos }: { items: TimelineItem[]; photos: LeadPhoto[] }) {
-  const photoQueue = [...photos].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
+  const photoQueue = [...photos].sort((a, b) => (a.receivedAt || "").localeCompare(b.receivedAt || ""));
   let photoIdx = 0;
   let lastDay = "";
   return (

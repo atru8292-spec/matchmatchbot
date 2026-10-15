@@ -14,7 +14,8 @@ import { DayOfReminder } from "./DayOfReminder";
 import { EventMediaSection } from "./EventMediaSection";
 
 const KEY = ["event"];
-const todayStr = () => new Date().toISOString().slice(0, 10);
+// «Сегодня» по CDMX (не по UTC: вечером в Мехико UTC уже завтра → дата ивента «в прошлом»).
+const todayStr = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Mexico_City" });
 const isUrl = (v: string) => /^https?:\/\//i.test(v.trim());
 
 export function EventScreen() {
@@ -53,11 +54,18 @@ function BotPauseCard() {
   const m = useMutation({
     mutationFn: (v: boolean) => setBotPause(v),
     onSuccess: (res) => qc.setQueryData(["botPaused"], res.botPaused),
+    onError: (e) => window.alert(`Не удалось переключить: ${String(e)}`),
   });
+  const onPause = (v: boolean) => {
+    // Снять паузу = бот начнёт отвечать реальным лидам — переспрашиваем.
+    if (!v && !window.confirm("Снять паузу? Бот начнёт отвечать реальным лидам.")) return;
+    m.mutate(v);
+  };
   const { data: schedOn } = useQuery({ queryKey: ["schedulerEnabled"], queryFn: fetchSchedulerEnabled });
   const sm = useMutation({
     mutationFn: (v: boolean) => setSchedulerEnabled(v),
     onSuccess: (res) => qc.setQueryData(["schedulerEnabled"], res.schedulerEnabled),
+    onError: (e) => window.alert(`Не удалось переключить: ${String(e)}`),
   });
   const onSched = (v: boolean) => {
     // Включение = бот сам начнёт писать лидам (догоны, напоминания) — переспрашиваем.
@@ -72,7 +80,8 @@ function BotPauseCard() {
           label="Бот на паузе (тех. режим)"
           hint="Вкл — бот молчит всем лидам, кроме тестовых номеров. Для правок и подключения WhatsApp."
           checked={!!paused}
-          onChange={(v) => m.mutate(v)}
+          onChange={onPause}
+          disabled={paused === undefined || m.isPending}
         />
         <SwitchRow
           icon={<Send size={18} />}
@@ -80,6 +89,7 @@ function BotPauseCard() {
           hint="Вкл — бот сам пишет лидам: догоны молчунам, напоминания об ивенте и звонке. На ответы на входящие не влияет. При паузе не работают."
           checked={!!schedOn}
           onChange={onSched}
+          disabled={schedOn === undefined || sm.isPending}
         />
       </Card>
     </div>
@@ -138,8 +148,6 @@ function EventForm({ initial }: { initial: EventSettings }) {
     else if (date < todayStr()) err.date = "Дата не может быть в прошлом";
     if (!start.trim()) err.start = "Укажите время начала";
     if (!address.trim()) err.address = "Укажите адрес";
-  } else if (date && date < todayStr()) {
-    err.date = "Дата не может быть в прошлом";
   }
   const priceOk = (v: string) => /^[\d.,\s]+$/.test(v.trim());
   if (priceNonmember.trim() && !priceOk(priceNonmember)) err.priceNonmember = "Только цифры";
@@ -294,7 +302,7 @@ function EventForm({ initial }: { initial: EventSettings }) {
         <EventMediaSection />
 
         {/* Напоминание дня ивента: предпросмотр шаблонов + ручная отправка */}
-        <DayOfReminder />
+        {initial.eventActive && initial.eventDate >= todayStr() && <DayOfReminder />}
       </div>
 
       {/* Липкий футер сохранения */}

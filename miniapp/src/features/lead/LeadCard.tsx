@@ -223,7 +223,7 @@ function LeadCardInner({ detail }: { detail: LeadDetail }) {
           </div>
 
           <ChatComposer
-            onSend={(t) => sendM.mutate(t)}
+            onSend={(t, restore) => sendM.mutate(t, { onError: restore })}
             sending={sendM.isPending}
             autoMode={detail.mode === "auto" && !detail.doNotContact}
           />
@@ -265,12 +265,13 @@ function TabSwitch({ tab, onChange }: { tab: CardTab; onChange: (t: CardTab) => 
 // Shift+Enter — перенос строки. Подсказка про авто-режим (отправка → takeover).
 function ChatComposer({
   onSend, sending, autoMode,
-}: { onSend: (text: string) => void; sending: boolean; autoMode: boolean }) {
+}: { onSend: (text: string, restore: () => void) => void; sending: boolean; autoMode: boolean }) {
   const [text, setText] = useState("");
   const submit = () => {
     const t = text.trim();
     if (!t || sending) return;
-    onSend(t);
+    // Не дошло (ошибка/отказ на opt-out) — возвращаем текст в поле, чтобы не набирать заново.
+    onSend(t, () => setText(t));
     setText("");
   };
   return (

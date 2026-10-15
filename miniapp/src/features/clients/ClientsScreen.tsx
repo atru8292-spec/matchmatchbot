@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UserCheck, Trash2, Plus, Search, X, ShieldCheck } from "lucide-react";
 import { Card } from "@/components/ui/Card";
@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LeadRowSkeleton } from "@/components/ui/Skeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { fetchClients, clientActions } from "@/lib/api";
+import { fetchClients, clientActions, type ClientsPage } from "@/lib/api";
 import { formatPhone, relativeTime, initials } from "@/lib/format";
 import { useDebounced } from "@/lib/useDebounced";
 import { cn } from "@/lib/cn";
@@ -21,31 +21,26 @@ export function ClientsScreen() {
   const debounced = useDebounced(search, 200);
   const [toRemove, setToRemove] = useState<WhitelistClient | null>(null);
 
+  const q = debounced.trim();
   const { data, isPending, isError, refetch } = useQuery({
-    queryKey: KEY,
-    queryFn: fetchClients,
+    queryKey: [...KEY, q],
+    queryFn: () => fetchClients(q),
+    placeholderData: (prev) => prev,  // не мигаем скелетоном на каждый символ поиска
   });
 
   const removeM = useMutation({
     mutationFn: (phone: string) => clientActions.remove(phone),
     onMutate: async (phone) => {
       await qc.cancelQueries({ queryKey: KEY });
-      const prev = qc.getQueryData<WhitelistClient[]>(KEY);
-      qc.setQueryData<WhitelistClient[]>(KEY, (old) => (old ?? []).filter((c) => c.phone !== phone));
-      return { prev };
+      qc.setQueriesData<ClientsPage>({ queryKey: KEY }, (old) => old && ({
+        clients: old.clients.filter((c) => c.phone !== phone), total: Math.max(0, old.total - 1),
+      }));
     },
-    onError: (_e, _p, ctx) => { if (ctx?.prev) qc.setQueryData(KEY, ctx.prev); },
     onSettled: () => qc.invalidateQueries({ queryKey: KEY }),
   });
 
-  const clients = data ?? [];
-  const filtered = useMemo(() => {
-    const s = debounced.trim().toLowerCase();
-    if (!s) return clients;
-    return clients.filter(
-      (c) => (c.name || "").toLowerCase().includes(s) || c.phone.includes(s.replace(/\D/g, "")),
-    );
-  }, [clients, debounced]);
+  const filtered = data?.clients ?? [];
+  const total = data?.total ?? 0;
 
   const confirmRemove = () => {
     if (toRemove) removeM.mutate(toRemove.phone);
@@ -57,7 +52,7 @@ export function ClientsScreen() {
       <header className="sticky top-0 z-10 border-b border-line bg-paper/90 backdrop-blur">
         <div className="flex items-baseline gap-2 px-4 pt-4 pb-2">
           <h1 className="text-xl text-ink">Клиенты</h1>
-          <span className="text-sm text-muted tabnums">{clients.length}</span>
+          <span className="text-sm text-muted tabnums">{total}</span>
         </div>
         <p className="px-4 pb-2 text-xs leading-relaxed text-muted">
           Бот им не пишет — общение ведёт Аня лично.
@@ -101,6 +96,11 @@ export function ClientsScreen() {
             ))
           )}
         </Card>
+        {total > filtered.length && (
+          <p className="px-1 text-center text-xs text-muted">
+            Показаны {filtered.length} из {total}. Уточните поиск по имени или номеру.
+          </p>
+        )}
       </div>
 
       <ConfirmDialog
@@ -155,17 +155,6 @@ function AddClientForm() {
 
   const addM = useMutation({
     mutationFn: () => clientActions.add(phone.trim(), reason.trim() || undefined),
-    onMutate: async () => {
-      await qc.cancelQueries({ queryKey: KEY });
-      const prev = qc.getQueryData<WhitelistClient[]>(KEY);
-      const optimistic: WhitelistClient = {
-        phone: "wa_" + phone.replace(/\D/g, ""), name: null,
-        reason: reason.trim() || null, addedBy: "…", addedAt: new Date().toISOString(),
-      };
-      qc.setQueryData<WhitelistClient[]>(KEY, (old) => [optimistic, ...(old ?? [])]);
-      return { prev };
-    },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(KEY, ctx.prev); },
     onSuccess: () => { setPhone(""); setReason(""); setOpen(false); },
     onSettled: () => qc.invalidateQueries({ queryKey: KEY }),
   });

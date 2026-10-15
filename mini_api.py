@@ -636,15 +636,22 @@ def _serialize_client(row: dict) -> dict:
 
 
 @router.get("/whitelist")
-async def list_clients(_: dict = Depends(require_admin)) -> dict:
-    """Список клиентов (bot_whitelist) с именами лидов, новые сверху."""
+async def list_clients(
+    _: dict = Depends(require_admin),
+    search: Optional[str] = Query(default=None, description="Имя или телефон (любой формат)"),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> dict:
+    """Список клиентов (bot_whitelist) с именами лидов, новые сверху. Поиск — на сервере
+    (записей тысячи): по имени или по номеру в любом формате (wa_52…/wa_521…/+52 1 …).
+    total — сколько всего под поиском (список обрезан limit)."""
     if not db.is_ready():
         raise HTTPException(status_code=503, detail="Database not connected")
     try:
-        rows = await db.list_whitelist_with_names()
+        rows = await db.list_whitelist_with_names(limit=limit, search=search)
+        total = await db.count_whitelist(search)
     except Exception as e:
         await _alert_500("list_clients", e)
-    return {"clients": [_serialize_client(r) for r in rows]}
+    return {"clients": [_serialize_client(r) for r in rows], "total": total}
 
 
 @router.post("/whitelist")
@@ -1135,9 +1142,13 @@ async def day_of_send(body: DayOfSendIn, user: dict = Depends(require_admin)) ->
         raise HTTPException(status_code=422,
                             detail=f"Не больше {_DAY_OF_MAX_RECIPIENTS} за раз "
                                    "(массовую рассылку планировщик сделает сам в день ивента)")
-    event_date = ((await db.get_settings(["event_date"])).get("event_date") or "").strip()
+    es = await db.get_settings(["event_date", "event_active"])
+    event_date = (es.get("event_date") or "").strip()
     if not event_date:
         raise HTTPException(status_code=422, detail="Дата ивента не задана")
+    # Ивент выключен (прошёл/не анонсирован) — «сегодня ивент» слать нельзя (2026-10-15).
+    if es.get("event_active") != "1":
+        raise HTTPException(status_code=422, detail="Ивент выключен — напоминание не отправляется")
 
     try:
         raw = {
@@ -1161,6 +1172,10 @@ async def day_of_send(body: DayOfSendIn, user: dict = Depends(require_admin)) ->
             name = _lead_display_name(lead)
             if lead.get("do_not_contact"):
                 failed.append({"phone": phone, "name": name, "reason": "бот не пишет (заблокирован)"})
+                continue
+            # Клиенты/личные контакты Ани (whitelist) — шаблонную рассылку им не шлём.
+            if await db.is_whitelisted(phone):
+                failed.append({"phone": phone, "name": name, "reason": "в списке «Клиенты»"})
                 continue
             tmpl = r.template if r.template in ("A", "B") else _default_template(lead.get("funnel_stage"))
             already = await db.event_reminder_sent(phone, _DAY_OF_KIND, event_date)

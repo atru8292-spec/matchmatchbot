@@ -41,7 +41,8 @@ export function DayOfReminder() {
 
   const rows: Row[] = useMemo(() => {
     if (search.trim().length >= 2) {
-      return (searchQ.data?.leads ?? []).map((l) => ({
+      // клиенты (whitelist) — не получатели шаблонной рассылки
+      return (searchQ.data?.leads ?? []).filter((l) => !l.isClient).map((l) => ({
         phone: l.phone,
         name: l.name || l.whatsappName || l.phone.replace("wa_", ""),
         stageLabel: l.funnelStageLabel,
@@ -123,6 +124,8 @@ export function DayOfReminder() {
         <div className="max-h-64 overflow-y-auto rounded-control border border-line">
           {recips.isPending || (search.trim().length >= 2 && searchQ.isPending) ? (
             <div className="p-3"><Skeleton className="h-20 w-full rounded-control" /></div>
+          ) : recips.isError ? (
+            <p className="p-4 text-center text-xs text-danger">Не удалось загрузить список. Обновите экран.</p>
           ) : rows.length === 0 ? (
             <p className="p-4 text-center text-xs text-muted">
               {search.trim().length >= 2 ? "Никого не нашли" : "Пока нет лидов, записанных на ивент. Найдите человека через поиск."}

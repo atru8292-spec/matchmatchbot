@@ -788,12 +788,24 @@ class TestClientsScreen:
                  "added_at": _dt(1), "name": None, "whatsapp_name": "Rober"},
             ]
         monkeypatch.setattr(db, "list_whitelist_with_names", fake_list)
+        monkeypatch.setattr(db, "count_whitelist", AsyncMock(return_value=4163))
 
         r = client.get("/api/mini/whitelist")
         assert r.status_code == 200
         cl = r.json()["clients"]
         assert cl[0]["name"] == "Carlos" and cl[0]["reason"] == "VIP"
         assert cl[1]["name"] == "Rober" and cl[1]["addedBy"] == "@dev"
+        assert r.json()["total"] == 4163  # счётчик — по всей таблице, не по странице
+
+    def test_list_clients_search_passed_to_db(self, client, monkeypatch):
+        """Поиск — на сервере (2026-10-15): строка уходит в db, total — под поиском."""
+        lst = AsyncMock(return_value=[]); cnt = AsyncMock(return_value=0)
+        monkeypatch.setattr(db, "list_whitelist_with_names", lst)
+        monkeypatch.setattr(db, "count_whitelist", cnt)
+        r = client.get("/api/mini/whitelist", params={"search": "+52 1 55 1234 5678"})
+        assert r.status_code == 200
+        assert lst.await_args.kwargs["search"] == "+52 1 55 1234 5678"
+        cnt.assert_awaited_once_with("+52 1 55 1234 5678")
 
     def test_add_client(self, client, monkeypatch):
         add = AsyncMock()
@@ -921,6 +933,7 @@ class TestDayOf:
             return self._TA if sid == scheduler.REMIND_DAY_SCENARIO else self._TB
         monkeypatch.setattr(db, "get_settings", fake_settings)
         monkeypatch.setattr(db, "get_scenario_template", fake_tmpl)
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
         monkeypatch.setattr(sender, "compute_delay", lambda t: 0)  # без реальных пауз в тестах
 
     def test_preview_renders_both_templates(self, client):
@@ -968,6 +981,25 @@ class TestDayOf:
         log.assert_awaited_once()   # маркер идемпотентности записан
         # B содержит ссылку → send_one получил текст со ссылкой
         assert any("tix.example" in c.args[1] for c in one.await_args_list)
+
+    def test_send_refused_when_event_inactive(self, client, monkeypatch):
+        """Ивент выключен (прошёл) → 422, никому ничего не уходит (2026-10-15)."""
+        log, one = self._mock_send(monkeypatch, stage="qualified")
+        async def inactive(keys):
+            return {**self._SETTINGS, "event_active": "0"}
+        monkeypatch.setattr(db, "get_settings", inactive)
+        r = client.post("/api/mini/event/day-of/send",
+                        json={"recipients": [{"phone": "wa_5213333333333", "template": "auto"}]})
+        assert r.status_code == 422
+        one.assert_not_awaited()
+
+    def test_send_skips_whitelisted(self, client, monkeypatch):
+        log, one = self._mock_send(monkeypatch, stage="qualified")
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=True))
+        d = client.post("/api/mini/event/day-of/send",
+                        json={"recipients": [{"phone": "wa_5213333333333", "template": "auto"}]}).json()
+        assert d["sent"] == [] and d["failed"][0]["reason"] == "в списке «Клиенты»"
+        one.assert_not_awaited()
 
     def test_send_auto_picks_A_for_paid(self, client, monkeypatch):
         self._mock_send(monkeypatch, stage="client_agency")
