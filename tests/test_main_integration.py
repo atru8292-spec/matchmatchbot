@@ -2016,3 +2016,49 @@ class TestRunAiArmsFollowup:
         reset = AsyncMock(); monkeypatch.setattr(main.db, "reset_followup_timer", reset)
         await main._run_ai("wa_1", {"phone": "wa_1", "funnel_stage": "new"}, "hola")
         reset.assert_awaited_once_with("wa_1", main.funnel.FOLLOWUP_FIRST_DELAY_HOURS["new"])
+
+
+# ===== Аудит 2026-10-15: решение по тексту приоритетнее фото; тихий opt-out =====
+
+class TestDecisionBeatsPhoto:
+    def _setup(self, monkeypatch, text, decision):
+        msgs = [{"id": "p1", "text": "[photo]", "meta": {"content_type": "photo", "content_uri": "https://x/p.jpg"}},
+                {"id": "t1", "text": text, "meta": {"content_type": "text"}}]
+        monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(return_value=msgs))
+        monkeypatch.setattr(db, "mark_messages_processed", AsyncMock())
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"whatsapp_name": "T"}))
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "bypass_phone_set", AsyncMock(return_value=frozenset()))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"bot_paused": "0"}))
+        monkeypatch.setattr(filters, "decide", lambda *a, **k: decision)
+        photos = AsyncMock(); monkeypatch.setattr(main, "_process_photos", photos)
+        apply = AsyncMock(); monkeypatch.setattr(main, "_apply_decision", apply)
+        return photos, apply
+
+    @pytest.mark.parametrize("action", ["optout", "silent_language", "payment_claim", "rejected", "instagram_handoff"])
+    async def test_non_ai_decision_skips_photo_branch(self, monkeypatch, action):
+        photos, apply = self._setup(monkeypatch, "x", filters.Decision(action, "r"))
+        await main._process_burst("wa_5215512345678")
+        photos.assert_not_awaited()
+        apply.assert_awaited_once()
+
+    async def test_needs_ai_goes_to_photo_branch(self, monkeypatch):
+        photos, apply = self._setup(monkeypatch, "soy soltero", filters.Decision("needs_ai", "r"))
+        await main._process_burst("wa_5215512345678")
+        photos.assert_awaited_once()
+
+
+class TestQuietOptout:
+    async def test_quiet_optout_sends_nothing_but_blocks(self, monkeypatch):
+        send = AsyncMock(); monkeypatch.setattr(main.sender, "send", send)
+        block = AsyncMock(); monkeypatch.setattr(db, "block_lead", block)
+        alert = AsyncMock(); monkeypatch.setattr(main.escalation, "notify_optout", alert)
+        await main._apply_decision("wa_1", filters.Decision("optout", "r", alert_manager=True, quiet=True), {}, "basta")
+        send.assert_not_awaited(); block.assert_awaited_once(); alert.assert_awaited_once()
+
+    async def test_normal_optout_confirms(self, monkeypatch):
+        send = AsyncMock(); monkeypatch.setattr(main.sender, "send", send)
+        monkeypatch.setattr(db, "block_lead", AsyncMock())
+        monkeypatch.setattr(main.escalation, "notify_optout", AsyncMock())
+        await main._apply_decision("wa_1", filters.Decision("optout", "r"), {}, "basta")
+        send.assert_awaited_once()

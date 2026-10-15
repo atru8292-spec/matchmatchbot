@@ -130,7 +130,16 @@ _OPTOUT_RE = re.compile(
     r"no\s+me\s+molest(es|en|e\s+m[aá]s|ar)|"
     r"(quiero\s+)?(darme|dar)\s+de\s+baja|"
     r"b[oó]rrame|elim[ií]name|borra\s+mi\s+n[uú]mero|"
-    r"(qu[ií]tame|s[aá]came)\s+de\s+(tu|la)\s+lista|"
+    r"(qu[ií]tame|s[aá]came)\s+de\s+(tus?|la|las)\s+listas?|"
+    # 2026-10-15 (аудит): частые разговорные формы, которые раньше уходили в AI.
+    r"no\s+me\s+(mandes|env[ií]es|env[ií]en)\s+(m[aá]s\s+)?mensajes?|"
+    r"no\s+me\s+manden?\s+m[aá]s\s+mensajes?|"
+    r"no\s+quiero\s+que\s+me\s+(escribas|escriban|contactes|contacten|manden)|"
+    r"ya\s+no\s+quiero\s+(recibir\s+)?(m[aá]s\s+)?mensajes|"
+    r"^\s*(stop|basta|ya\s+basta|unsubscribe)\s*[.!]*\s*$|"
+    # английские (лид-англоговорящий молчит по is_english, но opt-out чтим всегда)
+    r"\bunsubscribe\b|don'?t\s+(text|message|contact)\s+me|stop\s+(texting|messaging|contacting)\s+me|"
+    r"leave\s+me\s+alone|remove\s+me\s+from|"
     r"не\s+пиши\w*\s+мне|не\s+пишите\s+(мне|больше)|отпиш\w+|отписаться|"
     r"удалите\s+мой\s+номер|хватит\s+писать|не\s+беспоко\w+",
     re.IGNORECASE,
@@ -144,6 +153,7 @@ class Decision:
     reason: str                 # краткая причина (для лога/алерта/эскалации)
     alert_manager: bool = False # нужно ли уведомить Аню (сам алерт — блок 8)
     block_permanent: bool = False  # блок навсегда (do_not_contact + manual надолго)
+    quiet: bool = False         # optout на паузе/в ручном режиме: фиксируем, но лиду НЕ пишем
     is_escort: bool = False     # escort-блок (инкремент escort_mention_count); не завязываемся на текст reason
 
 
@@ -255,7 +265,11 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     # Opt-out ДО manual/региона: явная просьба «не пиши» ставит do_not_contact навсегда,
     # даже если лида вёл менеджер (иначе при возврате в auto догоны возобновятся).
     if is_optout(text):
-        return Decision("optout", "лид попросил не писать (opt-out)", alert_manager=True)
+        # На паузе (кроме тестовых номеров) и когда чат ведёт Аня — бот не пишет даже
+        # подтверждение: do_not_contact ставим, Аню алертим, ответит она сама.
+        quiet = (bot_paused and not is_bypass) or _manual_active(lead)
+        return Decision("optout", "лид попросил не писать (opt-out)", alert_manager=True,
+                        quiet=quiet)
     # Глобальная пауза (тех. режим) — ПОСЛЕ whitelist/opt-out (согласие лида и VIP-алерты чтим
     #    даже на паузе), молчим всем остальным, кроме тестовых bypass-номеров. Без алерта.
     if bot_paused and not is_bypass:

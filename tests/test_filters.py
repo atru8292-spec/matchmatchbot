@@ -1001,3 +1001,44 @@ class TestDecidePaymentClaim:
         """Escort-паттерн важнее (блок), даже если в тексте есть 'pagué'."""
         d = decide({}, False, "pagué por sexo", "wa_52")
         assert d.action == "blocked"
+
+
+# ===== Аудит 2026-10-15: разговорные opt-out, тихий opt-out на паузе/в ручном режиме =====
+
+class TestOptoutAudit20261015:
+    @pytest.mark.parametrize("text", [
+        "no me mandes mensajes", "no me manden mas mensajes", "no me envíes más mensajes",
+        "no quiero que me escriban", "ya no quiero mensajes", "ya no quiero recibir mensajes",
+        "sácame de tus listas", "STOP", "stop", "Basta!", "ya basta", "unsubscribe",
+        "please don't text me", "stop texting me", "leave me alone", "remove me from your list",
+    ])
+    def test_new_optout_forms(self, text):
+        assert filters.is_optout(text)
+
+    @pytest.mark.parametrize("text", [
+        "no me interesa el evento pero el servicio sí",
+        "basta de rodeos, dime el precio",
+        "stop, espera, ¿cuánto cuesta?",
+        "no me escribiste el link",
+    ])
+    def test_not_optout(self, text):
+        assert not filters.is_optout(text)
+
+    def test_optout_on_pause_is_quiet(self):
+        d = filters.decide({}, False, "ya no me escribas", "wa_5215511111111",
+                           frozenset(), bot_paused=True)
+        assert d.action == "optout" and d.quiet
+
+    def test_optout_bypass_on_pause_not_quiet(self):
+        d = filters.decide({}, False, "ya no me escribas", "wa_5215511111111",
+                           frozenset({"wa_5215511111111"}), bot_paused=True)
+        assert d.action == "optout" and not d.quiet
+
+    def test_optout_manual_mode_quiet(self):
+        d = filters.decide({"mode": "manual", "manual_until": None}, False, "ya no me escribas",
+                           "wa_5215511111111", frozenset())
+        assert d.action == "optout" and d.quiet
+
+    def test_optout_normal_not_quiet(self):
+        d = filters.decide({}, False, "ya no me escribas", "wa_5215511111111", frozenset())
+        assert d.action == "optout" and not d.quiet

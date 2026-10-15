@@ -181,9 +181,11 @@ async def _process_burst_impl(phone: str) -> None:
                               bypass_phones, whitelist_no_alert=wl_no_alert,
                               bot_paused=bot_paused)
 
-    # 1) Дисквалификация/тишина текущего залпа приоритетнее фото: whitelist/silent
-    #    (молчим) и blocked (escort/агрессия в тексте — блок, даже если в залпе есть фото).
-    if decision.action in ("silent_whitelist", "silent", "blocked"):
+    # 1) Любое детерминированное решение приоритетнее фото: whitelist/silent (молчим),
+    #    blocked (escort/агрессия), а также opt-out, английский, отказ по фильтрам,
+    #    заявление об оплате (фото = чек, не анкетное фото) и Instagram. ИСПРАВЛЕНО
+    #    2026-10-15 (аудит): раньше фото в залпе уводило opt-out/английский/оплату в Vision+AI.
+    if decision.action != "needs_ai":
         await _apply_decision(phone, decision, lead, combined)
         return
 
@@ -381,8 +383,9 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
         # Лид явно попросил не писать. Одно тёплое подтверждение + do_not_contact навсегда
         # (block_lead: флаг + стадия lost + гасит next_followup_at). Дальше — полная тишина
         # на всех путях (follow-up/scheduled/ручная отправка уважают do_not_contact).
-        logger.info("РЕШЕНИЕ optout [%s]", phone)
-        await sender.send(phone, [_OPTOUT_CONFIRM])
+        logger.info("РЕШЕНИЕ optout [%s]%s", phone, " (тихо: пауза/ручной режим)" if decision.quiet else "")
+        if not decision.quiet:
+            await sender.send(phone, [_OPTOUT_CONFIRM])
         await db.block_lead(phone, "opt-out: лид попросил не писать")
         await escalation.notify_optout(lead)
         return
