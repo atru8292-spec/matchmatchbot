@@ -799,6 +799,24 @@ async def save_outbound(lead_phone: str, text: str, sender: str = "anna") -> Non
                          "lead_phone=%s", lead_phone)
 
 
+async def outbound_text_recent(lead_phone: str, text: str, minutes: int = 30) -> bool:
+    """Есть ли в messages такое же исходящее этому лиду за последние N минут (бот или CRM).
+
+    Для сверки эха Wazzup: совпало → это наше сообщение, не ответ Ани с телефона.
+    Сбой → True (безопасно: не переводим лида в ручной режим по ошибке БД)."""
+    try:
+        row = await _get_pool().fetchrow(
+            "SELECT 1 FROM messages WHERE lead_phone = $1 AND direction = 'outbound' "
+            "AND created_at > now() - make_interval(mins => $3) "
+            "AND lower(regexp_replace(btrim(text), '\\s+', ' ', 'g')) = "
+            "    lower(regexp_replace(btrim($2), '\\s+', ' ', 'g')) LIMIT 1",
+            lead_phone, text, minutes)
+    except Exception:
+        logger.exception("outbound_text_recent failed: phone=%s", lead_phone)
+        return True
+    return row is not None
+
+
 async def link_already_sent(lead_phone: str, url: str) -> bool:
     """Слали ли уже этому лиду исходящее сообщение с этой ссылкой (дедуп ссылок, Layer 2).
 

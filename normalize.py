@@ -159,3 +159,31 @@ def normalize_wazzup_message(msg: dict) -> NormalizedMessage | None:
         media_info=media_info,
         caption=caption,
     )
+
+
+@dataclass(frozen=True)
+class EchoMessage:
+    """Исходящее из нашего номера (isEcho=true): бот через API, CRM или Аня с телефона."""
+    phone: str                     # 'wa_' + цифры собеседника
+    content_type: str              # text | photo | voice | video | document
+    text: str                      # текст ('' у медиа без подписи)
+    external_message_id: str | None
+    received_at: str | None
+
+
+def parse_echo(msg: dict) -> EchoMessage | None:
+    """Разобрать эхо-сообщение Wazzup. Не эхо / не личный WhatsApp-чат / без номера → None."""
+    if not isinstance(msg, dict) or msg.get("isEcho") is not True:
+        return None
+    if msg.get("chatType") != "whatsapp":
+        return None
+    digits = _only_digits(msg.get("chatId"))
+    if not digits:
+        return None
+    content_type = _TYPE_MAP.get(msg.get("type"), "unknown")
+    raw = msg.get("text")
+    text = raw.strip() if isinstance(raw, str) else ""
+    mid = msg.get("messageId")
+    return EchoMessage(phone="wa_" + digits, content_type=content_type, text=text,
+                       external_message_id=("wa_" + str(mid)) if mid else None,
+                       received_at=msg.get("dateTime"))

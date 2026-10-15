@@ -15,6 +15,8 @@ import asyncio
 import logging
 import random
 import re
+import time
+from collections import deque
 from datetime import datetime
 
 import httpx
@@ -23,6 +25,7 @@ import booking
 import db
 import escalation
 from config import settings
+from phones import canonical_phone
 
 logger = logging.getLogger("matchmatch.sender")
 
@@ -54,11 +57,42 @@ def compute_media_delay() -> float:
     return round(random.uniform(MEDIA_MIN_DELAY, MEDIA_MAX_DELAY) * 10) / 10
 
 
+# Память недавних отправок (в процессе): по ней эхо-вебхук Wazzup отличает НАШЕ
+# сообщение (бот/CRM через API) от ответа Ани с телефона. Пишем ДО запроса в Wazzup —
+# эхо может прийти раньше, чем строка исходящего сохранится в БД.
+RECENT_SENT_WINDOW_SEC = 30 * 60
+_recent_sent: dict[str, deque] = {}
+
+
+def _norm_text(text: str) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
+def remember_sent(phone_or_chat: str, text: str) -> None:
+    """Запомнить исходящий текст для сверки с эхом (окно RECENT_SENT_WINDOW_SEC)."""
+    key = canonical_phone(phone_or_chat)
+    if not key or not text:
+        return
+    q = _recent_sent.setdefault(key, deque(maxlen=50))
+    q.append((_norm_text(text), time.monotonic()))
+
+
+def was_sent_recently(phone: str, text: str) -> bool:
+    """Отправляли ли мы (бот/CRM) этот текст этому номеру за последние 30 минут."""
+    q = _recent_sent.get(canonical_phone(phone))
+    if not q:
+        return False
+    border = time.monotonic() - RECENT_SENT_WINDOW_SEC
+    norm = _norm_text(text)
+    return any(t == norm and ts >= border for t, ts in q)
+
+
 async def send_one(chat_id: str, text: str) -> bool:
     """Отправить одно сообщение в Wazzup. True при успехе, False при ошибке (не бросает).
 
     chat_id — номер БЕЗ префикса wa_ (срезает вызывающий send).
     """
+    remember_sent(chat_id, text)
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(
@@ -301,6 +335,31 @@ async def render_bubbles(messages: list, phone: str | None = None,
     return out
 
 
+# Финальная проверка перед отправкой лиду: служебный текст наружу не уходит никогда.
+# Ловим недоподставленные плейсхолдеры, куски JSON/ответа модели, трейсбеки/ошибки.
+_SERVICE_PATTERNS = (
+    ("плейсхолдер", re.compile(r"\[[a-z][a-z0-9_]{2,}\]")),                 # [event_promo], [course_link]
+    ("плейсхолдер", re.compile(r"\[(?:имя|dirección|hora|horario)[^\]]{0,40}\]", re.IGNORECASE)),
+    ("пометка сценария", re.compile(r"\[(?:Gu[ií]a para AI|SI (?:YA|A[UÚ]N))", re.IGNORECASE)),
+    ("пометка сценария", re.compile(r"^\s*\[\d\]")),                          # [1] вариант ответа
+    ("JSON", re.compile(r'"[A-Za-z_]+"\s*:')),                              # "messages": …
+    ("JSON", re.compile(r"^\s*[\[{]\s*[\]}\"']?")),                         # начинается с { или [
+    ("поле модели", re.compile(r"\b(?:funnel_stage|used_scenario_id|needs_escalation|"
+                               r"send_invitation|extracted|escalate_reason|scenario_id)\b")),
+    ("ошибка", re.compile(r"Traceback \(most recent call last\)|\b[A-Z]\w*(?:Error|Exception)\b"
+                          r"|\bHTTP\s?[45]\d\d\b")),
+    ("пустышка", re.compile(r"^\s*(?:None|null|undefined|NaN|\{\}|\[\])\s*$")),
+)
+
+
+def service_text_reason(text: str) -> str | None:
+    """Почему баббл нельзя отправлять лиду (служебный текст) или None, если всё чисто."""
+    for reason, rx in _SERVICE_PATTERNS:
+        if rx.search(text or ""):
+            return reason
+    return None
+
+
 async def send(phone: str, messages: list, allow_repeat_links: bool = False) -> int:
     """Отправить бабблы лиду последовательно с задержками. Вернуть число отправленных.
 
@@ -312,6 +371,17 @@ async def send(phone: str, messages: list, allow_repeat_links: bool = False) -> 
     """
     chat_id = phone.replace("wa_", "", 1)
     bubbles = await render_bubbles(messages, phone, allow_repeat_links)
+    clean = []
+    for text in bubbles:
+        reason = service_text_reason(text)
+        if reason:
+            # Лиду не уходит; алерт с куском текста — чтобы найти и починить источник.
+            logger.error("sender: баббл со служебным текстом (%s) НЕ отправлен %s: %r",
+                         reason, phone, text[:300])
+            await escalation.notify_error("sender.guard", f"{reason}: {text[:300]!r}", phone)
+            continue
+        clean.append(text)
+    bubbles = clean
     sent = 0
     for text in bubbles:
         await asyncio.sleep(compute_delay(text))

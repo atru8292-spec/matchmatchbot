@@ -30,7 +30,7 @@ import vision
 import voice
 from config import settings
 from debounce import Debouncer
-from normalize import normalize_wazzup_message
+from normalize import normalize_wazzup_message, parse_echo
 from phones import canonical_phone
 
 # Логи в stdout → journald (systemd). Помечаем время/уровень/модуль.
@@ -782,6 +782,36 @@ async def telegram_webhook(secret: str, request: Request):
     return Response(status_code=200)
 
 
+async def _handle_echo(echo) -> None:
+    """Эхо исходящего с нашего номера. Если это НЕ наше сообщение (бот/CRM через API), а
+    Аня ответила лиду с телефона/из Wazzup — переводим чат в ручной режим: бот молчит,
+    пока в CRM не нажмут «Вернуть боту». Сообщение Ани сохраняем в историю.
+
+    Отличаем по тексту: эхо, совпавшее с нашим исходящим этому номеру за 30 мин, — наше.
+    Медиа без подписи отличить нельзя (Wazzup перезаливает файл) — их не трогаем.
+    """
+    if not echo.text:
+        logger.info("эхо [%s] %s без текста — пропуск (своё/чужое не отличить)",
+                    echo.phone, echo.content_type)
+        return
+    phone = await db.resolve_lead_phone(echo.phone)
+    if sender.was_sent_recently(phone, echo.text) or await db.outbound_text_recent(phone, echo.text):
+        logger.debug("эхо [%s]: наше исходящее — пропуск", phone)
+        return
+    # Ответ человека. Лид мог ещё не существовать (Аня написала первой) — создаём,
+    # иначе его ответ бот принял бы за нового лида.
+    await db.upsert_lead(phone)
+    lead = await db.get_lead_by_phone(phone) or {}
+    if lead.get("mode") != "manual":
+        await db.set_manual(phone)
+        logger.warning("эхо [%s]: Аня ответила лично → ручной режим, бот молчит", phone)
+    await db.insert_message(phone, "outbound", "anna", echo.text,
+                            external_message_id=echo.external_message_id,
+                            meta={"manual": True, "source": "echo",
+                                  "received_at": echo.received_at},
+                            processed=True)
+
+
 async def _handle_incoming(msg) -> None:
     """Обработать одно входящее: normalize → persist → debounce.
 
@@ -790,9 +820,14 @@ async def _handle_incoming(msg) -> None:
     trigger только если сообщение реально вставлено (не дубль Wazzup-ретрая).
     """
     try:
+        echo = parse_echo(msg)
+        if echo is not None:
+            if db.is_ready():
+                await _handle_echo(echo)
+            return
         nm = normalize_wazzup_message(msg)
         if nm is None:
-            return  # дроп (echo/статус/не-whatsapp/пустой/неизвестный тип)
+            return  # дроп (статус/не-whatsapp/пустой/неизвестный тип)
 
         if not db.is_ready():
             logger.warning("Webhook: БД не готова, сообщение %s не сохранено", nm.external_message_id)

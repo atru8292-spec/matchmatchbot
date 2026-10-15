@@ -641,3 +641,39 @@ class TestSendMediaCaption:
         assert len(calls) == 1
         body = calls[0].kwargs["json"]
         assert "text" not in body
+
+
+# ===== Финальная проверка служебного текста перед отправкой (2026-10-15) =====
+
+class TestServiceTextGuard:
+    @pytest.mark.parametrize("text", [
+        "Hola [event_promo]", "Hola [имя]!", "te espero en [dirección, lugar, parking]",
+        '{"messages": ["hola"]}', '"funnel_stage": "pitched"', "Traceback (most recent call last):",
+        "RuntimeError('x')", "None", "error HTTP 500", "funnel_stage pitched", "[course_link]",
+        '["hola"]', "[SI YA SABES de quién habla:] Hola", "[Guía para AI — el lead escribe desde fuera]",
+        "[2] Claro, te cuento",
+    ])
+    def test_service_text_detected(self, text):
+        assert sender.service_text_reason(text) is not None
+
+    @pytest.mark.parametrize("text", [
+        "Hola Carlos! 🤍 ¿cómo estás?", "El evento cuesta $6,000 MXN ~9,000 MXN~",
+        "https://www.rusaencdmx.com/curso", "Te espero a las 8:30 PM en Polanco, CDMX ✨",
+        "Sí, claro (sin problema)", "Mi horario es de 7am a 2pm, hora de Ciudad de México",
+        "Error mío, perdón 😅", "Nos vemos el 14 de octubre de 2026", "",
+    ])
+    def test_clean_text_passes(self, text):
+        assert sender.service_text_reason(text) is None
+
+    async def test_send_drops_service_bubble_and_alerts(self, monkeypatch):
+        monkeypatch.setattr(sender, "render_bubbles", AsyncMock(
+            return_value=["Hola! 🤍", '{"funnel_stage": "x"}', "¿Cómo estás?"]))
+        one = AsyncMock(return_value=True); monkeypatch.setattr(sender, "send_one", one)
+        monkeypatch.setattr(sender.asyncio, "sleep", AsyncMock())
+        monkeypatch.setattr(sender.db, "save_outbound", AsyncMock())
+        alert = AsyncMock(); monkeypatch.setattr(sender.escalation, "notify_error", alert)
+        n = await sender.send("wa_5215512345678", ["x"])
+        assert n == 2
+        sent_texts = [c.args[1] for c in one.await_args_list]
+        assert sent_texts == ["Hola! 🤍", "¿Cómo estás?"]
+        alert.assert_awaited_once()
