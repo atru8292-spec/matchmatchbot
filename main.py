@@ -10,7 +10,7 @@ import dataclasses
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +31,7 @@ import voice
 from config import settings
 from debounce import Debouncer
 from normalize import normalize_wazzup_message
+from phones import canonical_phone
 
 # Логи в stdout → journald (systemd). Помечаем время/уровень/модуль.
 logging.basicConfig(
@@ -69,6 +70,59 @@ async def _process_burst(phone: str) -> None:
         await escalation.notify_error("main._process_burst", repr(e), phone)
 
 
+# Защита от старых входящих: после простоя канала Wazzup может дослать сообщения
+# недельной давности — отвечать на них «сейчас» нельзя (Аня уже ответила лично или
+# человек давно ушёл). Порог в app_settings, 0 = выключено. Bypass-номера не трогаем.
+STALE_INBOUND_KEY = "stale_inbound_hours"
+STALE_INBOUND_DEFAULT_HOURS = 12
+
+
+def _parse_dt(value) -> datetime | None:
+    """ISO-время из Wazzup ('2026-10-15T12:00:00.000Z') или datetime из БД → aware UTC.
+    Нераспознанное → None (вызывающий берёт запасное время)."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _message_time(m: dict) -> datetime | None:
+    """Время сообщения: dateTime от Wazzup (meta.received_at), иначе момент записи в БД."""
+    return _parse_dt((m.get("meta") or {}).get("received_at")) or _parse_dt(m.get("created_at"))
+
+
+async def _stale_inbound_hours() -> float:
+    """Порог «старого» входящего в часах. Нет ключа/мусор → 12, сбой чтения → 12."""
+    try:
+        raw = (await db.get_settings([STALE_INBOUND_KEY])).get(STALE_INBOUND_KEY)
+    except Exception:
+        logger.exception("не прочитала %s — беру %s ч", STALE_INBOUND_KEY, STALE_INBOUND_DEFAULT_HOURS)
+        return float(STALE_INBOUND_DEFAULT_HOURS)
+    try:
+        hours = float(raw) if raw not in (None, "") else float(STALE_INBOUND_DEFAULT_HOURS)
+    except ValueError:
+        return float(STALE_INBOUND_DEFAULT_HOURS)
+    # Отрицательное — опечатка, а не «выключить» (выключает только явный 0).
+    return hours if hours >= 0 else float(STALE_INBOUND_DEFAULT_HOURS)
+
+
+def _split_stale(msgs: list[dict], hours: float, now: datetime) -> tuple[list[dict], list[dict]]:
+    """(свежие, старые). hours<=0 → всё свежее. Без времени — считаем свежим (не теряем)."""
+    if hours <= 0:
+        return msgs, []
+    border = now - timedelta(hours=hours)
+    fresh, stale = [], []
+    for m in msgs:
+        t = _message_time(m)
+        (stale if t is not None and t < border else fresh).append(m)
+    return fresh, stale
+
+
 async def _process_burst_impl(phone: str) -> None:
     """Собрать залп непроцессенных inbound, принять решение (filters.decide) и исполнить.
 
@@ -79,6 +133,25 @@ async def _process_burst_impl(phone: str) -> None:
     if not msgs:
         # уже обработано параллельным флашем — нечего делать
         return
+
+    # bypass = ENV (silent_bypass_phones, требует деплоя) ∪ тестовые номера из мини-CRM
+    # (app_settings, правятся мгновенно без деплоя), всё по канону номера.
+    try:
+        bypass_phones = await db.bypass_phone_set()
+    except Exception:
+        bypass_phones = settings.silent_bypass_set
+
+    # Старые входящие (дослал Wazzup после простоя) — сохраняем, но НЕ отвечаем.
+    # Тестовые bypass-номера правило обходят (иначе мешало бы тестам с подменой времени).
+    if canonical_phone(phone) not in bypass_phones:
+        msgs, stale = _split_stale(msgs, await _stale_inbound_hours(), datetime.now(timezone.utc))
+        if stale:
+            await db.mark_messages_processed([m["id"] for m in stale])
+            oldest = min(t for t in (_message_time(m) for m in stale) if t)
+            logger.warning("старые входящие [%s]: %d сообщ. (самое старое %s) — без ответа бота",
+                           phone, len(stale), oldest.isoformat())
+        if not msgs:
+            return
     content_types = [(m.get("meta") or {}).get("content_type") for m in msgs]
     lead = await db.get_lead_by_phone(phone) or {}
     whitelisted = await db.is_whitelisted(phone)
@@ -103,13 +176,6 @@ async def _process_burst_impl(phone: str) -> None:
         bot_paused = (await db.get_settings(["bot_paused"])).get("bot_paused") == "1"
     except Exception:
         bot_paused = False
-
-    # bypass = ENV (silent_bypass_phones, требует деплоя) ∪ тестовые номера из мини-CRM
-    # (app_settings, правятся мгновенно без деплоя), всё по канону номера.
-    try:
-        bypass_phones = await db.bypass_phone_set()
-    except Exception:
-        bypass_phones = settings.silent_bypass_set
 
     decision = filters.decide(lead, whitelisted, combined, phone,
                               bypass_phones, whitelist_no_alert=wl_no_alert,
@@ -748,6 +814,9 @@ async def _handle_incoming(msg) -> None:
 
         # content_uri в meta — чтобы фото-ветка на флаше могла скачать медиа.
         meta = {"content_type": nm.content_type}
+        # Время сообщения по Wazzup — для защиты от старых входящих после простоя канала.
+        if nm.received_at:
+            meta["received_at"] = nm.received_at
         if nm.media_info and nm.media_info.get("content_uri"):
             meta["content_uri"] = nm.media_info["content_uri"]
         if nm.caption:
