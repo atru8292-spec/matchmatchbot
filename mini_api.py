@@ -506,6 +506,7 @@ async def send_manual_message(phone: str, body: MessageIn, user: dict = Depends(
         lead = await db.get_lead_by_phone(p)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
+        p = lead.get("phone") or p  # лид мог найтись по другой форме номера — пишем по хранимой
         # opt-out: лид просил не писать. Не блокируем Аню жёстко (человек решает), но
         # требуем явного override — фронт показывает предупреждение и переспрашивает.
         if lead.get("do_not_contact") and not body.override:
@@ -1169,6 +1170,7 @@ async def day_of_send(body: DayOfSendIn, user: dict = Depends(require_admin)) ->
             if not lead:
                 failed.append({"phone": phone, "name": phone, "reason": "лид не найден"})
                 continue
+            phone = lead.get("phone") or phone  # хранимая форма номера (wa_52…/wa_521…)
             name = _lead_display_name(lead)
             if lead.get("do_not_contact"):
                 failed.append({"phone": phone, "name": name, "reason": "бот не пишет (заблокирован)"})

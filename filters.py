@@ -127,7 +127,7 @@ _OPTOUT_RE = re.compile(
     r"no\s+me\s+vuelv\w+\s+a\s+(escribir|contactar|molestar)|"
     r"dej[ae]n?\s+de\s+(escribir\w*|molestar\w*|mandar\w*)|"
     r"d[eé]jame\s+(en\s+paz|de\s+escribir\w*)|d[eé]jenme\s+en\s+paz|"
-    r"no\s+me\s+molest(es|en|e\s+m[aá]s|ar)|"
+    r"no\s+me\s+molest(es|en|e\s+m[aá]s|ar)\b|"
     r"(quiero\s+)?(darme|dar)\s+de\s+baja|"
     r"b[oó]rrame|elim[ií]name|borra\s+mi\s+n[uú]mero|"
     r"(qu[ií]tame|s[aá]came)\s+de\s+(tus?|la|las)\s+listas?|"

@@ -1020,6 +1020,7 @@ class TestOptoutAudit20261015:
         "basta de rodeos, dime el precio",
         "stop, espera, ¿cuánto cuesta?",
         "no me escribiste el link",
+        "no me molestaría que me mandes más info",
     ])
     def test_not_optout(self, text):
         assert not filters.is_optout(text)

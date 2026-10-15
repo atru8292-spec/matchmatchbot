@@ -147,6 +147,12 @@ async def _process_burst_impl(phone: str) -> None:
         msgs, stale = _split_stale(msgs, await _stale_inbound_hours(), datetime.now(timezone.utc))
         if stale:
             await db.mark_messages_processed([m["id"] for m in stale])
+            # Просьбу «не пиши» чтим и в старом сообщении: молча ставим do_not_contact
+            # (без ответа лиду), иначе после запуска его догонят/ответят.
+            stale_text = "\n".join((m.get("text") or "") for m in stale)
+            if filters.is_optout(stale_text):
+                await db.block_lead(phone, "opt-out (старое входящее после простоя)")
+                logger.warning("старые входящие [%s]: opt-out → do_not_contact без ответа", phone)
             oldest = min(t for t in (_message_time(m) for m in stale) if t)
             logger.warning("старые входящие [%s]: %d сообщ. (самое старое %s) — без ответа бота",
                            phone, len(stale), oldest.isoformat())
@@ -785,6 +791,9 @@ async def telegram_webhook(secret: str, request: Request):
     return Response(status_code=200)
 
 
+ECHO_MAX_AGE_MIN = 30  # эхо старше — не судим по нему о ручном ответе Ани
+
+
 async def _handle_echo(echo) -> None:
     """Эхо исходящего с нашего номера. Если это НЕ наше сообщение (бот/CRM через API), а
     Аня ответила лиду с телефона/из Wazzup — переводим чат в ручной режим: бот молчит,
@@ -796,6 +805,13 @@ async def _handle_echo(echo) -> None:
     if not echo.text:
         logger.info("эхо [%s] %s без текста — пропуск (своё/чужое не отличить)",
                     echo.phone, echo.content_type)
+        return
+    # Старое эхо (Wazzup дослал после простоя/ретрая): память и 30-мин окно БД его уже не
+    # узнают — без этой проверки наше же давнее сообщение перевело бы живого лида в manual.
+    sent_at = _parse_dt(echo.received_at)
+    if sent_at is not None and sent_at < datetime.now(timezone.utc) - timedelta(minutes=ECHO_MAX_AGE_MIN):
+        logger.info("эхо [%s] старше %d мин (%s) — пропуск", echo.phone, ECHO_MAX_AGE_MIN,
+                    sent_at.isoformat())
         return
     phone = await db.resolve_lead_phone(echo.phone)
     if sender.was_sent_recently(phone, echo.text) or await db.outbound_text_recent(phone, echo.text):

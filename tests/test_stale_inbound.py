@@ -168,3 +168,14 @@ class TestReceivedAtSaved:
             "type": "text", "text": "Hola", "isEcho": False, "status": "inbound",
             "dateTime": "2026-09-20T10:00:00.000Z"})
         assert ins.await_args.kwargs["meta"]["received_at"] == "2026-09-20T10:00:00.000Z"
+
+
+class TestStaleOptout:
+    async def test_stale_optout_blocks_without_reply(self, monkeypatch, burst):
+        mark, gen, send = burst
+        block = AsyncMock(); monkeypatch.setattr(db, "block_lead", block)
+        monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(
+            return_value=[_msg("o", 48, "ya no me escribas por favor")]))
+        await main._process_burst(PHONE)
+        block.assert_awaited_once()
+        gen.assert_not_awaited(); send.assert_not_awaited()

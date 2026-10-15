@@ -5,6 +5,7 @@ db/sender замоканы, сети нет.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -20,7 +21,7 @@ PHONE = "wa_5215512345678"
 def _echo(text="Hola, soy Anna", mid="e1", chat="5215512345678", type_="text"):
     return {"messageId": mid, "chatId": chat, "chatType": "whatsapp", "type": type_,
             "text": text, "isEcho": True, "status": "sent",
-            "dateTime": "2026-10-15T12:00:00.000Z"}
+            "dateTime": datetime.now(timezone.utc).isoformat()}
 
 
 class TestParseEcho:
@@ -145,3 +146,19 @@ class TestSendOneRemembers:
         monkeypatch.setattr(sender.escalation, "notify_error", AsyncMock())
         assert await sender.send_one("5215512345678", "texto x") is False
         assert sender.was_sent_recently(PHONE, "texto x")
+
+
+class TestOldEcho:
+    async def test_old_echo_ignored(self, echo_db):
+        """Эхо старше 30 мин (Wazzup дослал после простоя) — режим лида не трогаем."""
+        set_manual, ins = echo_db
+        msg = _echo(); msg["dateTime"] = "2026-09-20T10:00:00.000Z"
+        await main._handle_incoming(msg)
+        set_manual.assert_not_awaited(); ins.assert_not_awaited()
+
+    async def test_fresh_echo_still_handled(self, echo_db):
+        from datetime import datetime, timezone
+        set_manual, ins = echo_db
+        msg = _echo(); msg["dateTime"] = datetime.now(timezone.utc).isoformat()
+        await main._handle_incoming(msg)
+        set_manual.assert_awaited_once()
