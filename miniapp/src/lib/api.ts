@@ -203,6 +203,18 @@ export async function setBotPause(paused: boolean): Promise<{ botPaused: boolean
   return apiSend<{ botPaused: boolean }>("/bot/pause", "POST", { paused });
 }
 
+// ===== Авто-рассылки планировщика (догоны, напоминания) =====
+export async function fetchSchedulerEnabled(): Promise<boolean> {
+  if (USE_MOCKS) return false;
+  const m = await apiFetch<{ schedulerEnabled?: boolean }>("/meta");
+  return !!m.schedulerEnabled;
+}
+
+export async function setSchedulerEnabled(enabled: boolean): Promise<{ schedulerEnabled: boolean }> {
+  if (USE_MOCKS) return { schedulerEnabled: enabled };
+  return apiSend<{ schedulerEnabled: boolean }>("/scheduler", "POST", { enabled });
+}
+
 // ===== Расписание звонков (Аня/Мила/Рита) =====
 export async function fetchAssignees(): Promise<AssigneesResponse> {
   return apiFetch<AssigneesResponse>("/assignees");

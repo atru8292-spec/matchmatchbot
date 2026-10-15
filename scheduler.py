@@ -37,6 +37,7 @@ EVENT_REMINDER_BATCH = 30 # получателей напоминаний за �
 COLD_LEAD_PAUSE = (30.0, 90.0)   # сек между холодными догонами (#33/#36/#38)
 WARM_LEAD_PAUSE = (15.0, 40.0)   # сек между тёплыми напоминаниями (ивент/звонок/check-in)
 COLD_COUNTER = "cold_followups"  # ключ суточного счётчика холодных догонов (app_settings)
+SCHEDULER_ENABLED_KEY = "scheduler_enabled"  # тумблер авто-рассылок в CRM (app_settings)
 
 
 async def _lead_pause(bounds: tuple[float, float]) -> None:
@@ -102,7 +103,8 @@ async def run_followups() -> int:
         return 0
     leads = await db.due_followups(list(funnel.NO_FOLLOWUP_STAGES), funnel.MAX_FOLLOWUPS,
                                    settings.followup_quiet_hours,
-                                   limit=min(FOLLOWUP_BATCH, remaining))
+                                   limit=min(FOLLOWUP_BATCH, remaining),
+                                   max_silence_days=settings.followup_max_silence_days)
     done = 0
     for ld in leads:
         if done >= remaining:
@@ -162,6 +164,10 @@ async def run_event_reminders(today=None) -> int:
         return 0
 
     today = today or datetime.now(timezone.utc).date()
+    # Прошедший ивент (T+2 и дальше) — ни напоминаний, ни FOMO-медиа (ниже ни одна ветка
+    # не срабатывает; явная проверка — чтобы правка веток случайно это не сломала).
+    if today > event_date + timedelta(days=1):
+        return 0
     if today == event_date - timedelta(days=1):
         # T-1: разогрев + FOMO-фото атмосферы прошлых ивентов.
         return await _send_event_batch("remind_1d", REMIND_1D_SCENARIO, s, date_str,
@@ -170,12 +176,15 @@ async def run_event_reminders(today=None) -> int:
         return await _send_event_daytime(s, date_str)
     if today == event_date + timedelta(days=1):
         # Утренний check-in на следующий день после ивента (сценарий 23) — без медиа (ивент прошёл).
-        return await _send_event_batch("checkin_morning", CHECKIN_MORNING_SCENARIO, s, date_str)
+        # Только оплатившим/пришедшим: «cómo te fue ayer?» тому, кто не был, звучит нелепо.
+        return await _send_event_batch("checkin_morning", CHECKIN_MORNING_SCENARIO, s, date_str,
+                                       only_stages=sorted(PAID_STAGES))
     return 0
 
 
 async def _send_event_batch(kind: str, scenario_id: int, settings_map: dict,
-                            date_str: str, attach_photos: bool = False) -> int:
+                            date_str: str, attach_photos: bool = False,
+                            only_stages: list[str] | None = None) -> int:
     tmpl = await db.get_scenario_template(scenario_id)
     if not tmpl:
         logger.error("event reminder: нет template сценария %s", scenario_id)
@@ -188,7 +197,8 @@ async def _send_event_batch(kind: str, scenario_id: int, settings_map: dict,
     # exclude_phones: тестовые/bypass-номера не должны попадать в реальную рассылку.
     recipients = await db.event_recipients(list(funnel.EVENT_REMINDER_EXCLUDE_STAGES),
                                            kind, date_str, limit=EVENT_REMINDER_BATCH,
-                                           exclude_phones=await db.bypass_phone_set())
+                                           exclude_phones=await db.bypass_phone_set(),
+                                           only_stages=only_stages)
     sent = 0
     for ld in recipients:
         phone = ld["phone"]
@@ -316,11 +326,27 @@ async def _bot_paused() -> bool:
         return False
 
 
+async def _scheduler_enabled() -> bool:
+    """Тумблер «Авто-рассылки» в CRM (app_settings.scheduler_enabled). По умолчанию ВЫКЛ:
+    нет ключа или сбой чтения → False (безопасно: лучше не отправить, чем разослать залп).
+    Ответы на входящие от него не зависят — только проактивные отправки планировщика."""
+    try:
+        return (await db.get_settings([SCHEDULER_ENABLED_KEY])).get(SCHEDULER_ENABLED_KEY) == "1"
+    except Exception:
+        logger.exception("scheduler: не прочитала scheduler_enabled — считаю выключенным")
+        return False
+
+
 async def tick() -> None:
     """Один проход планировщика. Сбой любой части → лог + technical-алерт, не роняет цикл."""
     # Глобальная пауза (тех. режим): не шлём НИЧЕГО проактивно (догоны/напоминания) всем лидам.
     if await _bot_paused():
         logger.info("scheduler: бот на паузе (тех. режим) — тик пропущен")
+        return
+    # Отдельный тумблер авто-рассылок: догоны #32/#33/#36/#38/#59, напоминания об ивенте
+    # (+FOMO-медиа), напоминания о звонке #49. Пока 0 — ничего не отправляем.
+    if not await _scheduler_enabled():
+        logger.info("scheduler: авто-рассылки выключены (scheduler_enabled≠1) — тик пропущен")
         return
     try:
         await run_followups()

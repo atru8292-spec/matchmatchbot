@@ -283,6 +283,12 @@ class TestRunEventReminders:
 # ===== tick =====
 
 class TestTick:
+    @pytest.fixture(autouse=True)
+    def _enabled(self, monkeypatch):
+        """Пауза снята, авто-рассылки включены — проверяем саму логику тика."""
+        monkeypatch.setattr(scheduler, "_bot_paused", AsyncMock(return_value=False))
+        monkeypatch.setattr(scheduler, "_scheduler_enabled", AsyncMock(return_value=True))
+
     async def test_tick_runs_all(self, monkeypatch):
         f = AsyncMock(); e = AsyncMock(); v = AsyncMock()
         monkeypatch.setattr(scheduler, "run_followups", f)
@@ -437,9 +443,101 @@ class TestTickPause:
         f.assert_not_awaited(); e.assert_not_awaited(); v.assert_not_awaited()
 
     async def test_not_paused_runs_tick(self, monkeypatch):
-        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"bot_paused": "0"}))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(
+            return_value={"bot_paused": "0", "scheduler_enabled": "1"}))
         f = AsyncMock(); monkeypatch.setattr(scheduler, "run_followups", f)
         e = AsyncMock(); monkeypatch.setattr(scheduler, "run_event_reminders", e)
         v = AsyncMock(); monkeypatch.setattr(scheduler, "run_videocall_reminders", v)
         await scheduler.tick()
         f.assert_awaited_once(); e.assert_awaited_once(); v.assert_awaited_once()
+
+
+# ===== Тумблер авто-рассылок scheduler_enabled (2026-10-15) =====
+
+class TestSchedulerEnabledFlag:
+    """Пока scheduler_enabled≠1 — планировщик не шлёт НИЧЕГО (даже без паузы)."""
+
+    def _mocks(self, monkeypatch):
+        f = AsyncMock(); e = AsyncMock(); v = AsyncMock()
+        monkeypatch.setattr(scheduler, "run_followups", f)
+        monkeypatch.setattr(scheduler, "run_event_reminders", e)
+        monkeypatch.setattr(scheduler, "run_videocall_reminders", v)
+        return f, e, v
+
+    @pytest.mark.parametrize("value", [None, "0", "", "true", "yes"])
+    async def test_disabled_skips_everything(self, monkeypatch, value):
+        settings_map = {"bot_paused": "0"}
+        if value is not None:
+            settings_map["scheduler_enabled"] = value
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=settings_map))
+        f, e, v = self._mocks(monkeypatch)
+        await scheduler.tick()
+        f.assert_not_awaited(); e.assert_not_awaited(); v.assert_not_awaited()
+
+    async def test_read_failure_means_disabled(self, monkeypatch):
+        """Сбой чтения флага → считаем выключенным (лучше не отправить, чем залп)."""
+        monkeypatch.setattr(scheduler, "_bot_paused", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(side_effect=RuntimeError("db")))
+        f, e, v = self._mocks(monkeypatch)
+        await scheduler.tick()
+        f.assert_not_awaited(); e.assert_not_awaited(); v.assert_not_awaited()
+
+    async def test_pause_wins_over_enabled(self, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(
+            return_value={"bot_paused": "1", "scheduler_enabled": "1"}))
+        f, e, v = self._mocks(monkeypatch)
+        await scheduler.tick()
+        f.assert_not_awaited(); e.assert_not_awaited(); v.assert_not_awaited()
+
+
+class TestFollowupSilenceGuard:
+    async def test_max_silence_days_passed_to_query(self, monkeypatch):
+        """Защита от залпа: в выборку догонов уходит лимит давности last_inbound_at."""
+        q = AsyncMock(return_value=[])
+        monkeypatch.setattr(db, "due_followups", q)
+        await scheduler.run_followups()
+        assert q.call_args.kwargs["max_silence_days"] == scheduler.settings.followup_max_silence_days
+        assert scheduler.settings.followup_max_silence_days >= 17  # лестница 2+5+10 дн. влезает
+
+
+class TestPastEventNoReminders:
+    """Прошедший ивент / event_active=0 → ни напоминаний, ни FOMO-медиа."""
+
+    def _spy(self, monkeypatch):
+        send = AsyncMock(return_value=1); photos = AsyncMock()
+        recips = AsyncMock(return_value=[{"phone": "wa_1", "funnel_stage": "pitched"}])
+        monkeypatch.setattr(sender, "send", send)
+        monkeypatch.setattr(scheduler.actions, "send_event_photos", photos)
+        monkeypatch.setattr(db, "event_recipients", recips)
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola"))
+        monkeypatch.setattr(db, "event_reminder_sent", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
+        monkeypatch.setattr(db, "bypass_phone_set", AsyncMock(return_value=frozenset()))
+        return send, photos, recips
+
+    @pytest.mark.parametrize("days_after", [2, 3, 30])
+    async def test_past_event_sends_nothing(self, monkeypatch, days_after):
+        send, photos, recips = self._spy(monkeypatch)
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "event_active": "1", "event_date": "2026-10-14"}))
+        n = await scheduler.run_event_reminders(today=date(2026, 10, 14) + timedelta(days=days_after))
+        assert n == 0
+        send.assert_not_awaited(); photos.assert_not_awaited(); recips.assert_not_awaited()
+
+    @pytest.mark.parametrize("offset", [-1, 0, 1])
+    async def test_inactive_event_sends_nothing(self, monkeypatch, offset):
+        send, photos, recips = self._spy(monkeypatch)
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "event_active": "0", "event_date": "2026-10-14"}))
+        n = await scheduler.run_event_reminders(today=date(2026, 10, 14) + timedelta(days=offset))
+        assert n == 0
+        send.assert_not_awaited(); photos.assert_not_awaited(); recips.assert_not_awaited()
+
+    async def test_checkin_only_paid(self, monkeypatch):
+        """T+1 check-in «cómo te fue ayer?» — только оплатившим/пришедшим, без медиа."""
+        send, photos, recips = self._spy(monkeypatch)
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "event_active": "1", "event_date": "2026-10-14"}))
+        await scheduler.run_event_reminders(today=date(2026, 10, 15))
+        assert sorted(recips.call_args.kwargs["only_stages"]) == sorted(scheduler.PAID_STAGES)
+        photos.assert_not_awaited()

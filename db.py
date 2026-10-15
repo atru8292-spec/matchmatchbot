@@ -385,13 +385,17 @@ async def set_setting(key: str, value: str) -> None:
 
 
 async def due_followups(no_followup_stages: list[str], max_followups: int,
-                        quiet_hours: int, limit: int = 50) -> list[dict]:
+                        quiet_hours: int, limit: int = 50,
+                        max_silence_days: int = 21) -> list[dict]:
     """Лиды, которым пора фоллоу-ап: next_followup_at<=now, auto, не do_not_contact,
     стадия не в no_followup_stages, попыток < max, НЕ в whitelist. Свежие сверху по сроку.
 
     Страховка от нуджа активного лида: НЕ шлём, если last_inbound_at свежее «тихого окна»
     (лид писал за последние quiet_hours часов — значит не молчун). Двойная защита к сбросу
-    таймера на входящем (main.reset_followup_timer)."""
+    таймера на входящем (main.reset_followup_timer).
+
+    Защита от залпа: только лиды, писавшие за последние max_silence_days дней (молчун
+    дольше / ни разу не писавший — не догоняем вообще)."""
     try:
         rows = await _get_pool().fetch(
             "SELECT l.phone, l.funnel_stage, COALESCE(l.followup_sent_count, 0) AS followup_sent_count, "
@@ -404,9 +408,10 @@ async def due_followups(no_followup_stages: list[str], max_followups: int,
             "  AND l.funnel_stage <> ALL($1::text[]) "
             "  AND COALESCE(l.followup_sent_count, 0) < $2 "
             "  AND (l.last_inbound_at IS NULL OR l.last_inbound_at <= now() - make_interval(hours => $3)) "
+            "  AND l.last_inbound_at >= now() - make_interval(days => $5) "
             "  AND w.phone IS NULL "
             "ORDER BY l.next_followup_at ASC LIMIT $4",
-            no_followup_stages, max_followups, quiet_hours, limit,
+            no_followup_stages, max_followups, quiet_hours, limit, max_silence_days,
         )
     except Exception:
         logger.exception("due_followups failed")
@@ -510,7 +515,8 @@ async def mark_followup_sent(phone: str, next_followup_at) -> None:
 
 async def event_recipients(exclude_stages: list[str], kind: str, event_date: str,
                            limit: int = 30,
-                           exclude_phones: frozenset[str] = frozenset()) -> list[dict]:
+                           exclude_phones: frozenset[str] = frozenset(),
+                           only_stages: list[str] | None = None) -> list[dict]:
     """Кому слать напоминания об ивенте: selected_service='event', mode='auto',
     не do_not_contact, стадия не в exclude_stages, НЕ в whitelist (клиенты агентства
     исключаются полностью — их ведёт Аня напрямую), и это напоминание (kind+event_date)
@@ -530,7 +536,8 @@ async def event_recipients(exclude_stages: list[str], kind: str, event_date: str
     ORDER BY для детерминированности порядка между тиками.
     mode='auto' — не пишем тем, кого Аня ведёт вручную (/takeover). funnel_stage —
     для выбора шаблона в день ивента (оплатившие событие/члены → без ссылки, остальные
-    → со ссылкой)."""
+    → со ссылкой).
+    only_stages — если задан, только эти стадии (check-in после ивента — только оплатившим)."""
     try:
         rows = await _get_pool().fetch(
             "SELECT l.phone, l.whatsapp_name, l.name, l.funnel_stage "
@@ -543,10 +550,12 @@ async def event_recipients(exclude_stages: list[str], kind: str, event_date: str
             "  AND NOT EXISTS (SELECT 1 FROM events e WHERE e.lead_phone = l.phone "
             "                  AND e.event_type = $2 AND e.meta->>'event_date' = $3) "
             f"  AND {sql_canonical('l.phone')} <> ALL($5::text[]) "
+            "  AND ($6::text[] IS NULL OR l.funnel_stage = ANY($6::text[])) "
             "ORDER BY l.created_at "
             "LIMIT $4",
             exclude_stages, kind, event_date, limit,
             [c for c in (canonical_phone(p) for p in exclude_phones) if c],
+            list(only_stages) if only_stages else None,
         )
     except Exception:
         logger.exception("event_recipients failed: kind=%s event_date=%s", kind, event_date)

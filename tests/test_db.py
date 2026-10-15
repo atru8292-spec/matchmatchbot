@@ -1500,7 +1500,8 @@ class TestDueFollowups:
         assert "w.phone IS NULL" in sql          # исключение whitelist
         # страховка: не слать активному лиду (last_inbound_at свежее тихого окна)
         assert "last_inbound_at" in sql
-        assert params == [["lost", "rejected"], 3, 24, 50]
+        assert "make_interval(days => $5)" in sql  # защита от залпа: давние молчуны не догоняются
+        assert params == [["lost", "rejected"], 3, 24, 50, 21]
 
     async def test_returns_dicts(self, pool):
         pool.fetch.return_value = [{"phone": "wa_1", "funnel_stage": "qualified",
@@ -1529,7 +1530,16 @@ class TestEventRecipients:
         assert "ORDER BY" in sql              # детерминированный порядок между тиками
         assert "NOT EXISTS" in sql            # дедуп уже отправленных — в самом SQL
         assert "<> ALL($5" in sql             # тестовые/bypass-номера исключены (по канону)
-        assert params == [["lost", "rejected"], "remind_1d", "2026-08-15", 30, []]
+        assert params == [["lost", "rejected"], "remind_1d", "2026-08-15", 30, [], None]
+
+    async def test_only_stages_filter(self, pool):
+        """only_stages (check-in после ивента) → фильтр по стадиям в SQL."""
+        pool.fetch.return_value = []
+        await db.event_recipients([], "checkin_morning", "2026-10-14",
+                                  only_stages=["client_agency", "event_attended"])
+        sql, *params = pool.fetch.call_args.args
+        assert "ANY($6" in sql
+        assert params[-1] == ["client_agency", "event_attended"]
 
     async def test_exclude_phones_passed_through(self, pool):
         """Тестовые номера (bypass) не должны попадать в реальную рассылку."""
@@ -1537,7 +1547,7 @@ class TestEventRecipients:
         await db.event_recipients([], "remind_day", "2026-08-15", limit=10,
                                   exclude_phones=frozenset({"wa_1", "wa_2"}))
         params = pool.fetch.call_args.args[1:]
-        assert sorted(params[-1]) == ["wa_1", "wa_2"]
+        assert sorted(params[4]) == ["wa_1", "wa_2"]
 
     async def test_dedup_and_order_present(self, pool):
         """Регресс 2026-08-06: без ORDER BY+NOT EXISTS LIMIT возвращал одни и те же

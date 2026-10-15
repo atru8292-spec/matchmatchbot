@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarHeart, MapPin, CreditCard, GraduationCap, Image as ImageIcon, Check, CloudOff, UploadCloud, Loader2, X, Tag, Power } from "lucide-react";
+import { CalendarHeart, MapPin, CreditCard, GraduationCap, Image as ImageIcon, Check, CloudOff, UploadCloud, Loader2, X, Tag, Power, Send } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/Switch";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/cn";
-import { fetchEvent, saveEvent, uploadInvitation, fetchBotPaused, setBotPause } from "@/lib/api";
+import { fetchEvent, saveEvent, uploadInvitation, fetchBotPaused, setBotPause, fetchSchedulerEnabled, setSchedulerEnabled } from "@/lib/api";
 import type { EventSettings } from "@/lib/types";
 import { DayOfReminder } from "./DayOfReminder";
 import { EventMediaSection } from "./EventMediaSection";
@@ -45,7 +45,8 @@ export function EventScreen() {
 }
 
 // Глобальная пауза бота (тех. режим): вкл → бот молчит всем, кроме тестовых номеров.
-// Переключается мгновенно (свой mutation, без «Сохранить» формы ивента).
+// Ниже — авто-рассылки планировщика (догоны/напоминания), отдельный тумблер.
+// Переключаются мгновенно (свой mutation, без «Сохранить» формы ивента).
 function BotPauseCard() {
   const qc = useQueryClient();
   const { data: paused } = useQuery({ queryKey: ["botPaused"], queryFn: fetchBotPaused });
@@ -53,15 +54,32 @@ function BotPauseCard() {
     mutationFn: (v: boolean) => setBotPause(v),
     onSuccess: (res) => qc.setQueryData(["botPaused"], res.botPaused),
   });
+  const { data: schedOn } = useQuery({ queryKey: ["schedulerEnabled"], queryFn: fetchSchedulerEnabled });
+  const sm = useMutation({
+    mutationFn: (v: boolean) => setSchedulerEnabled(v),
+    onSuccess: (res) => qc.setQueryData(["schedulerEnabled"], res.schedulerEnabled),
+  });
+  const onSched = (v: boolean) => {
+    // Включение = бот сам начнёт писать лидам (догоны, напоминания) — переспрашиваем.
+    if (v && !window.confirm("Включить авто-рассылки? Бот сам начнёт отправлять догоны и напоминания лидам.")) return;
+    sm.mutate(v);
+  };
   return (
     <div className="px-4 pt-3">
-      <Card className="p-4">
+      <Card className="space-y-4 p-4">
         <SwitchRow
           icon={<Power size={18} />}
           label="Бот на паузе (тех. режим)"
           hint="Вкл — бот молчит всем лидам, кроме тестовых номеров. Для правок и подключения WhatsApp."
           checked={!!paused}
           onChange={(v) => m.mutate(v)}
+        />
+        <SwitchRow
+          icon={<Send size={18} />}
+          label="Авто-рассылки"
+          hint="Вкл — бот сам пишет лидам: догоны молчунам, напоминания об ивенте и звонке. На ответы на входящие не влияет. При паузе не работают."
+          checked={!!schedOn}
+          onChange={onSched}
         />
       </Card>
     </div>

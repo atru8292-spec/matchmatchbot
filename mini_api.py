@@ -79,18 +79,24 @@ async def me(user: dict = Depends(require_admin)) -> dict:
 
 @router.get("/meta")
 async def meta(_: dict = Depends(require_admin)) -> dict:
-    """Справочники для фильтров фронта: стадии воронки (код+название) + глобальная пауза бота."""
+    """Справочники для фильтров фронта: стадии воронки (код+название) + глобальная пауза бота
+    + тумблер авто-рассылок планировщика."""
     paused = False
+    scheduler_on = False
     if db.is_ready():
         try:
-            paused = (await db.get_settings(["bot_paused"])).get("bot_paused") == "1"
+            s = await db.get_settings(["bot_paused", "scheduler_enabled"])
+            paused = s.get("bot_paused") == "1"
+            scheduler_on = s.get("scheduler_enabled") == "1"
         except Exception:
             paused = False
+            scheduler_on = False
     return {
         "stages": [{"code": code, "label": label}
                    for code, label in funnel.FUNNEL_STAGES.items()],
         "activeStages": list(funnel.ACTIVE_STAGES),
         "botPaused": paused,
+        "schedulerEnabled": scheduler_on,
     }
 
 
@@ -108,6 +114,24 @@ async def set_bot_pause(body: BotPauseIn, _: dict = Depends(require_admin)) -> d
     except Exception as e:
         await _alert_500("set_bot_pause", e)
     return {"botPaused": body.paused}
+
+
+class SchedulerIn(BaseModel):
+    enabled: bool
+
+
+@router.post("/scheduler")
+async def set_scheduler(body: SchedulerIn, user: dict = Depends(require_admin)) -> dict:
+    """Тумблер авто-рассылок (догоны, напоминания об ивенте и звонке). Ответы на входящие
+    от него не зависят. Применяется со следующего тика планировщика, без рестарта."""
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database not connected")
+    try:
+        await db.set_setting("scheduler_enabled", "1" if body.enabled else "0")
+        logger.warning("scheduler_enabled := %s (by %s)", body.enabled, _actor(user))
+    except Exception as e:
+        await _alert_500("set_scheduler", e)
+    return {"schedulerEnabled": body.enabled}
 
 
 @router.get("/leads")

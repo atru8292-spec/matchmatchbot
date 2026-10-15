@@ -163,6 +163,28 @@ class TestAuxEndpoints:
         assert r.status_code == 200 and r.json()["botPaused"] is False
         setter.assert_awaited_once_with("bot_paused", "0")
 
+    def test_scheduler_on(self, client, monkeypatch):
+        setter = AsyncMock(); monkeypatch.setattr(db, "set_setting", setter)
+        r = client.post("/api/mini/scheduler", json={"enabled": True})
+        assert r.status_code == 200 and r.json()["schedulerEnabled"] is True
+        setter.assert_awaited_once_with("scheduler_enabled", "1")
+
+    def test_scheduler_off(self, client, monkeypatch):
+        setter = AsyncMock(); monkeypatch.setattr(db, "set_setting", setter)
+        r = client.post("/api/mini/scheduler", json={"enabled": False})
+        assert r.status_code == 200 and r.json()["schedulerEnabled"] is False
+        setter.assert_awaited_once_with("scheduler_enabled", "0")
+
+    def test_meta_scheduler_default_off(self, client, monkeypatch):
+        """Нет ключа scheduler_enabled → в CRM тумблер выключен."""
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"bot_paused": "1"}))
+        assert client.get("/api/mini/meta").json()["schedulerEnabled"] is False
+
+    def test_meta_scheduler_on(self, client, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(
+            return_value={"bot_paused": "0", "scheduler_enabled": "1"}))
+        assert client.get("/api/mini/meta").json()["schedulerEnabled"] is True
+
 
 class TestAuthEnforced:
     """Без override — реальная require_admin должна отклонять анонима."""
