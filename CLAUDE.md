@@ -74,7 +74,10 @@ AI-бот "Anna" отвечает на входящие WhatsApp-лиды аге
    один раз ломались: повтор вопросов, ложные подтверждения, escort/aggression
    false-positives, лестница цена→ивент). Юнит-тесты (pytest) мокают AI почти
    везде — они не ловят регрессии в самом промпте, только в коде
-6. У меня нет SSH на прод-сервер — деплой руками пользователя (см. ниже).
+6. Прод с 2026-10-16: `root@2.26.71.254` (2-26-71-254.sslip.io), SSH по ключу пользователя
+   (вход по паролю выключен). Старый 64.188.119.94 удалён хостером — туда НЕ ходить. Если SSH
+   просит пароль или пишет о смене ключа хоста — остановиться и сказать пользователю. Runbook:
+   `deploy/DEPLOY.md`. Серверный `.env` НЕ перезаливать локальным (секреты вебхуков другие).
    После деплоя ПРОВЕРЬ, что реально накатилось (`git log -1` на сервере =
    `git log -1` локально) — не полагайся на то, что деплой был выполнен, если
    не подтверждено явно
@@ -108,11 +111,11 @@ pytest -v
 # smoke-test (реальный AI, реальные $ — гонять перед ручным тестом Ани/Милы)
 venv/bin/python -m scripts.smoke_test
 
-# деплой (пользователь руками, у Claude нет SSH)
-ssh root@64.188.119.94 "cd /opt/matchmatch-bot && git pull --ff-only origin main && systemctl restart matchmatch-bot"
+# деплой (если менялся miniapp/ — ещё `(cd miniapp && npm ci && npm run build)`)
+ssh root@2.26.71.254 "cd /opt/matchmatch-bot && git pull --ff-only origin main && venv/bin/pip install -q -r requirements.txt && systemctl restart matchmatch-bot"
 
 # проверка что реально задеплоилось
-ssh root@64.188.119.94 "git -C /opt/matchmatch-bot log -1 --oneline"
+ssh root@2.26.71.254 "git -C /opt/matchmatch-bot log -1 --oneline"
 
 journalctl -u matchmatch-bot -f   # логи (на сервере)
 ```
