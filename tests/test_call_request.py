@@ -296,3 +296,90 @@ class TestAlertText:
         monkeypatch.setattr(escalation, "_send_business_alert", sent)
         await escalation.notify_call_request({"phone": PHONE}, "mejor llámame")
         assert "5215512345678" in sent.await_args.args[0]
+
+
+# ===== Отказ сразу от звонков и переписки = opt-out (2026-10-16) =====
+
+CALL_AND_TEXT_OPTOUT = [
+    "no me llames ni me escribas",
+    "No me llames ni me escribas más",
+    "ni me llames ni me escribas",
+    "no me escribas ni me llames",
+    "no me llames ni escribas",
+    "no me llames, ni me escribas",
+    "no me marques ni me mandes mensajes",
+    "don't call or text me",
+    "Don't call me or text me",
+    "do not call or message me",
+    "don't text or call me",
+    "no more calls or messages",
+    "No more messages or calls please",
+]
+
+# Не opt-out и не просьба позвонить — идут дальше по decide.
+NOT_OPTOUT = [
+    "no me molestaría que me mandes más info",
+    "no me molestaría que me llames",
+    "llámame Juan",
+    "escríbeme cuando puedas",
+    "no me llamaste ni me escribiste el link",  # жалоба в прошедшем, не императив
+    "no me llames, mejor escríbeme",            # просит писать, а не прекратить контакт
+    "don't call me and text me instead",        # «and» — одно вместо другого, не отказ
+    "don't text and call me",
+    "no more calls and messages",
+]
+
+
+class TestCallAndTextOptout:
+    @pytest.mark.parametrize("text", CALL_AND_TEXT_OPTOUT)
+    def test_is_optout(self, text):
+        assert filters.is_optout(text), text
+        assert not filters.is_call_request(text), text
+
+    @pytest.mark.parametrize("text", CALL_AND_TEXT_OPTOUT)
+    def test_decide_optout(self, text):
+        d = filters.decide({}, False, text, PHONE)
+        assert d.action == "optout" and d.alert_manager
+
+    @pytest.mark.parametrize("text", NOT_OPTOUT)
+    def test_false_positives(self, text):
+        assert not filters.is_optout(text), text
+        assert not filters.is_call_request(text), text
+        assert filters.decide({}, False, text, PHONE).action not in ("optout", "call_request")
+
+    @pytest.mark.parametrize("text", [
+        "no me llames al trabajo, mejor llámame al celular",
+        "no me llames ni me escribas por aquí, mejor llámame al celular",
+        "no me escribas, mejor llámame",
+    ])
+    def test_explicit_call_still_wins(self, text):
+        assert filters.decide({}, False, text, PHONE).action == "call_request"
+
+    @pytest.mark.parametrize("no_alert", [True, False])
+    def test_whitelist_silent(self, no_alert):
+        d = filters.decide({}, True, "no me llames ni me escribas", PHONE,
+                           whitelist_no_alert=no_alert)
+        assert d.action == "silent_whitelist"
+        assert d.alert_manager is (not no_alert)
+
+    def test_on_pause_quiet_optout(self):
+        d = filters.decide({}, False, "no me llames ni me escribas", PHONE, bot_paused=True)
+        assert d.action == "optout" and d.quiet
+
+    async def test_burst_blocks_without_call_alert(self, monkeypatch, burst):
+        monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(
+            return_value=[_msg("c", "no me llames ni me escribas más")]))
+        await main._process_burst(PHONE)
+        burst["block_lead"].assert_awaited_once()   # do_not_contact
+        burst["optout_alert"].assert_awaited_once()
+        burst["call_alert"].assert_not_awaited()
+        burst["set_manual"].assert_not_awaited()
+        burst["gen"].assert_not_awaited()
+
+    async def test_burst_whitelist_no_block(self, monkeypatch, burst):
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=True))
+        monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(
+            return_value=[_msg("c", "no me llames ni me escribas")]))
+        await main._process_burst(PHONE)
+        for k in ("block_lead", "send", "call_alert", "optout_alert", "vip_alert", "gen"):
+            burst[k].assert_not_awaited()

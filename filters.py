@@ -136,10 +136,16 @@ _OPTOUT_RE = re.compile(
     r"no\s+me\s+manden?\s+m[aá]s\s+mensajes?|"
     r"no\s+quiero\s+que\s+me\s+(escribas|escriban|contactes|contacten|manden)|"
     r"ya\s+no\s+quiero\s+(recibir\s+)?(m[aá]s\s+)?mensajes|"
+    # 2026-10-16: отказ сразу от звонков и переписки («no me llames ni me escribas»).
+    # Только императив llames/llamen/marques — жалоба «no me llamaste ni me escribiste» не opt-out.
+    r"\b(no|ni)\s+me\s+(llames|llamen|marques),?\s+ni\s+(me\s+)?(escribas|escriban|contactes|contacten|mandes|manden)\b|"
     r"^\s*(stop|basta|ya\s+basta|unsubscribe)\s*[.!]*\s*$|"
     # английские (лид-англоговорящий молчит по is_english, но opt-out чтим всегда)
     r"\bunsubscribe\b|don'?t\s+(text|message|contact)\s+me|stop\s+(texting|messaging|contacting)\s+me|"
     r"leave\s+me\s+alone|remove\s+me\s+from|"
+    # Только or/nor: «don't call me and text me instead» — просьба писать, не отказ от всего.
+    r"\b(don'?t|do\s+not)\s+(call|text|message)\s+(me\s+)?(or|nor)\s+(call|text|message)\s+me\b|"
+    r"\bno\s+more\s+(calls?|messages?|texts?)\s+(or|nor)\s+(calls?|messages?|texts?)\b|"
     r"не\s+пиши\w*\s+мне|не\s+пишите\s+(мне|больше)|отпиш\w+|отписаться|"
     r"удалите\s+мой\s+номер|хватит\s+писать|не\s+беспоко\w+",
     re.IGNORECASE,
@@ -168,9 +174,14 @@ _CALL_VERB_RE = re.compile(
     r"\bll[aá]m(ame|eme|enme)\b|\bm[aá]rcame\b|\bh[aá]blame\s+por\s+tel[eé]fono\b|\bcall\s+me\b",
     re.IGNORECASE,
 )
-# Отказ от звонка — тогда это не просьба позвонить («no me llames ni me escribas» = opt-out).
+# Отказ от звонка отменяет только связку «голый глагол + opt-out» в is_call_request.
+# «no me llames, ya no me escribas» и «no me llames ni me escribas» — не просьба позвонить,
+# их ловит _OPTOUT_RE (do_not_contact). Явная форма из _CALL_REQUEST_RE сильнее отрицания:
+# «no me llames al trabajo, mejor llámame al celular» — просьба позвонить.
+# Само по себе «no me llames» без отказа от переписки — не opt-out, идёт дальше по decide.
 _CALL_NEGATED_RE = re.compile(
-    r"\bno\s+me\s+(llam(es|e|en)|marques|hables\s+por\s+tel[eé]fono)\b|\b(don'?t|do\s+not)\s+call\s+me\b",
+    r"\bno\s+me\s+(llam(es|e|en)|marques|hables\s+por\s+tel[eé]fono)\b|\b(don'?t|do\s+not)\s+call\s+me\b|"
+    r"\b(don'?t|do\s+not)\s+(text|message)\s+(me\s+)?(or|nor)\s+call\s+me\b",  # «don't text or call me»
     re.IGNORECASE,
 )
 
