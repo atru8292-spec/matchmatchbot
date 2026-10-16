@@ -1,0 +1,6 @@
+[Unit]
+Description=MatchMatch bot health check (alert to Telegram tech chat)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/matchmatch-bot/deploy/healthcheck.sh

@@ -16,9 +16,9 @@
 
 ## Вебхук / деплой
 > Артефакты и пошаговый runbook: **`deploy/`** (DEPLOY.md, matchmatch-bot.service, nginx-matchmatch.conf).
-> Хостнейм: **64-188-119-94.sslip.io** (валидный Let's Encrypt cert, без покупки домена). localtunnel не используется.
+> Хостнейм: **2-26-71-254.sslip.io** (валидный Let's Encrypt cert, без покупки домена). localtunnel не используется.
 - [ ] **Wazzup вебхук на постоянный публичный URL** (не localtunnel!) —
-      `https://64-188-119-94.sslip.io/webhook/wazzup/<secret>`, `PATCH /v3/webhooks` с `messagesAndStatuses=true`.
+      `https://2-26-71-254.sslip.io/webhook/wazzup/<secret>`, `PATCH /v3/webhooks` с `messagesAndStatuses=true`.
 - [ ] **Telegram вебхук менеджер-бота** (блок 11): `setWebhook` на `<домен>/webhook/telegram/<TG_WEBHOOK_SECRET>`
       для бота «Лиды» (`TG_MANAGER_BOT_TOKEN`). Проверить `getWebhookInfo`. Локально — тот же localtunnel.
 - [ ] **TG_WEBHOOK_SECRET** — длинный случайный (как WAZZUP_WEBHOOK_SECRET). Пустой → эндпоинт 403.

@@ -125,7 +125,7 @@ class Settings(BaseSettings):
     mini_init_data_max_age: int = 3600
     # URL мини-аппа (Telegram Web App) для кнопки в менеджер-боте. Должен быть https
     # и на том же домене, что и /api/mini (тот же origin — без CORS).
-    mini_app_url: str = "https://64-188-119-94.sslip.io/app/"
+    mini_app_url: str = "https://2-26-71-254.sslip.io/app/"
 
     # ===== Фильтры =====
     # Номера-исключения для silent-фильтра (тестовые/доверенные): для них НЕ применяем
