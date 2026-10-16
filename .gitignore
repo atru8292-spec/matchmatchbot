@@ -17,3 +17,6 @@ scratchpad_*
 *.docx
 # Вспомогательные экспорты/дампы (регенерируются, не исходники)
 scenarios_export.txt
+
+# Ключ сервисного аккаунта Google: только на сервере и в бэкапе секретов, не в git
+google-service-account.json
