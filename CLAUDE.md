@@ -58,6 +58,11 @@ AI-бот "Anna" отвечает на входящие WhatsApp-лиды аге
   алертит Аню/Милу в Telegram (решение владелицы, 2026-09-15). Деterministic-фильтр
   `filters.is_english()` — до вызова AI, эвристика ≥2 английских стоп-слова И ноль
   испанских (не ловит смешанные "hola, how are you")
+- Просьба позвонить вместо переписки ("no me escribas, mejor llámame") — НЕ opt-out:
+  ручной режим + алерт Ане, лиду ничего, `do_not_contact` не ставим (2026-10-16,
+  `filters.is_call_request`). Порядок в `filters.decide`: whitelist → do_not_contact →
+  звонок → opt-out → пауза → manual → остальное. Эхо ответа Ани с телефона → manual.
+  Сводка изменений перед запуском: `docs/CHANGELOG_2026-10-16.md`
 
 ### Антибан WhatsApp
 - Задержки между сообщениями (2-8 сек по длине + рандом)

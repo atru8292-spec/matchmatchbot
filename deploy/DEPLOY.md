@@ -56,9 +56,14 @@ ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts
 git clone git@github-matchmatch:atru8292-spec/matchmatchbot.git /opt/matchmatch-bot
 ```
 
-### 3. Секреты (с мака, ничего не печатая)
+### 3. Секреты (ничего не печатая)
+Источник `.env` — копия **боевого** `.env` из менеджера паролей (см. «Бэкап секретов»).
+Локальный `.env` с мака не годится: с 2026-10-16 на сервере свои `WAZZUP_WEBHOOK_SECRET`
+и `TG_WEBHOOK_SECRET`, а в локальном старые. Если боевой копии нет, залить локальный,
+сгенерировать на сервере оба секрета заново и переставить
+вебхуки (шаг 7).
 ```bash
-scp .env root@<IP>:/opt/matchmatch-bot/.env
+scp <боевой .env> root@<IP>:/opt/matchmatch-bot/.env
 scp google-service-account.json root@<IP>:/opt/matchmatch-bot/   # если есть
 ```
 `restore.sh` сам ставит владельца `matchmatch` и права 600.
@@ -129,6 +134,7 @@ curl -s -X POST "https://api.telegram.org/bot$(env_get TG_MANAGER_BOT_TOKEN)/set
 ---
 
 ## Обновление кода
+Если `miniapp/` не менялся, строку со сборкой фронта можно пропустить.
 ```bash
 cd /opt/matchmatch-bot && git pull --ff-only origin main \
   && venv/bin/pip install -q -r requirements.txt \
