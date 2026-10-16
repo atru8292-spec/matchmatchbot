@@ -50,7 +50,15 @@ timedatectl set-timezone UTC
 
 log "автообновления безопасности"
 dpkg-reconfigure -f noninteractive unattended-upgrades
-systemctl enable --now fail2ban
+# На образе XorekCloud нет /var/log/auth.log (только journald) — без backend=systemd
+# fail2ban падает с «Have not found any log file for sshd jail».
+cat > /etc/fail2ban/jail.d/sshd-systemd.local <<'EOF'
+[sshd]
+enabled = true
+backend = systemd
+EOF
+systemctl enable fail2ban
+systemctl restart fail2ban
 
 # swap 2 ГБ, если RAM < 4 ГБ и swap ещё нет
 mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
@@ -115,9 +123,10 @@ install -m 644 deploy/matchmatch-healthcheck.service /etc/systemd/system/matchma
 install -m 644 deploy/matchmatch-healthcheck.timer /etc/systemd/system/matchmatch-healthcheck.timer
 systemctl daemon-reload
 systemctl enable matchmatch-bot
-systemctl enable --now matchmatch-healthcheck.timer
 if [ "$missing" = 0 ]; then
   systemctl restart matchmatch-bot
+  sleep 5   # healthcheck включаем после старта бота, иначе первый прогон даст ложный алерт
+  systemctl enable --now matchmatch-healthcheck.timer
 else
   echo "!!! сервис не запущен: нет .env"
 fi

@@ -15,12 +15,21 @@ env_get() {
   grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
 }
 
-problem=""
-if ! systemctl is-active --quiet matchmatch-bot; then
-  problem="сервис matchmatch-bot: $(systemctl is-active matchmatch-bot 2>/dev/null)"
-elif ! curl -fs -m 10 http://127.0.0.1:8000/health >/dev/null; then
-  problem="/health не отвечает на 127.0.0.1:8000"
-fi
+check() {
+  if ! systemctl is-active --quiet matchmatch-bot; then
+    problem="сервис matchmatch-bot: $(systemctl is-active matchmatch-bot 2>/dev/null)"
+  elif ! curl -fs -m 10 http://127.0.0.1:8000/health >/dev/null; then
+    problem="/health не отвечает на 127.0.0.1:8000"
+  else
+    problem=""
+  fi
+}
+# 3 попытки с паузой 10 с: рестарт при деплое (бот поднимается ~2-5 с) не считается падением
+for _ in 1 2 3; do
+  check
+  [ -z "$problem" ] && break
+  sleep 10
+done
 
 prev=$(cat "$STATE_FILE" 2>/dev/null || echo ok)
 now=ok; [ -n "$problem" ] && now=down
