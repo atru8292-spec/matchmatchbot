@@ -150,9 +150,21 @@ async def _process_burst_impl(phone: str) -> None:
             # Просьбу «не пиши» чтим и в старом сообщении: молча ставим do_not_contact
             # (без ответа лиду), иначе после запуска его догонят/ответят.
             stale_text = "\n".join((m.get("text") or "") for m in stale)
-            if filters.is_optout(stale_text):
-                await db.block_lead(phone, "opt-out (старое входящее после простоя)")
-                logger.warning("старые входящие [%s]: opt-out → do_not_contact без ответа", phone)
+            # Просьба позвонить приоритетнее opt-out и в старом: не баним, ручной режим +
+            # алерт Ане (лиду не пишем). Whitelist и do_not_contact — молча, как в decide.
+            # Сбой здесь не должен ронять залп: свежие сообщения ниже ещё не обработаны.
+            try:
+                if filters.is_call_request(stale_text):
+                    stale_lead = await db.get_lead_by_phone(phone) or {}
+                    if not stale_lead.get("do_not_contact") and not await db.is_whitelisted(phone):
+                        await _hand_off_call_request(phone, stale_lead, stale_text)
+                        logger.warning("старые входящие [%s]: просит позвонить → manual + алерт", phone)
+                elif filters.is_optout(stale_text):
+                    await db.block_lead(phone, "opt-out (старое входящее после простоя)")
+                    logger.warning("старые входящие [%s]: opt-out → do_not_contact без ответа", phone)
+            except Exception as e:
+                logger.exception("старые входящие [%s]: сбой обработки opt-out/звонка", phone)
+                await escalation.notify_error("старые входящие: opt-out/звонок", repr(e), phone)
             oldest = min(t for t in (_message_time(m) for m in stale) if t)
             logger.warning("старые входящие [%s]: %d сообщ. (самое старое %s) — без ответа бота",
                            phone, len(stale), oldest.isoformat())
@@ -358,6 +370,20 @@ async def _send_scenario(phone: str, scenario_id: int) -> None:
     await sender.send(phone, bubbles)
 
 
+async def _hand_off_call_request(phone: str, lead: dict, text: str) -> None:
+    """Лид просит позвонить: ручной режим + бизнес-алерт Ане. Лиду ничего не отправляем.
+    Сбой set_manual → техалерт, а в алерте Ане предупреждение (иначе бот ответит лиду)."""
+    manual_ok = True
+    try:
+        await db.set_manual(phone)
+    except Exception as e:
+        manual_ok = False
+        logger.exception("call_request: не смог поставить manual для %s", phone)
+        await escalation.notify_error("call_request: set_manual", repr(e), phone)
+    await escalation.notify_call_request({**(lead or {}), "phone": (lead or {}).get("phone") or phone},
+                                         text, manual_ok=manual_ok)
+
+
 async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
                           combined: str) -> None:
     """Выполнить решение filters.decide. needs_ai → реальный вызов AI (ai.py)."""
@@ -383,6 +409,15 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
         # Аню/Милу, чтобы ответили лично (решение владелицы 2026-09-15). AI не вызываем.
         logger.info("РЕШЕНИЕ silent_language [%s]: %s", phone, decision.reason)
         await escalation.notify_english_lead(lead, combined)
+        return
+
+    if decision.action == "call_request":
+        # Лид просит позвонить вместо переписки («no me escribas, mejor llámame»). Это НЕ
+        # opt-out: do_not_contact не ставим. Ручной режим (как takeover/эхо Ани) — бот ему
+        # больше не отвечает и догоны не уходят (due_followups берёт только mode='auto');
+        # Аня получает алерт и звонит. Лиду бот ничего не пишет.
+        logger.info("РЕШЕНИЕ call_request [%s]: ручной режим + алерт Ане", phone)
+        await _hand_off_call_request(phone, lead, combined)
         return
 
     if decision.action == "optout":

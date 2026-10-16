@@ -270,6 +270,22 @@ async def notify_payment(lead: dict) -> None:
     await _send_business_alert(text, payment_action_kb(phone) if phone else None)
 
 
+async def notify_call_request(lead: dict, last_msg: str, manual_ok: bool = True) -> None:
+    """Лид просит позвонить вместо переписки — бот перевёл чат в ручной режим и молчит,
+    лиду ничего не отправлено. НЕ opt-out: лид не отказался, Аня звонит.
+    manual_ok=False — ручной режим поставить не удалось: просим Аню нажать «Общаться лично»."""
+    phone = (lead or {}).get("phone", "")
+    status = ("⚠️ Чат в ручном режиме, бот лиду ничего не отправил" if manual_ok else
+              "❗️ Ручной режим НЕ включился (сбой) — нажми «Общаться лично», иначе бот ответит лиду")
+    text = (
+        "📞 Лид просит позвонить\n"
+        f"{_lead_name(lead)} · {_wa_link(phone)}\n"
+        f'Последнее сообщение: "{last_msg}"\n'
+        f"{status}"
+    )
+    await _send_business_alert(text, vip_action_kb(phone) if phone else None)
+
+
 async def notify_optout(lead: dict) -> None:
     """Лид сам попросил не писать (opt-out) — бот замолчал навсегда. Аня в курсе; если
     это ошибка (ложное срабатывание) — может вернуть боту кнопкой."""

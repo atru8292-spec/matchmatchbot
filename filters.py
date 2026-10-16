@@ -146,10 +146,39 @@ _OPTOUT_RE = re.compile(
 )
 
 
+# Просьба позвонить вместо переписки (2026-10-16). Это НЕ opt-out: лид не отказывается от
+# общения, он хочет звонок → ручной режим + алерт Ане, без do_not_contact. Приоритетнее opt-out:
+# «no me escribas por aquí, mejor llámame» раньше банило лида навсегда.
+# Явные формы — ловим сами по себе.
+_CALL_REQUEST_RE = re.compile(
+    r"\bmejor\s+(ll[aá]m(ame|eme|enme)|h[aá]blame|m[aá]rcame)\b|"
+    r"\bll[aá]m(ame|eme|enme)\s+mejor\b|"
+    r"\bmejor\s+(por\s+)?(una\s+)?llamada\b|\bmejor\s+por\s+tel[eé]fono\b|"
+    r"\bmejor\s+(me\s+(llamas|marcas|hablas)|hablemos\s+por\s+(tel[eé]fono|llamada))\b|"
+    r"\bprefiero\s+(que\s+me\s+(llam(es|e|en)|marques|hables\s+por\s+tel[eé]fono)|"
+    r"una\s+llamada|hablar\s+por\s+tel[eé]fono)\b|"
+    r"\b(h[aá]blame|ll[aá]m(ame|eme|enme))\s+(por\s+tel[eé]fono|al\s+(cel(ular)?|n[uú]mero))\b|"
+    r"\bcall\s+me\s+instead\b|\b(i'?d\s+)?prefer\s+(a\s+)?(phone\s+)?call\b|"
+    r"\b(rather|better)\s+call\s+me\b|\bcall\s+me\s+(rather|better)\b",
+    re.IGNORECASE,
+)
+# Голый глагол «позвони мне» — сам по себе слишком широк («llámame Juan»), засчитываем как
+# просьбу о звонке только в одном сообщении с opt-out («no me escribas, llámame»).
+_CALL_VERB_RE = re.compile(
+    r"\bll[aá]m(ame|eme|enme)\b|\bm[aá]rcame\b|\bh[aá]blame\s+por\s+tel[eé]fono\b|\bcall\s+me\b",
+    re.IGNORECASE,
+)
+# Отказ от звонка — тогда это не просьба позвонить («no me llames ni me escribas» = opt-out).
+_CALL_NEGATED_RE = re.compile(
+    r"\bno\s+me\s+(llam(es|e|en)|marques|hables\s+por\s+tel[eé]fono)\b|\b(don'?t|do\s+not)\s+call\s+me\b",
+    re.IGNORECASE,
+)
+
+
 @dataclass(frozen=True)
 class Decision:
     """Результат детерминированного решения по залпу лида."""
-    action: str                 # respond | silent_whitelist | silent | silent_language | blocked | rejected | needs_ai
+    action: str                 # respond | silent_whitelist | silent | silent_language | call_request | optout | blocked | rejected | needs_ai
     reason: str                 # краткая причина (для лога/алерта/эскалации)
     alert_manager: bool = False # нужно ли уведомить Аню (сам алерт — блок 8)
     block_permanent: bool = False  # блок навсегда (do_not_contact + manual надолго)
@@ -194,6 +223,20 @@ def is_payment_claim(text: str) -> bool:
 def is_optout(text: str) -> bool:
     """Лид явно просит прекратить контакт / отписаться (opt-out). НЕ мягкое «no me interesa»."""
     return bool(_OPTOUT_RE.search(text or ""))
+
+
+def is_call_request(text: str) -> bool:
+    """Лид просит позвонить вместо переписки. Приоритетнее opt-out (см. _CALL_REQUEST_RE)."""
+    text = text or ""
+    # Явная форма («mejor llámame») побеждает даже при отрицании рядом
+    # («no me llames al trabajo, mejor llámame al celular»).
+    if _CALL_REQUEST_RE.search(text):
+        return True
+    # Голый глагол в связке с opt-out — только если звонок не отвергнут
+    # («no me llames, ya no me escribas» = opt-out).
+    if _CALL_NEGATED_RE.search(text):
+        return False
+    return is_optout(text) and bool(_CALL_VERB_RE.search(text))
 
 
 def has_instagram(text: str) -> bool:
@@ -262,6 +305,12 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     # спамить Аню VIP-уведомлением на каждое сообщение; в manual Аня и так в чате WhatsApp.
     if lead.get("do_not_contact"):
         return Decision("silent", f"do_not_contact — молчу: {name}")
+    # Просьба позвонить вместо переписки — ДО opt-out («no me escribas, mejor llámame» не бан):
+    # ручной режим + алерт Ане, лиду бот ничего не пишет. Как и opt-out, чтим на паузе
+    # и в ручном режиме (Аня должна узнать, что лид ждёт звонка).
+    if is_call_request(text):
+        return Decision("call_request", "лид просит позвонить вместо переписки",
+                        alert_manager=True)
     # Opt-out ДО manual/региона: явная просьба «не пиши» ставит do_not_contact навсегда,
     # даже если лида вёл менеджер (иначе при возврате в auto догоны возобновятся).
     if is_optout(text):
