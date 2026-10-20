@@ -103,7 +103,18 @@ class TestAuth:
 class TestCommands:
     async def test_help(self, _patch_io):
         await mb.handle_update(_msg("/help"))
-        assert "/leads" in _patch_io["reply"].call_args.args[1]
+        first, second = _patch_io["reply"].call_args_list
+        assert "/leads" in first.args[1]
+        assert "/stop_bot" in first.args[1]
+        # отдельным сообщением — постоянная клавиатура управления
+        kb = second.args[2]["keyboard"]
+        assert [b["text"] for row in kb for b in row] == [mb.BTN_STOP, mb.BTN_START, mb.BTN_STATUS]
+
+    async def test_start_still_shows_help_with_crm(self, _patch_io):
+        await mb.handle_update(_msg("/start"))
+        first = _patch_io["reply"].call_args_list[0]
+        assert "/leads" in first.args[1]
+        assert "web_app" in first.args[2]["inline_keyboard"][0][0]  # кнопка CRM на месте
 
     async def test_non_command_text_shows_help(self, _patch_io):
         await mb.handle_update(_msg("привет"))
@@ -644,3 +655,151 @@ class TestLinkCommands:
         await mb.handle_update(_msg("/event"))
         reply = _patch_io["reply"].call_args.args[1]
         assert "https://pay/x" in reply and "https://c/curso" in reply
+
+
+# ===== Управление ботом: пауза / включение / статус =====
+
+ADMIN2_ID = 998
+
+
+@pytest.fixture
+def ctl(monkeypatch, _patch_io):
+    """Два админа, настройки в памяти, запись и уведомления — моки."""
+    monkeypatch.setattr(mb.settings, "tg_manager_admin_ids", f"{ADMIN_ID},{ADMIN2_ID}")
+    store = {"bot_paused": "0", "scheduler_enabled": "0", "event_active": "0"}
+
+    async def get_settings(keys):
+        return {k: store[k] for k in keys if k in store}
+
+    async def set_setting(k, v):
+        store[k] = v
+
+    set_mock = AsyncMock(side_effect=set_setting)
+    monkeypatch.setattr(db, "get_settings", AsyncMock(side_effect=get_settings))
+    monkeypatch.setattr(db, "set_setting", set_mock)
+    monkeypatch.setattr(db, "count_manual_leads", AsyncMock(return_value=3))
+    send_tg = AsyncMock()
+    monkeypatch.setattr(escalation, "_send_telegram", send_tg)
+    edit = AsyncMock(); monkeypatch.setattr(mb, "_edit_reply_markup", edit)
+    return {"store": store, "set": set_mock, "tg": send_tg, "edit": edit, **_patch_io}
+
+
+def _fresh_yes() -> str:
+    import time
+    return f"bot:resume_yes:{int(time.time())}"
+
+
+def _texts(mock) -> list[str]:
+    return [c.args[1] for c in mock.call_args_list]
+
+
+class TestBotControl:
+    @pytest.mark.parametrize("text", [mb.BTN_STOP, "/stop_bot"])
+    async def test_stop_sets_pause_and_notifies_other_admins(self, ctl, text):
+        await mb.handle_update(_msg(text))
+        assert ctl["store"]["bot_paused"] == "1"
+        ctl["set"].assert_awaited_once_with("bot_paused", "1")
+        assert _texts(ctl["reply"]) == [mb.STOP_TEXT]
+        # уведомление — только второму админу, не тому, кто нажал
+        assert [c.args[1] for c in ctl["tg"].call_args_list] == [str(ADMIN2_ID)]
+        assert "Бот остановлен (кем: Anna (tg:999))" in ctl["tg"].call_args.args[2]
+
+    async def test_stop_when_already_paused(self, ctl):
+        ctl["store"]["bot_paused"] = "1"
+        await mb.handle_update(_msg(mb.BTN_STOP))
+        ctl["set"].assert_not_awaited()
+        ctl["tg"].assert_not_awaited()
+        assert "уже на паузе" in _texts(ctl["reply"])[0]
+
+    async def test_stop_with_phone_still_blocks_lead(self, ctl, monkeypatch):
+        """/stop <номер> — по-прежнему блок лида, не пауза бота."""
+        block = AsyncMock(return_value=True)
+        monkeypatch.setattr(db, "block_lead", block)
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"phone": "wa_5215512345678"}))
+        await mb.handle_update(_msg("/stop 5215512345678"))
+        block.assert_awaited_once()
+        assert ctl["store"]["bot_paused"] == "0"
+        ctl["set"].assert_not_awaited()
+
+    @pytest.mark.parametrize("text", [mb.BTN_STOP, mb.BTN_START, mb.BTN_STATUS,
+                                      "/stop_bot", "/start_bot", "/status"])
+    async def test_stranger_ignored_silently(self, ctl, text):
+        await mb.handle_update(_msg(text, uid=STRANGER_ID))
+        ctl["reply"].assert_not_awaited()
+        ctl["set"].assert_not_awaited()
+        ctl["tg"].assert_not_awaited()
+        assert ctl["store"]["bot_paused"] == "0"
+
+    @pytest.mark.parametrize("flag", [None, "0", ""])
+    async def test_start_closed_without_tg_resume(self, ctl, flag):
+        ctl["store"]["bot_paused"] = "1"
+        if flag is not None:
+            ctl["store"]["tg_resume_enabled"] = flag
+        await mb.handle_update(_msg("/start_bot"))
+        assert _texts(ctl["reply"]) == [mb.RESUME_CLOSED_TEXT]
+        ctl["set"].assert_not_awaited()
+        assert ctl["store"]["bot_paused"] == "1"
+
+    async def test_start_asks_confirmation_without_changing(self, ctl):
+        ctl["store"].update(bot_paused="1", tg_resume_enabled="1")
+        await mb.handle_update(_msg(mb.BTN_START))
+        ctl["set"].assert_not_awaited()
+        kb = ctl["reply"].call_args.args[2]["inline_keyboard"][0]
+        assert kb[0]["callback_data"].startswith("bot:resume_yes:")
+        assert kb[1]["callback_data"] == "bot:resume_no"
+        assert [b["text"] for b in kb] == ["Да, включить", "Отмена"]
+
+    async def test_confirm_yes_unpauses_and_notifies(self, ctl):
+        ctl["store"].update(bot_paused="1", tg_resume_enabled="1")
+        await mb.handle_update(_cb(_fresh_yes()))
+        assert ctl["store"]["bot_paused"] == "0"
+        ctl["set"].assert_awaited_once_with("bot_paused", "0")
+        assert "Бот включён" in _texts(ctl["reply"])[0]
+        assert [c.args[1] for c in ctl["tg"].call_args_list] == [str(ADMIN2_ID)]
+        ctl["edit"].assert_awaited_once()  # кнопки подтверждения убраны
+
+    async def test_confirm_cancel_keeps_pause(self, ctl):
+        ctl["store"].update(bot_paused="1", tg_resume_enabled="1")
+        await mb.handle_update(_cb("bot:resume_no"))
+        assert ctl["store"]["bot_paused"] == "1"
+        ctl["set"].assert_not_awaited()
+        assert "Отменено" in _texts(ctl["reply"])[0]
+
+    async def test_confirm_yes_rechecks_flag(self, ctl):
+        """Ключ закрыли между «Включить» и «Да» — не включаем."""
+        ctl["store"].update(bot_paused="1", tg_resume_enabled="0")
+        await mb.handle_update(_cb(_fresh_yes()))
+        assert ctl["store"]["bot_paused"] == "1"
+        assert _texts(ctl["reply"]) == [mb.RESUME_CLOSED_TEXT]
+
+    @pytest.mark.parametrize("data", ["bot:resume_yes", "bot:resume_yes:1"])
+    async def test_stale_or_unstamped_confirm_rejected(self, ctl, data):
+        """Старая кнопка (или без метки времени) не включает бота."""
+        ctl["store"].update(bot_paused="1", tg_resume_enabled="1")
+        await mb.handle_update(_cb(data))
+        assert ctl["store"]["bot_paused"] == "1"
+        ctl["set"].assert_not_awaited()
+        assert "устарело" in _texts(ctl["reply"])[0]
+
+    async def test_confirm_from_stranger_rejected(self, ctl):
+        ctl["store"].update(bot_paused="1", tg_resume_enabled="1")
+        await mb.handle_update(_cb(_fresh_yes(), uid=STRANGER_ID))
+        assert ctl["store"]["bot_paused"] == "1"
+        ctl["set"].assert_not_awaited()
+
+    async def test_start_when_already_running(self, ctl):
+        ctl["store"].update(bot_paused="0", tg_resume_enabled="1")
+        await mb.handle_update(_msg("/start_bot"))
+        assert "уже включён" in _texts(ctl["reply"])[0]
+        ctl["set"].assert_not_awaited()
+
+    @pytest.mark.parametrize("text", [mb.BTN_STATUS, "/status"])
+    async def test_status_read_only(self, ctl, text):
+        ctl["store"].update(bot_paused="1", scheduler_enabled="0", event_active="1")
+        await mb.handle_update(_msg(text))
+        out = _texts(ctl["reply"])[0]
+        assert "bot_paused = 1 (⏸ на паузе)" in out
+        assert "scheduler_enabled = 0" in out
+        assert "event_active = 1 (ивент вкл)" in out
+        assert "Лидов в ручном режиме: 3" in out
+        ctl["set"].assert_not_awaited()

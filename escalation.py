@@ -315,6 +315,15 @@ async def notify_videocall_booked(lead: dict, when_text: str, assignee: str | No
     await _send_business_alert(text, videocall_action_kb(phone) if phone else None)
 
 
+async def notify_admins(text: str, exclude_id: int | None = None) -> None:
+    """Сообщение в личку всем админам менеджер-бота (TG_MANAGER_ADMIN_IDS), кроме exclude_id.
+    Для управления ботом (пауза/включение) и сводки «пауза». Сбой к одному не мешает другим."""
+    for admin_id in sorted(settings.manager_admin_ids):
+        if admin_id == exclude_id:
+            continue
+        await _send_telegram(settings.tg_manager_bot_token, str(admin_id), text)
+
+
 # ===== Technical (бот «Ошибки») =====
 
 async def notify_error(where: str, error: str, phone: str | None = None) -> None:

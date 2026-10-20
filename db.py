@@ -1233,6 +1233,46 @@ async def set_manual(phone: str) -> bool:
     return found
 
 
+async def count_manual_leads() -> int:
+    """Сколько лидов сейчас в ручном режиме (ведёт Аня): mode='manual', срок не истёк.
+    Заблокированных навсегда (do_not_contact) не считаем — их никто не ведёт."""
+    try:
+        return await _get_pool().fetchval(
+            "SELECT count(*) FROM leads WHERE mode = 'manual' "
+            "AND (manual_until IS NULL OR manual_until > now()) "
+            "AND COALESCE(do_not_contact, false) = false"
+        )
+    except Exception:
+        logger.exception("count_manual_leads failed")
+        raise
+
+
+async def inbound_since(since) -> list[dict]:
+    """Входящие от лидов после since, по лиду: phone, name, n (сводка «пауза»).
+
+    Только после включения паузы (updated_at ключа bot_paused): до неё бот ещё отвечал.
+    Без whitelist (клиенты/личные контакты — бот им и так не пишет), без do_not_contact
+    и без лидов в активном ручном режиме (их и так ведёт Аня)."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT l.phone, COALESCE(l.whatsapp_name, l.name) AS name, count(*) AS n "
+            "FROM messages m JOIN leads l ON l.phone = m.lead_phone "
+            f"LEFT JOIN bot_whitelist w ON {_WL_JOIN} "
+            "WHERE m.direction = 'inbound' AND m.created_at > $1 "
+            "  AND m.created_at > COALESCE((SELECT updated_at FROM app_settings "
+            "                               WHERE key = 'bot_paused'), $1) "
+            "  AND w.phone IS NULL AND COALESCE(l.do_not_contact, false) = false "
+            "  AND NOT (l.mode = 'manual' AND (l.manual_until IS NULL OR l.manual_until > now())) "
+            "GROUP BY l.phone, COALESCE(l.whatsapp_name, l.name) "
+            "ORDER BY max(m.created_at) DESC",
+            since,
+        )
+    except Exception:
+        logger.exception("inbound_since failed")
+        raise
+    return [dict(r) for r in rows]
+
+
 async def set_auto(phone: str) -> bool:
     """Release: mode='auto', manual_until=NULL — бот снова отвечает. Возврат — найден ли лид."""
     try:

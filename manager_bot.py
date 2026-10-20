@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 
@@ -46,8 +47,25 @@ HELP_TEXT = (
     "💳 /set_event_link url — ссылка оплаты/брони\n"
     "🖼 /set_invitation url — картинка-приглашение (+ /invitation_on)\n"
     "📚 /set_course_link url — ссылка на курсы\n\n"
+    "Управление ботом (кнопки внизу экрана):\n"
+    "⏸ /stop_bot — остановить бота (сразу)\n"
+    "▶️ /start_bot — включить бота (с подтверждением)\n"
+    "📊 /status — статус бота\n\n"
     "💡 Проще всего — жать кнопки под сообщениями."
 )
+
+# ===== Управление ботом: пауза / включение / статус =====
+BTN_STOP = "⏸ Остановить бота"
+BTN_START = "▶️ Включить бота"
+BTN_STATUS = "📊 Статус"
+# Включение из Telegram открывает владелица в день запуска (app_settings, ставит руками).
+TG_RESUME_KEY = "tg_resume_enabled"
+RESUME_CONFIRM_TTL_SEC = 600  # «Да, включить» действует 10 минут
+CB_BOT = "bot"  # callback_data 'bot:resume_yes' / 'bot:resume_no' (не путать с escalation.CB)
+
+STOP_TEXT = ("⏸ Бот остановлен. Сейчас лидам отвечаешь только ты. "
+             "Новые сообщения сохраняются, ничего не теряется.")
+RESUME_CLOSED_TEXT = "Включение бота из Телеграма пока закрыто. Напиши Арине."
 
 
 # ===== Утилиты =====
@@ -303,6 +321,20 @@ async def _handle_message(message: dict) -> None:
     chat_id = (message.get("chat") or {}).get("id")
     text = (message.get("text") or "").strip()
 
+    control = _control_action(text)
+    if control:
+        if not is_admin(from_id):
+            logger.warning("manager_bot: управление ботом от неавторизованного id=%s — игнор",
+                           from_id)
+            return
+        logger.info("manager_bot: управление %r от id=%s", text, from_id)
+        try:
+            await control(chat_id, message.get("from") or {})
+        except Exception:
+            logger.exception("manager_bot: управление %r упало", text)
+            await _reply(chat_id, "⚠️ Что-то пошло не так.")
+        return
+
     if not is_admin(from_id):
         logger.warning("manager_bot: команда от неавторизованного id=%s", from_id)
         contact = settings.support_contact or "администратору"
@@ -358,6 +390,116 @@ async def _handle_message(message: dict) -> None:
 async def _cmd_help(chat_id, args, frm) -> None:
     # Кнопка «Открыть CRM» (Web App) прямо под приветствием.
     await _reply(chat_id, HELP_TEXT, _crm_kb())
+    # У сообщения одна клавиатура: постоянные кнопки управления — отдельным сообщением.
+    await _reply(chat_id, "Кнопки управления ботом — внизу экрана 👇", _control_kb())
+
+
+def _control_kb() -> dict:
+    """Постоянная клавиатура внизу чата (reply keyboard): стоп / включить / статус."""
+    return {"keyboard": [[{"text": BTN_STOP}, {"text": BTN_START}], [{"text": BTN_STATUS}]],
+            "resize_keyboard": True, "is_persistent": True}
+
+
+def _control_action(text: str):
+    """Нажатие кнопки или команда управления ботом → обработчик, иначе None."""
+    by_text = {BTN_STOP: _bot_stop, BTN_START: _bot_start, BTN_STATUS: _bot_status}
+    if text in by_text:
+        return by_text[text]
+    if text.startswith("/"):
+        cmd = text.split()[0].lower().split("@", 1)[0]
+        return {"/stop_bot": _bot_stop, "/start_bot": _bot_start,
+                "/status": _bot_status}.get(cmd)
+    return None
+
+
+def _admin_id(frm: dict) -> int | None:
+    try:
+        return int((frm or {}).get("id"))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _bot_stop(chat_id, frm) -> None:
+    """Пауза сразу, без подтверждения — тем же set_setting, что и тумблер в CRM."""
+    try:
+        paused = (await db.get_settings(["bot_paused"])).get("bot_paused") == "1"
+    except Exception:
+        logger.exception("manager_bot: не прочитала bot_paused — всё равно ставлю паузу")
+        paused = False
+    if paused:
+        await _reply(chat_id, "Бот уже на паузе. Лидам сейчас отвечаешь только ты.")
+        return
+    await db.set_setting("bot_paused", "1")
+    logger.warning("manager_bot: бот поставлен на паузу (%s)", _actor(frm))
+    await _reply(chat_id, STOP_TEXT)
+    await escalation.notify_admins(f"⏸ Бот остановлен (кем: {_actor(frm)})",
+                                   exclude_id=_admin_id(frm))
+
+
+async def _bot_start(chat_id, frm) -> None:
+    """Включение — только если открыто tg_resume_enabled='1', и только после «Да, включить»."""
+    s = await db.get_settings(["bot_paused", TG_RESUME_KEY])
+    if s.get(TG_RESUME_KEY) != "1":
+        await _reply(chat_id, RESUME_CLOSED_TEXT)
+        return
+    if s.get("bot_paused") != "1":
+        await _reply(chat_id, "Бот уже включён и отвечает лидам.")
+        return
+    await _reply(chat_id, "Включить бота? Он начнёт отвечать лидам в WhatsApp.", {
+        "inline_keyboard": [[
+            {"text": "Да, включить", "callback_data": f"{CB_BOT}:resume_yes:{int(time.time())}"},
+            {"text": "Отмена", "callback_data": f"{CB_BOT}:resume_no"},
+        ]]})
+
+
+async def _bot_status(chat_id, frm) -> None:
+    """Только чтение: флаги + сколько лидов в ручном режиме."""
+    s = await db.get_settings(["bot_paused", "scheduler_enabled", "event_active"])
+    manual = await db.count_manual_leads()
+
+    def flag(key: str, on: str, off: str) -> str:
+        v = s.get(key)
+        return f"{key} = {v if v is not None else '—'} ({on if v == '1' else off})"
+
+    await _reply(chat_id, "📊 Статус\n"
+                 + flag("bot_paused", "⏸ на паузе", "▶️ отвечает лидам") + "\n"
+                 + flag("scheduler_enabled", "авто-рассылки вкл", "авто-рассылки выкл") + "\n"
+                 + flag("event_active", "ивент вкл", "ивент выкл") + "\n"
+                 + f"Лидов в ручном режиме: {manual}")
+
+
+async def _cb_bot_control(chat_id, cb_id, action, frm, message_id=None) -> None:
+    """«Да, включить» / «Отмена». Флаг tg_resume_enabled проверяем ещё раз в момент нажатия."""
+    await _edit_reply_markup(chat_id, message_id, {"inline_keyboard": []})  # убрать кнопки
+    if action == "resume_no":
+        await _answer_callback(cb_id, "Отменено")
+        await _reply(chat_id, "Отменено, бот остаётся на паузе.")
+        return
+    action, _, ts = action.partition(":")
+    if action != "resume_yes":
+        await _answer_callback(cb_id, "Не понял действие")
+        return
+    # Старая кнопка (нажали спустя время) — не включаем без свежего подтверждения.
+    if not ts.isdigit() or time.time() - int(ts) > RESUME_CONFIRM_TTL_SEC:
+        await _answer_callback(cb_id, "Устарело")
+        await _reply(chat_id, "Подтверждение устарело. Нажми «▶️ Включить бота» ещё раз.")
+        return
+    s = await db.get_settings(["bot_paused", TG_RESUME_KEY])
+    if s.get(TG_RESUME_KEY) != "1":
+        await _answer_callback(cb_id, "Закрыто")
+        await _reply(chat_id, RESUME_CLOSED_TEXT)
+        return
+    if s.get("bot_paused") != "1":
+        await _answer_callback(cb_id, "Уже включён")
+        await _reply(chat_id, "Бот уже включён и отвечает лидам.")
+        return
+    await db.set_setting("bot_paused", "0")
+    logger.warning("manager_bot: бот включён (%s)", _actor(frm))
+    await _answer_callback(cb_id, "Включён")
+    await _reply(chat_id, "▶️ Бот включён и отвечает лидам. Кто писал во время паузы, "
+                          "бот не подхватит: их открывай вручную.")
+    await escalation.notify_admins(f"▶️ Бот включён (кем: {_actor(frm)})",
+                                   exclude_id=_admin_id(frm))
 
 
 async def _cmd_leads(chat_id, args, frm) -> None:
@@ -611,6 +753,15 @@ async def _handle_callback(cq: dict) -> None:
 
     data = cq.get("data") or ""
     logger.info("manager_bot: callback %r от id=%s", data, from_id)
+    if data.startswith(CB_BOT + ":"):
+        try:
+            await _cb_bot_control(chat_id, cb_id, data.split(":", 1)[1],
+                                  cq.get("from") or {}, message_id)
+        except Exception:
+            logger.exception("manager_bot: callback %s упал", data)
+            await _answer_callback(cb_id, "Ошибка")
+            await _reply(chat_id, "⚠️ Что-то пошло не так.")
+        return
     parts = data.split(":", 2)
     if len(parts) != 3 or parts[0] != escalation.CB:
         await _answer_callback(cb_id, "Не понял действие")

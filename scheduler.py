@@ -26,6 +26,7 @@ import escalation
 import funnel
 import sender
 from config import settings
+from phones import canonical_phone
 
 logger = logging.getLogger("matchmatch.scheduler")
 
@@ -350,11 +351,66 @@ async def _scheduler_enabled() -> bool:
         return False
 
 
+# ===== D) Сводка «пауза» админам =====
+# На паузе входящие сохраняются и помечаются обработанными: после снятия паузы бот на них
+# НЕ ответит. Раз в час шлём админам, кто писал, чтобы Аня открыла их вручную.
+PAUSE_DIGEST_KEY = "pause_digest_last_at"   # app_settings: время последней сводки (ISO, UTC)
+PAUSE_DIGEST_INTERVAL = timedelta(hours=1)
+PAUSE_DIGEST_MAX_LINES = 20
+
+
+def _fmt_phone(phone: str) -> str:
+    return "+" + phone[3:] if phone.startswith("wa_") else phone
+
+
+async def run_pause_digest(now: datetime | None = None) -> int:
+    """Сводка админам о входящих за время паузы. Не чаще раза в час, при нуле молчим.
+    Вернуть число лидов в сводке. Вызывается из tick только при bot_paused=1."""
+    now = now or datetime.now(timezone.utc)
+    last = None
+    raw = await db.get_setting(PAUSE_DIGEST_KEY)
+    if raw:
+        try:
+            last = datetime.fromisoformat(raw)
+        except ValueError:
+            logger.warning("pause digest: кривой %s=%r — считаю, что сводок не было",
+                           PAUSE_DIGEST_KEY, raw)
+    if last and now - last < PAUSE_DIGEST_INTERVAL:
+        return 0
+    # С прошлой сводки (без зазоров между тиками); первая — за последний час.
+    # Начало паузы отсекает inbound_since: до неё бот ещё отвечал.
+    since = last or now - PAUSE_DIGEST_INTERVAL
+    bypass = await db.bypass_phone_set()
+    rows = [r for r in await db.inbound_since(since)
+            if canonical_phone(r["phone"]) not in bypass]
+    if not rows:
+        return 0
+    total = sum(r["n"] for r in rows)
+    lines = [f"⏸ Бот на паузе. С прошлой сводки написали {len(rows)} чел. "
+             f"({total} сообщ.), бот им не ответит и после снятия паузы:"]
+    for r in rows[:PAUSE_DIGEST_MAX_LINES]:
+        name = f"{r['name']} " if r.get("name") else ""
+        lines.append(f"• {name}{_fmt_phone(r['phone'])} ({r['n']})")
+    if len(rows) > PAUSE_DIGEST_MAX_LINES:
+        lines.append(f"… и ещё {len(rows) - PAUSE_DIGEST_MAX_LINES}")
+    lines.append("Открой их вручную в WhatsApp или в CRM.")
+    await escalation.notify_admins("\n".join(lines))
+    await db.set_setting(PAUSE_DIGEST_KEY, now.isoformat())
+    logger.info("pause digest: %d лидов, %d сообщений", len(rows), total)
+    return len(rows)
+
+
 async def tick() -> None:
     """Один проход планировщика. Сбой любой части → лог + technical-алерт, не роняет цикл."""
     # Глобальная пауза (тех. режим): не шлём НИЧЕГО проактивно (догоны/напоминания) всем лидам.
+    # Только сводка админам о том, кто писал на паузе (лидам ничего не уходит).
     if await _bot_paused():
         logger.info("scheduler: бот на паузе (тех. режим) — тик пропущен")
+        try:
+            await run_pause_digest()
+        except Exception as e:
+            logger.exception("run_pause_digest упал")
+            await escalation.notify_error("scheduler.pause_digest", repr(e))
         return
     # Отдельный тумблер авто-рассылок: догоны #32/#33/#36/#38/#59, напоминания об ивенте
     # (+FOMO-медиа), напоминания о звонке #49. Пока 0 — ничего не отправляем.

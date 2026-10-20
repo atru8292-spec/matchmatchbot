@@ -596,3 +596,72 @@ class TestEventRemindersMexicoTime:
             now=datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc))  # полночь по Мехико
         assert n == 0
         gs.assert_not_awaited()
+
+
+# ===== Сводка «пауза» админам =====
+
+class TestPauseDigest:
+    NOW = datetime(2026, 11, 18, 18, 0, tzinfo=timezone.utc)
+
+    def _setup(self, monkeypatch, last=None, rows=None, bypass=frozenset()):
+        monkeypatch.setattr(db, "get_setting", AsyncMock(return_value=last))
+        inbound = AsyncMock(return_value=rows or [])
+        monkeypatch.setattr(db, "inbound_since", inbound)
+        monkeypatch.setattr(db, "bypass_phone_set", AsyncMock(return_value=bypass))
+        setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
+        notify = AsyncMock(); monkeypatch.setattr(scheduler.escalation, "notify_admins", notify)
+        return inbound, setm, notify
+
+    async def test_zero_messages_no_spam(self, monkeypatch):
+        inbound, setm, notify = self._setup(monkeypatch)
+        assert await scheduler.run_pause_digest(now=self.NOW) == 0
+        notify.assert_not_awaited()
+        setm.assert_not_awaited()
+        assert inbound.call_args.args[0] == self.NOW - timedelta(hours=1)
+
+    async def test_sends_summary_and_remembers_time(self, monkeypatch):
+        rows = [{"phone": "wa_5215512345678", "name": "Carlos", "n": 2},
+                {"phone": "wa_5215587654321", "name": None, "n": 1}]
+        _, setm, notify = self._setup(monkeypatch, rows=rows)
+        assert await scheduler.run_pause_digest(now=self.NOW) == 2
+        text = notify.call_args.args[0]
+        assert "С прошлой сводки написали 2 чел. (3 сообщ.)" in text
+        assert "• Carlos +5215512345678 (2)" in text
+        assert "• +5215587654321 (1)" in text
+        setm.assert_awaited_once_with(scheduler.PAUSE_DIGEST_KEY, self.NOW.isoformat())
+
+    async def test_not_more_than_once_per_hour(self, monkeypatch):
+        last = (self.NOW - timedelta(minutes=59)).isoformat()
+        inbound, _, notify = self._setup(monkeypatch, last=last,
+                                         rows=[{"phone": "wa_1", "name": None, "n": 1}])
+        assert await scheduler.run_pause_digest(now=self.NOW) == 0
+        inbound.assert_not_awaited()
+        notify.assert_not_awaited()
+
+    async def test_window_starts_at_last_digest(self, monkeypatch):
+        """Без зазоров: окно от прошлой сводки, даже если она была больше часа назад."""
+        last = self.NOW - timedelta(minutes=95)
+        inbound, _, _ = self._setup(monkeypatch, last=last.isoformat())
+        await scheduler.run_pause_digest(now=self.NOW)
+        assert inbound.call_args.args[0] == last
+
+    async def test_bypass_numbers_excluded(self, monkeypatch):
+        rows = [{"phone": "wa_5215512345678", "name": "Test", "n": 4}]
+        _, _, notify = self._setup(monkeypatch, rows=rows,
+                                   bypass=frozenset({"wa_5215512345678"}))
+        assert await scheduler.run_pause_digest(now=self.NOW) == 0
+        notify.assert_not_awaited()
+
+    async def test_tick_runs_digest_only_when_paused(self, monkeypatch):
+        digest = AsyncMock(); monkeypatch.setattr(scheduler, "run_pause_digest", digest)
+        monkeypatch.setattr(scheduler, "_bot_paused", AsyncMock(return_value=True))
+        f = AsyncMock(); monkeypatch.setattr(scheduler, "run_followups", f)
+        await scheduler.tick()
+        digest.assert_awaited_once()
+        f.assert_not_awaited()
+
+        digest.reset_mock()
+        monkeypatch.setattr(scheduler, "_bot_paused", AsyncMock(return_value=False))
+        monkeypatch.setattr(scheduler, "_scheduler_enabled", AsyncMock(return_value=False))
+        await scheduler.tick()
+        digest.assert_not_awaited()
