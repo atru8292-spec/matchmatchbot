@@ -13,16 +13,22 @@
   `event_end=12:00 AM` (лидам не называем).
 - Бэкап: `docs/backups/app_settings_before_event_link_price_old_2026-11-18_20261020T174436Z.json`.
 
-## 2. Тексты бота: Хеллоуин, без времени окончания
+## 2. Тексты бота: Хеллоуин, время окончания только по вопросу
 
-СТАТУС: ЖДЁТ ОК ВЛАДЕЛИЦЫ, не применено.
-- Сценарий №2: фраза про тематику Хеллоуин (костюм или маска от организаторов).
-- Сценарий №15: то же в подсказке для AI.
+Применено 2026-10-21 (ОК владелицы). На проде заработает после рестарта сервиса:
+сценарии и промпт кэшируются в памяти процесса.
+- Сценарий №2: «Esta vez es temática de Halloween: puedes venir disfrazado y, si no
+  tienes disfraz, te damos una máscara.»
+- Сценарий №15: то же в подсказке для AI (шаг [1]).
 - Сценарий №51: убрано «y termina a [event_end]», осталось время начала.
-- `anna_prompt_v5.md`, блок «Precios y paquetes»: тематика Хеллоуин и запрет называть
-  время окончания.
-- Патч-скрипт: `scripts/patch_event_halloween_2026_11.py` (без `--force` — сухой прогон,
-  с `--force` — бэкап трёх строк в `docs/backups/` и запись одной транзакцией).
+- `anna_prompt_v5.md`, блок «Precios y paquetes»: тематика Хеллоуин; время окончания
+  сам не называет, на прямой вопрос — приблизительно «alrededor de la medianoche
+  (12:00 AM)» и начало [event_start].
+- Патч-скрипт: `scripts/patch_event_halloween_2026_11.py`.
+- Бэкапы: `docs/backups/scenarios_2_15_51_before_halloween_20261020T182849Z.json`,
+  `docs/backups/anna_prompt_v5_before_halloween_20261020T182846Z.md`.
+- Smoke-тест перед запуском: `scripts/smoke_launch.py` (реальный OpenAI, БД только на
+  чтение, Wazzup/Telegram — заглушки).
 - После 18.11 Хеллоуин убрать.
 
 ## 3. Время Мехико для напоминаний об ивенте и антибан-счётчика (`04103ec`)

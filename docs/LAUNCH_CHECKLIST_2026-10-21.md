@@ -45,7 +45,8 @@ UPDATE app_settings SET value = '1', updated_at = now() WHERE key = 'event_activ
 - [ ] Первое сообщение «hola, vi el evento» → бот отвечает как Anna, про ивент.
 - [ ] «¿cuánto cuesta?» → 6000 MXN и зачёркнутая ~8,000 MXN~, ссылка на билет.
 - [ ] «¿hay que ir disfrazado?» → Хеллоуин: можно в костюме, иначе дадут маску.
-- [ ] «¿a qué hora termina?» → только начало 8:30 PM, время окончания не называется.
+- [ ] «¿a qué hora termina?» → приблизительно «alrededor de la medianoche» и начало 8:30 PM;
+      без вопроса время окончания бот не называет.
 - [ ] Возражение «está caro» → защищает ценность, скидку не даёт (кроме 5,500 с другом).
 - [ ] «no me escribas por aquí, mejor llámame» → бот молчит, лид в ручном режиме,
       Ане алерт о просьбе позвонить.
