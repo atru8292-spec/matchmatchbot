@@ -164,6 +164,11 @@ class TestRunFollowups:
 
 # ===== run_event_reminders =====
 
+def _noon_cdmx(d: date) -> datetime:
+    """Полдень по Мехико в день d — внутри окна отправки напоминаний."""
+    return datetime(d.year, d.month, d.day, 12, 0, tzinfo=scheduler.CDMX_TZ)
+
+
 def _event_settings(active="1", d="2026-08-15", t="20:30", addr="Av X"):
     return {"event_active": active, "event_date": d, "event_time": t, "event_address": addr}
 
@@ -172,14 +177,14 @@ class TestRunEventReminders:
     async def test_inactive_does_nothing(self, monkeypatch):
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=_event_settings(active="0")))
         rec = AsyncMock(); monkeypatch.setattr(db, "event_recipients", rec)
-        n = await scheduler.run_event_reminders(today=date(2026, 8, 15))
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 8, 15)))
         assert n == 0
         rec.assert_not_awaited()
 
     async def test_bad_date_skips(self, monkeypatch):
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=_event_settings(d="кривая")))
         rec = AsyncMock(); monkeypatch.setattr(db, "event_recipients", rec)
-        n = await scheduler.run_event_reminders(today=date(2026, 8, 15))
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 8, 15)))
         assert n == 0
         rec.assert_not_awaited()
 
@@ -193,7 +198,7 @@ class TestRunEventReminders:
         monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
         ph = AsyncMock(); monkeypatch.setattr(scheduler.actions, "send_event_photos", ph)
-        n = await scheduler.run_event_reminders(today=date(2026, 8, 14))  # за день
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 8, 14)))  # за день
         assert n == 1
         assert tmpl.call_args.args[0] == scheduler.REMIND_1D_SCENARIO
         send.assert_awaited_once()
@@ -213,7 +218,7 @@ class TestRunEventReminders:
         monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
         ph = AsyncMock(); monkeypatch.setattr(scheduler.actions, "send_event_photos", ph)
-        n = await scheduler.run_event_reminders(today=date(2026, 8, 15))  # день ивента
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 8, 15)))  # день ивента
         assert n == 1
         # неоплатившему: Шаблон B + ссылка разрешена к повтору
         args, kwargs = send.call_args
@@ -235,7 +240,7 @@ class TestRunEventReminders:
         monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
         ph = AsyncMock(); monkeypatch.setattr(scheduler.actions, "send_event_photos", ph)
-        n = await scheduler.run_event_reminders(today=date(2026, 8, 15))  # день ивента
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 8, 15)))  # день ивента
         assert n == 1
         args, kwargs = send.call_args
         assert kwargs.get("allow_repeat_links") is False
@@ -253,7 +258,7 @@ class TestRunEventReminders:
         monkeypatch.setattr(db, "log_event_reminder", AsyncMock())
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
         ph = AsyncMock(); monkeypatch.setattr(scheduler.actions, "send_event_photos", ph)
-        n = await scheduler.run_event_reminders(today=date(2026, 8, 16))  # утро после ивента
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 8, 16)))  # утро после ивента
         assert n == 1
         assert tmpl.call_args.args[0] == scheduler.CHECKIN_MORNING_SCENARIO
         send.assert_awaited_once()
@@ -267,7 +272,7 @@ class TestRunEventReminders:
         monkeypatch.setattr(db, "event_reminder_sent", AsyncMock(return_value=True))  # уже слали
         log = AsyncMock(); monkeypatch.setattr(db, "log_event_reminder", log)
         send = AsyncMock(); monkeypatch.setattr(sender, "send", send)
-        n = await scheduler.run_event_reminders(today=date(2026, 8, 15))
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 8, 15)))
         assert n == 0
         send.assert_not_awaited()
         log.assert_not_awaited()
@@ -275,7 +280,7 @@ class TestRunEventReminders:
     async def test_other_day_no_reminder(self, monkeypatch):
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=_event_settings()))
         rec = AsyncMock(); monkeypatch.setattr(db, "event_recipients", rec)
-        n = await scheduler.run_event_reminders(today=date(2026, 8, 10))  # задолго до
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 8, 10)))  # задолго до
         assert n == 0
         rec.assert_not_awaited()
 
@@ -520,7 +525,7 @@ class TestPastEventNoReminders:
         send, photos, recips = self._spy(monkeypatch)
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
             "event_active": "1", "event_date": "2026-10-14"}))
-        n = await scheduler.run_event_reminders(today=date(2026, 10, 14) + timedelta(days=days_after))
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 10, 14) + timedelta(days=days_after)))
         assert n == 0
         send.assert_not_awaited(); photos.assert_not_awaited(); recips.assert_not_awaited()
 
@@ -529,7 +534,7 @@ class TestPastEventNoReminders:
         send, photos, recips = self._spy(monkeypatch)
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
             "event_active": "0", "event_date": "2026-10-14"}))
-        n = await scheduler.run_event_reminders(today=date(2026, 10, 14) + timedelta(days=offset))
+        n = await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 10, 14) + timedelta(days=offset)))
         assert n == 0
         send.assert_not_awaited(); photos.assert_not_awaited(); recips.assert_not_awaited()
 
@@ -538,6 +543,56 @@ class TestPastEventNoReminders:
         send, photos, recips = self._spy(monkeypatch)
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
             "event_active": "1", "event_date": "2026-10-14"}))
-        await scheduler.run_event_reminders(today=date(2026, 10, 15))
+        await scheduler.run_event_reminders(now=_noon_cdmx(date(2026, 10, 15)))
         assert sorted(recips.call_args.kwargs["only_stages"]) == sorted(scheduler.PAID_STAGES)
         photos.assert_not_awaited()
+
+
+# ===== Напоминания об ивенте: «сегодня/завтра» и окно отправки по Мехико =====
+
+class TestEventRemindersMexicoTime:
+    """Ивент 18.11.2026. Мехико = UTC-6: в 18:00 17.11 по Мехико в UTC уже 18.11,
+    поэтому дату и окно 10:00-20:00 считаем по America/Mexico_City."""
+
+    def _spy(self, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "event_active": "1", "event_date": "2026-11-18",
+            "event_time": "8:30 PM", "event_address": "Polanco, CDMX"}))
+        monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola"))
+        recips = AsyncMock(return_value=[])
+        monkeypatch.setattr(db, "event_recipients", recips)
+        monkeypatch.setattr(db, "bypass_phone_set", AsyncMock(return_value=frozenset()))
+        return recips
+
+    @staticmethod
+    def _kind(recips):
+        """Какое напоминание выбрано: kind в вызове event_recipients (или None)."""
+        return recips.call_args.args[1] if recips.await_count else None
+
+    @pytest.mark.parametrize("utc, expected", [
+        (datetime(2026, 11, 16, 23, 0, tzinfo=timezone.utc), None),           # 16.11 17:00 MX
+        (datetime(2026, 11, 17, 15, 59, tzinfo=timezone.utc), None),          # 17.11 09:59 MX, до окна
+        (datetime(2026, 11, 17, 16, 0, tzinfo=timezone.utc), "remind_1d"),    # 17.11 10:00 MX
+        (datetime(2026, 11, 18, 0, 30, tzinfo=timezone.utc), "remind_1d"),    # 17.11 18:30 MX, в UTC уже 18.11
+        (datetime(2026, 11, 18, 1, 59, tzinfo=timezone.utc), "remind_1d"),    # 17.11 19:59 MX
+        (datetime(2026, 11, 18, 2, 0, tzinfo=timezone.utc), None),            # 17.11 20:00 MX, окно закрыто
+        (datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc), None),            # 18.11 00:00 MX, ночь
+        (datetime(2026, 11, 18, 15, 59, tzinfo=timezone.utc), None),          # 18.11 09:59 MX
+        (datetime(2026, 11, 18, 16, 0, tzinfo=timezone.utc), "remind_day"),   # 18.11 10:00 MX
+        (datetime(2026, 11, 19, 1, 0, tzinfo=timezone.utc), "remind_day"),    # 18.11 19:00 MX, в UTC 19.11
+        (datetime(2026, 11, 19, 16, 0, tzinfo=timezone.utc), "checkin_morning"),  # 19.11 10:00 MX
+    ])
+    async def test_kind_by_mexico_date_and_window(self, monkeypatch, utc, expected):
+        recips = self._spy(monkeypatch)
+        await scheduler.run_event_reminders(now=utc)
+        assert self._kind(recips) == expected
+        if expected:
+            assert recips.call_args.args[2] == "2026-11-18"
+
+    async def test_outside_window_does_not_read_settings(self, monkeypatch):
+        """Вне окна — ранний выход, даже БД не трогаем."""
+        gs = AsyncMock(); monkeypatch.setattr(db, "get_settings", gs)
+        n = await scheduler.run_event_reminders(
+            now=datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc))  # полночь по Мехико
+        assert n == 0
+        gs.assert_not_awaited()

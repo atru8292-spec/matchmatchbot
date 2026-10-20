@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1696,3 +1697,16 @@ class TestWhitelistSearch:
     def test_like_metachars_escaped(self):
         _, args = db._whitelist_search_where("50%_x")
         assert args[0] == "%50\\%\\_x%"
+
+
+class TestDailyCounterKeyMexico:
+    """Антибан-счётчик: сутки по Мехико (UTC-6), не по UTC."""
+
+    @pytest.mark.parametrize("utc, day", [
+        (datetime(2026, 11, 18, 0, 30, tzinfo=timezone.utc), "2026-11-17"),   # 17.11 18:30 MX
+        (datetime(2026, 11, 18, 5, 59, tzinfo=timezone.utc), "2026-11-17"),   # 17.11 23:59 MX
+        (datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc), "2026-11-18"),    # 18.11 00:00 MX
+        (datetime(2026, 11, 18, 23, 0, tzinfo=timezone.utc), "2026-11-18"),   # 18.11 17:00 MX
+    ])
+    def test_key_uses_mexico_date(self, utc, day):
+        assert db._daily_counter_key("cold_followups", now=utc) == f"counter:cold_followups:{day}"

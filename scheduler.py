@@ -18,6 +18,7 @@ import asyncio
 import logging
 import random
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import actions
 import db
@@ -60,8 +61,12 @@ VIDEOCALL_SCENARIO = 49
 VIDEOCALL_REMIND_BEFORE_MIN = 120  # напоминаем за 2 часа до звонка
 VIDEOCALL_TOLERANCE_MIN = 30       # окно допуска ±30 мин (тик почасовой — см. run_videocall_reminders)
 VIDEOCALL_BATCH = 30
-# CDMX круглый год UTC-6 (Мексика отменила летнее время в 2022) — для показа времени звонка.
-CDMX_TZ = timezone(timedelta(hours=-6))
+# Часовой пояс Мехико: время звонка лиду и «сегодня/завтра» для напоминаний об ивенте.
+CDMX_TZ = ZoneInfo("America/Mexico_City")
+# Окно отправки напоминаний об ивенте по Мехико: [10:00, 20:00). Тик почасовой — без окна
+# «завтра ивент» ушло бы в первый тик после полуночи (решение владелицы 2026-10-21).
+EVENT_SEND_HOUR_FROM = 10
+EVENT_SEND_HOUR_TO = 20
 
 
 def _bubbles(template: str) -> list[str]:
@@ -149,8 +154,17 @@ async def run_followups() -> int:
 
 # ===== B) Напоминания об ивенте =====
 
-async def run_event_reminders(today=None) -> int:
-    """Разослать напоминания об ивенте, если сегодня T-1 или день ивента. Вернуть число."""
+async def run_event_reminders(now: datetime | None = None) -> int:
+    """Разослать напоминания об ивенте, если сегодня T-1 или день ивента. Вернуть число.
+
+    «Сегодня» и окно отправки считаем по Мехико, не по UTC: в 18:00 17.11 по Мехико
+    в UTC уже 18.11, и раньше «сегодня ивент» ушло бы на день раньше."""
+    local = (now or datetime.now(timezone.utc)).astimezone(CDMX_TZ)
+    if not (EVENT_SEND_HOUR_FROM <= local.hour < EVENT_SEND_HOUR_TO):
+        logger.info("event reminders: %s по Мехико вне окна %02d:00-%02d:00 — пропуск",
+                    local.strftime("%H:%M"), EVENT_SEND_HOUR_FROM, EVENT_SEND_HOUR_TO)
+        return 0
+    today = local.date()
     s = await db.get_settings(EVENT_KEYS)
     if s.get("event_active") != "1":
         return 0
@@ -163,7 +177,6 @@ async def run_event_reminders(today=None) -> int:
         logger.warning("event_date некорректен: %r — пропуск", date_str)
         return 0
 
-    today = today or datetime.now(timezone.utc).date()
     # Прошедший ивент (T+2 и дальше) — ни напоминаний, ни FOMO-медиа (ниже ни одна ветка
     # не срабатывает; явная проверка — чтобы правка веток случайно это не сломала).
     if today > event_date + timedelta(days=1):

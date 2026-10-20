@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import asyncpg
 from asyncpg.exceptions import UniqueViolationError
@@ -480,14 +481,18 @@ async def reset_followup_timer(phone: str, hours: int) -> None:
         raise
 
 
-# ===== Суточные счётчики (антибан-лимит рассылки) — в app_settings, ключ по дате UTC =====
+# ===== Суточные счётчики (антибан-лимит рассылки) — в app_settings, ключ по дате Мехико =====
+# Сутки по Мехико, не по UTC: иначе лимит обнулялся в 18:00 по Мехико (решение 2026-10-21).
+_COUNTER_TZ = ZoneInfo("America/Mexico_City")
 
-def _daily_counter_key(name: str) -> str:
-    return f"counter:{name}:{datetime.now(timezone.utc).date().isoformat()}"
+
+def _daily_counter_key(name: str, now: datetime | None = None) -> str:
+    day = (now or datetime.now(timezone.utc)).astimezone(_COUNTER_TZ).date()
+    return f"counter:{name}:{day.isoformat()}"
 
 
 async def get_daily_counter(name: str) -> int:
-    """Сколько отправлено сегодня (UTC) по счётчику name. Нет ключа → 0."""
+    """Сколько отправлено сегодня (по Мехико) по счётчику name. Нет ключа → 0."""
     v = await get_setting(_daily_counter_key(name))
     return int(v) if v and v.strip().isdigit() else 0
 
