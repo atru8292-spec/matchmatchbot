@@ -506,6 +506,13 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
     # экономит токены/запрос против 30 без потери качества.
     history = await db.get_conversation_history(phone, 20)
     result = await ai.generate_reply(lead, history, combined)
+    # Режим rag: состояние разговора (уход от темы подряд, возвраты). Колонка из миграции 008;
+    # без неё — только лог, ответ лиду не страдает.
+    if result.get("rag_estado") is not None:
+        try:
+            await db.update_rag_state(phone, result["rag_estado"])
+        except Exception:
+            logger.warning("rag_estado не сохранён [%s] (миграция 008 применена?)", phone)
 
     # 1. Извлечённые поля лида — уже провалидированы в ai (whitelist LEAD_COLUMNS).
     #    date_of_birth AI отдаёт строкой ISO → конвертируем в date для типизированной колонки.
@@ -577,8 +584,10 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
             logger.exception("не смог поставить manual (silent) для %s", phone)
         title = await db.get_scenario_title(result["used_scenario_id"])
         logger.info("AI silent [%s] (scenario=%s) — без ответа лиду", phone, result["used_scenario_id"])
+        # silent_reason — режим rag: чего не хватило (нет данных, политика молчания, проверка).
         await escalation.notify_escalation(
-            lead, title or "Похоже на клиента агентства — бот промолчал", combined)
+            lead, result.get("silent_reason") or title
+            or "Похоже на клиента агентства — бот промолчал", combined)
         return
 
     # respond / escalate — стадию ставит AI (если вернул валидную).

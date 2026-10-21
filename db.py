@@ -505,6 +505,62 @@ async def incr_daily_counter(name: str) -> int:
     return new
 
 
+async def get_daily_amount(name: str) -> float:
+    """Сумма за сегодня (по Мехико) по счётчику name (например, расход OpenAI в $)."""
+    v = await get_setting(_daily_counter_key(name))
+    try:
+        return float(v) if v else 0.0
+    except ValueError:
+        return 0.0
+
+
+async def add_daily_amount(name: str, amount: float) -> float:
+    """Прибавить amount к сегодняшней сумме name. Вернуть новое значение."""
+    new = await get_daily_amount(name) + float(amount)
+    await set_setting(_daily_counter_key(name), f"{new:.6f}")
+    return new
+
+
+async def update_memory_summary(phone: str, resumen: str, last_message_id, count: int) -> None:
+    """Сводка памяти лида (режим rag, миграция 008)."""
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET memoria_resumen = $2, memoria_hasta_message_id = $3, "
+            "memoria_mensajes = $4, memoria_updated_at = now() WHERE phone = $1",
+            phone, resumen, last_message_id, count)
+    except Exception:
+        logger.exception("update_memory_summary failed: phone=%s", phone)
+        raise
+
+
+async def update_rag_state(phone: str, estado: dict) -> None:
+    """Состояние режима rag (уход от темы подряд, возвраты), миграция 008."""
+    try:
+        await _get_pool().execute(
+            "UPDATE leads SET rag_estado = $2 WHERE phone = $1", phone, estado)
+    except Exception:
+        logger.exception("update_rag_state failed: phone=%s", phone)
+        raise
+
+
+async def leads_needing_summary(min_messages: int, quiet_hours: int, limit: int) -> list[str]:
+    """Лиды, которые молчат > quiet_hours, с перепиской > min_messages и отставшей сводкой
+    (покрыто меньше, чем всего сообщений минус 40 минус 20). Миграция 008."""
+    try:
+        rows = await _get_pool().fetch(
+            "SELECT m.lead_phone FROM messages m JOIN leads l ON l.phone = m.lead_phone "
+            "WHERE NOT COALESCE(l.do_not_contact, false) "
+            "GROUP BY m.lead_phone, l.memoria_mensajes "
+            "HAVING count(*) > $1 AND max(m.created_at) < now() - make_interval(hours => $2) "
+            "AND count(*) - 40 - COALESCE(l.memoria_mensajes, 0) >= 20 "
+            "ORDER BY max(m.created_at) DESC LIMIT $3",
+            min_messages, quiet_hours, limit)
+    except Exception:
+        logger.exception("leads_needing_summary failed")
+        raise
+    return [r["lead_phone"] for r in rows]
+
+
 async def mark_followup_sent(phone: str, next_followup_at) -> None:
     """Инкремент followup_sent_count + новый next_followup_at (или None → NULL, финиш)."""
     try:

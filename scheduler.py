@@ -400,6 +400,14 @@ async def run_pause_digest(now: datetime | None = None) -> int:
     return len(rows)
 
 
+async def run_memory_summaries(limit: int = 5) -> int:
+    """Режим rag: обновить сводки памяти лидов, которые молчат > 6 ч (gpt-4.1-mini)."""
+    if (await db.get_setting("reply_mode") or "").strip().lower() != "rag":
+        return 0
+    import ai_conversation
+    return await ai_conversation.refresh_stale_summaries(limit=limit)
+
+
 async def tick() -> None:
     """Один проход планировщика. Сбой любой части → лог + technical-алерт, не роняет цикл."""
     # Глобальная пауза (тех. режим): не шлём НИЧЕГО проактивно (догоны/напоминания) всем лидам.
@@ -412,6 +420,13 @@ async def tick() -> None:
             logger.exception("run_pause_digest упал")
             await escalation.notify_error("scheduler.pause_digest", repr(e))
         return
+    # Сводки памяти лидов (режим rag): лиду ничего не уходит, поэтому не зависит от
+    # scheduler_enabled. Только при reply_mode=rag (при rag_test сводка строится перед ответом).
+    try:
+        await run_memory_summaries()
+    except Exception as e:
+        logger.exception("run_memory_summaries упал")
+        await escalation.notify_error("scheduler.memory_summaries", repr(e))
     # Отдельный тумблер авто-рассылок: догоны #32/#33/#36/#38/#59, напоминания об ивенте
     # (+FOMO-медиа), напоминания о звонке #49. Пока 0 — ничего не отправляем.
     if not await _scheduler_enabled():

@@ -454,8 +454,12 @@ async def _bot_start(chat_id, frm) -> None:
 
 async def _bot_status(chat_id, frm) -> None:
     """Только чтение: флаги + сколько лидов в ручном режиме."""
-    s = await db.get_settings(["bot_paused", "scheduler_enabled", "event_active"])
+    s = await db.get_settings(["bot_paused", "scheduler_enabled", "event_active", "reply_mode"])
     manual = await db.count_manual_leads()
+    try:
+        cost = await db.get_daily_amount("rag_cost_usd")
+    except Exception:
+        cost = None
 
     def flag(key: str, on: str, off: str) -> str:
         v = s.get(key)
@@ -465,7 +469,17 @@ async def _bot_status(chat_id, frm) -> None:
                  + flag("bot_paused", "⏸ на паузе", "▶️ отвечает лидам") + "\n"
                  + flag("scheduler_enabled", "авто-рассылки вкл", "авто-рассылки выкл") + "\n"
                  + flag("event_active", "ивент вкл", "ивент выкл") + "\n"
-                 + f"Лидов в ручном режиме: {manual}")
+                 + f"reply_mode = {s.get('reply_mode') or 'legacy'}\n"
+                 + f"Лидов в ручном режиме: {manual}\n"
+                 + _cost_line(cost))
+
+
+def _cost_line(cost: float | None) -> str:
+    """Расход OpenAI режима rag за сегодня (по Мехико); больше $5 — предупреждение."""
+    if cost is None:
+        return "Расход rag сегодня: не прочитался"
+    warn = " ⚠️ больше $5 за день" if cost > 5 else ""
+    return f"Расход rag сегодня: ${cost:.2f}{warn}"
 
 
 async def _cb_bot_control(chat_id, cb_id, action, frm, message_id=None) -> None:
