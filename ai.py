@@ -48,6 +48,7 @@ import httpx
 import db
 import escalation
 import funnel
+import reply_mode
 from config import settings
 from filters import MAX_AGE, MIN_AGE
 
@@ -1778,10 +1779,32 @@ async def _enforce_video_on_any_first_pitch(result: dict, used: dict | None, lea
 async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dict:
     """Сгенерировать ответ бота на склеенный текст лида.
 
+    Режим выбирает app_settings.reply_mode (reply_mode.py): rag → ai_conversation,
+    иначе старый путь. Сбой режима rag → старый путь + техалерт: лид без ответа не остаётся.
     Возвращает dict контракта: messages, funnel_stage, action, extracted,
     needs_escalation, used_scenario_id. Никогда не бросает — при сбоях fallback.
     """
     lead = lead or {}
+    mode = await reply_mode.resolve(lead.get("phone"))
+    logger.info("reply_mode=%s [%s]", mode, lead.get("phone"))
+    if mode == reply_mode.RAG:
+        import ai_conversation  # лениво: ai_conversation сам импортирует ai
+        try:
+            return await ai_conversation.generate_reply(lead, history, user_text)
+        except NotImplementedError:
+            logger.warning("reply_mode=rag, но режим не готов → legacy")
+        except Exception as e:
+            logger.exception("режим rag упал → legacy")
+            try:
+                await escalation.notify_error("ai_conversation.generate_reply", repr(e),
+                                              lead.get("phone"))
+            except Exception:
+                logger.exception("notify_error из режима rag упал")
+    return await _generate_reply_legacy(lead, history, user_text)
+
+
+async def _generate_reply_legacy(lead: dict, history: list[dict], user_text: str) -> dict:
+    """Старый путь ответа (reply_mode=legacy): RAG по сценариям + проверки после модели."""
     try:
         # top_k=5 (было 3): чем больше кандидатов видит AI, тем меньше шанс, что единственный
         # (возможно случайный) RAG-матч продавит решение — без этого модель почти всегда
