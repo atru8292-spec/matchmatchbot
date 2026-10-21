@@ -92,8 +92,9 @@ class TestDispatch:
         assert await ai.generate_reply({"phone": TEST_PHONE}, [], "hola") == self.RAG_REPLY
         legacy.assert_not_awaited()
 
-    async def test_rag_not_ready_falls_back_silently(self, monkeypatch, legacy):
-        """Нет промпта режима rag (NotImplementedError) → старый путь, без техалерта."""
+    async def test_rag_not_ready_is_silent_with_alert(self, monkeypatch, legacy):
+        """Нет промпта режима rag → старый ответ НЕ уходит: молчание (main: ручной режим +
+        алерт Ане) и техалерт (решение владелицы 2026-10-22)."""
         monkeypatch.setattr(reply_mode, "resolve", AsyncMock(return_value="rag"))
 
         def no_prompt():
@@ -101,17 +102,21 @@ class TestDispatch:
         monkeypatch.setattr(ai_conversation, "load_prompt", no_prompt)
         err = AsyncMock()
         monkeypatch.setattr(escalation, "notify_error", err)
-        assert await ai.generate_reply({"phone": TEST_PHONE}, [], "hola") == self.LEGACY_REPLY
-        err.assert_not_awaited()
+        r = await ai.generate_reply({"phone": TEST_PHONE}, [], "hola")
+        assert r["action"] == "silent" and r["messages"] == [] and r["silent_reason"]
+        err.assert_awaited_once()
+        legacy.assert_not_awaited()
 
-    async def test_rag_crash_falls_back_with_alert(self, monkeypatch, legacy):
+    async def test_rag_crash_is_silent_with_alert(self, monkeypatch, legacy):
         monkeypatch.setattr(reply_mode, "resolve", AsyncMock(return_value="rag"))
         monkeypatch.setattr(ai_conversation, "generate_reply",
                             AsyncMock(side_effect=ValueError("boom")))
         err = AsyncMock()
         monkeypatch.setattr(escalation, "notify_error", err)
-        assert await ai.generate_reply({"phone": TEST_PHONE}, [], "hola") == self.LEGACY_REPLY
+        r = await ai.generate_reply({"phone": TEST_PHONE}, [], "hola")
+        assert r["action"] == "silent" and "сбой" in r["silent_reason"]
         err.assert_awaited_once()
+        legacy.assert_not_awaited()
 
     async def test_no_db_is_legacy(self, monkeypatch, legacy):
         """Пула нет (как в большинстве юнит-тестов) → legacy, без исключения наружу."""

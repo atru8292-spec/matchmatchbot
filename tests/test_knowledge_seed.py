@@ -187,8 +187,12 @@ def test_site_facts_2026_10_21():
     for r in RECORDS:
         for t in _model_facing(r):
             assert "Slavic Latino Night" not in t and "entrantes" not in t, r["id"]
-    for rid in ("event_price", "event_includes", "obj_event_price"):
+    for rid in ("event_includes", "obj_event_price"):
         assert "botanas" in by_id[rid]["contenido_es"], rid
+    # цена целой мыслью (решение владелицы 2026-10-22)
+    assert by_id["event_price"]["contenido_es"] == (
+        "Ahora cuesta [event_price_nonmember] MXN. Más adelante el precio sube a [event_price_next] MXN.")
+    assert by_id["event_price_steps"]["contenido_es"] == "Más adelante el precio sube a [event_price_next] MXN."
 
 
 def test_objections_without_praise():

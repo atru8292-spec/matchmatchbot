@@ -66,12 +66,12 @@
 
 **Текст (es):**
 
-> Ahora cuesta [event_price_nonmember] MXN e incluye bebida de bienvenida y botanas.
+> Ahora cuesta [event_price_nonmember] MXN. Más adelante el precio sube a [event_price_next] MXN.
 
-**Перевод:** Сейчас стоит [цена] MXN, входят приветственный напиток и закуски (botanas).
+**Перевод:** Сейчас стоит [цена] MXN. Позже цена поднимется до [следующая цена] MXN.
 
 - **Когда:** ¿cuánto cuesta?, ¿cuánto es?, precio del evento, ¿qué precio tiene el boleto?, costo
-- **Как отвечать (для модели):** Texto casi literal, con el token tal cual (el sistema pone la cifra). Puedes añadir event_price_steps en una sola frase, sin presionar a comprar. Sin enlace salvo que pregunte cómo comprar. Nunca otra cifra.
+- **Как отвечать (для модели):** Siempre las dos frases juntas, tal cual, con los tokens (el sistema pone las cifras). Sin enlace salvo que pregunte cómo comprar. Nunca otra cifra.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
 - **Источник:** app_settings, сайт (лестница 6000 → 7000 → 8000)
 
@@ -79,12 +79,12 @@
 
 **Текст (es):**
 
-> El precio sube por etapas: la siguiente es de [event_price_next] MXN.
+> Más adelante el precio sube a [event_price_next] MXN.
 
-**Перевод:** Цена растёт ступенями: следующая — [следующая цена] MXN. (Сайт: 6000 → 7000 → 8000.)
+**Перевод:** Позже цена поднимется до [следующая цена] MXN. (Сайт: 6000 → 7000 → 8000.)
 
 - **Когда:** ¿va a subir el precio?, ¿el precio cambia?, ¿cuánto costará después?, (como dato opcional después de dar el precio)
-- **Как отвечать (для модели):** Una sola frase, opcional, después del precio actual. Sin decir cuándo sube y sin presionar a comprar.
+- **Как отвечать (для модели):** Siempre con esta frase completa, sin decir cuándo sube y sin presionar a comprar.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
 - **Источник:** сайт rusaencdmx.com (MXN 6000 → 7000 → 8000)
 
@@ -759,6 +759,15 @@
 - **Флаги:** действие: молчать, ручной режим, алерт Ане
 - **Источник:** решение владелицы 2026-10-21; заменяет №41 и часть №39
 
+### `policy_anya_promise` · Lo que Anna prometió a mano · ✅ подтверждено
+
+**Перевод:** Лид спрашивает о том, что Аня пообещала вручную, а в базе этого нет: бот не подтверждает и не отрицает, молча Ане.
+
+- **Когда:** me dijiste que me guardabas el lugar, como quedamos, ¿sigue en pie lo que me dijiste?, Anna me prometió, me dijeron que, me ofreciste
+- **Как отвечать (для модели):** Si el lead pregunta por algo que Anna le prometió a mano (mensajes anya_manual) y eso no está en las fichas: no lo confirmes ni lo niegues, accion=silent. Anna lo resuelve.
+- **Флаги:** действие: молчать, ручной режим, алерт Ане
+- **Источник:** решение владелицы 2026-10-22
+
 ### `policy_discount` · Descuentos y promociones · ✅ подтверждено
 
 **Перевод:** Скидки и промо: лиду ничего, алерт Ане.
@@ -801,15 +810,6 @@
 
 - **Когда:** estacionamiento, valet, edad de los asistentes, código de vestimenta formal, menú, alcohol ilimitado, lugar exacto, horario de otro evento, cualquier dato que no esté en las fichas
 - **Как отвечать (для модели):** No respondas nada al lead: accion=silent. Anna recibe la alerta y contesta ella. Pon falta_dato=true.
-- **Флаги:** действие: молчать, ручной режим, алерт Ане
-- **Источник:** решение владелицы
-
-### `policy_anya_promise` · Anna prometió algo que no está en la base · ✅ подтверждено
-
-**Перевод:** Аня что-то обещала вручную, а в базе этого нет: лиду ничего, алерт Ане.
-
-- **Когда:** (historial: anya_manual prometió algo y el lead lo pide)
-- **Как отвечать (для модели):** No respondas nada al lead: accion=silent. Anna recibe la alerta y contesta ella. No contradigas lo que Anna escribió a mano.
 - **Флаги:** действие: молчать, ручной режим, алерт Ане
 - **Источник:** решение владелицы
 

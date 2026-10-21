@@ -38,6 +38,7 @@ import escalation
 import filters
 import knowledge
 import memory
+import reply_mode
 import sender
 
 NOW = datetime.now(timezone.utc)
@@ -49,6 +50,15 @@ EVENT_SETTINGS = {
     "event_price_old": "", "event_link": LINK, "bot_paused": "0",
 }
 ANNOUNCED = "2026-10-20T17:45:22+00:00"
+# Настройки конкретного диалога поверх EVENT_SETTINGS (диалог 15: пустая следующая цена).
+OVERRIDE: dict = {}
+# Сбой OpenAI посреди диалога (диалог 14): сколько следующих вызовов чата rag уронить.
+FAIL_NEXT = {"n": 0}
+FAIL_MARK = "[сбой OpenAI] "
+
+
+def ev() -> dict:
+    return {**EVENT_SETTINGS, **OVERRIDE}
 
 GREETING_EVENT = [b for b in knowledge.load_seed()
                   if b["id"] == "greeting_event"][0]["contenido_es"].split("\n\n")
@@ -122,6 +132,25 @@ DIALOGS = [
      BASE_LEAD, ["¿entonces me guardas el lugar hasta el viernes?", "¿qué incluye el boleto?"]),
     ("11. Фото прислал сам, потом спросил, как купить", BASE_EVENT, BASE_LEAD,
      [PHOTO_OK, "¿cómo compro el boleto?"]),
+    # Решения владелицы 2026-10-22: риски из первого живого прогона.
+    ("12. Старая переписка с выдумками старого бота (OXXO, 30 и 30)",
+     BASE_EVENT + [M("lead", "¿cuántas personas van?", 2 * DAY),
+                   M("anna", "Van 30 mujeres eslavas solteras y 30 hombres.", 2 * DAY - 1),
+                   M("lead", "¿y cómo pago?", 2 * DAY - 2),
+                   M("anna", "Puedes pagar con tarjeta o en efectivo en OXXO.", 2 * DAY - 3)],
+     BASE_LEAD, ["¿al final cuántas mujeres van?", "¿y cómo se paga el boleto, como me dijiste?"]),
+    ("13. Без фото после двух просьб, хочет купить",
+     BASE_EVENT + [M("anna", "¿Me mandas una foto tuya?", 20), M("lead", "¿dónde es?", 15),
+                   M("anna", "Es en Polanco, CDMX. ¿Me mandas una foto tuya?", 14)],
+     {**BASE_LEAD, "age": 38, "profession": "ingeniero"}, ["¿cómo compro el boleto?"]),
+    ("14. Сбой OpenAI посреди диалога", BASE_EVENT, BASE_LEAD,
+     ["¿qué incluye?", FAIL_MARK + "¿a qué hora empieza?", "¿hay que ir disfrazado?"]),
+    ("15. Пустая следующая ступень цены", BASE_EVENT, BASE_LEAD, ["¿cuánto cuesta?"],
+     {"event_price_next": ""}),
+    ("16. Игнорирует вопрос о возрасте, три вопроса подряд",
+     BASE_EVENT + [M("anna", "Es en Polanco, CDMX.", 10),
+                   M("anna", "¿Cuántos años tienes y a qué te dedicas?", 10)],
+     BASE_LEAD, ["¿qué incluye?", "¿hay que ir disfrazado?", "¿a qué hora empieza?"]),
 ]
 
 # ───────────────────────── бюджет и заглушки ─────────────────────────
@@ -149,6 +178,9 @@ def install(spend: Spend, dry: bool) -> None:
     async def post(url, payload, timeout):
         if spend.usd + RESERVE_USD >= spend.limit:   # запас на один вызов
             raise Budget(f"бюджет ${spend.limit:.2f} исчерпан (${spend.usd:.3f})")
+        if FAIL_NEXT["n"] and "chat/completions" in url:
+            FAIL_NEXT["n"] -= 1
+            raise RuntimeError("429 Too Many Requests (смоук: имитация сбоя)")
         r = await (_fake_post(url, payload) if dry else orig_post(url, payload, timeout))
         usage = r.json().get("usage") or {}
         p = rag.PRICES.get(payload.get("model"), rag.PRICES["gpt-4.1"])
@@ -201,7 +233,7 @@ _PURCHASE = re.compile(r"compr|reserv|apart|quiero ir|link|enlace|\bpag(?:o|ar)\
 
 
 def judge(bubbles: list[str], lead_text: str, presented_before: bool,
-          buying: bool | None = None, photo: bool = True) -> list[str]:
+          buying: bool | None = None, photo: bool = True, prev_reply: str | None = None) -> list[str]:
     """buying — лид спрашивал, как купить (сейчас или раньше, а ссылку ещё не получил);
     photo — фото лида одобрено (без него ссылки на ивент нет)."""
     out = []
@@ -228,6 +260,13 @@ def judge(bubbles: list[str], lead_text: str, presented_before: bool,
         out.append("неподтверждённый факт")
     if re.search(r"~|(?<!\d)8,?000(?!\d)", text):
         out.append("зачёркнутая/8000")
+    for slot in memory.SLOT_QUESTION_RE:
+        if memory.pregunta_slot(slot, prev_reply) and memory.pregunta_slot(slot, text):
+            out.append(f"вопрос слота подряд: {slot}")
+    if re.search(r"(?<!\d)7,?000(?!\d)", text) and "Más adelante el precio sube a" not in text:
+        out.append("следующая цена обрывком")
+    if re.search(r"\[[a-z_]+\]", text):
+        out.append("неподставленный токен")
     return out
 
 
@@ -244,6 +283,11 @@ class Lead:
 
 async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
     spend.mode = mode
+    if text.startswith(FAIL_MARK):
+        text = text[len(FAIL_MARK):]
+        FAIL_NEXT["n"] = 1 if mode == "rag" else 0
+    prev_reply = memory.ultima_respuesta(
+        [dict(m, direction="inbound" if m["sender"] == "lead" else "outbound") for m in L.history])
     link_before = any(LINK in (m["text"] or "") for m in L.history if m["sender"] == "anna")
     buying = bool(_PURCHASE.search(text)) or (not link_before and any(
         _PURCHASE.search(m["text"] or "") for m in L.history if m["sender"] == "lead"))
@@ -259,7 +303,9 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
     if mode == "legacy":
         r = await ai._generate_reply_legacy(L.lead, L.history[-21:-1], text)
     else:
-        r = await rag.generate_reply(L.lead, [], text)
+        # через общий диспетчер, как в проде: сбой режима rag → молчание, а не legacy
+        r = await ai.generate_reply(L.lead, [], text)
+    FAIL_NEXT["n"] = 0
     bubbles = await sender.render_bubbles(r.get("messages") or [], None, True)
     presented = any(m["sender"] == "anna" for m in L.history[:-1])
     for b in bubbles:
@@ -275,7 +321,7 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
             "meta": r.get("rag_meta"), "media": [k for k in ("send_event_photo", "send_event_video")
                                                    if r.get(k)],
             "violations": judge(bubbles, text, presented, buying,
-                                bool(L.lead.get("photo_received"))),
+                                bool(L.lead.get("photo_received")), prev_reply),
             "usd": spend.usd - before}
 
 
@@ -283,16 +329,16 @@ def install_db(leads_by_phone: dict) -> None:
     real_get_settings = db.get_settings
 
     async def get_settings(keys):
-        real = await real_get_settings([k for k in keys if k not in EVENT_SETTINGS])
-        return {**real, **{k: EVENT_SETTINGS[k] for k in keys if k in EVENT_SETTINGS}}
+        real = await real_get_settings([k for k in keys if k not in ev()])
+        return {**real, **{k: ev()[k] for k in keys if k in ev()}}
 
     real_get_setting = db.get_setting
 
     async def get_setting(key):
         if key == "event_announced_at":
             return ANNOUNCED
-        if key in EVENT_SETTINGS:
-            return EVENT_SETTINGS[key]
+        if key in ev():
+            return ev()[key]
         return await real_get_setting(key)
 
     async def history(phone, limit=30):
@@ -309,6 +355,10 @@ def install_db(leads_by_phone: dict) -> None:
     async def no_send(*a, **k):
         raise RuntimeError("smoke: отправка запрещена")
 
+    async def resolve(phone):
+        return reply_mode.RAG
+
+    reply_mode.resolve = resolve        # rag-ход идёт через ai.generate_reply, как в проде
     db.get_settings = get_settings
     db.get_setting = get_setting
     db.get_conversation_history = history
@@ -352,8 +402,11 @@ async def amain(args) -> None:
                 rows.append(("сообщение", text, res))
                 lines += _fmt(text, res, modes)
         if args.part in ("dialogs", "all"):
-            for title, hist, prof, turns in DIALOGS:
+            for title, hist, prof, turns, *over in DIALOGS:
                 idx += 1
+                OVERRIDE.clear()
+                OVERRIDE.update(over[0] if over else {})
+                knowledge.reset_cache()
                 lines.append(f"\n## {title}\n")
                 Ls = {mode: Lead(mode, idx, hist, prof) for mode in modes}
                 for L in Ls.values():

@@ -609,6 +609,15 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
                        len(messages), phone)
         await escalation.notify_error(
             "main._run_ai", f"0 бабблов ушло лиду (были: {messages!r})", phone)
+        if result.get("rag_meta") is not None:
+            # Режим rag: лид не должен остаться без ответа и без человека (инвариант молчания).
+            try:
+                await db.update_lead_fields(phone, mode="manual")
+            except Exception:
+                logger.exception("не смог поставить manual (rag, 0 бабблов) [%s]", phone)
+            await escalation.notify_escalation(
+                lead, "Режим rag: ответ не ушёл лиду (все сообщения отброшены при отправке) — "
+                      "ответь сама", combined)
     # Антибан-догон: СБРАСЫВАЕМ таймер тишины на любом ответе лида (он активен → не нудим),
     # а не только когда таймер пуст. Так догон уходит лишь после реального молчания N дней
     # (пробел (а): раньше активный лид в той же стадии всё равно получал догон).

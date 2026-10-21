@@ -243,8 +243,8 @@ def _mem(**over):
 FICHAS = [BY_ID["event_price"], BY_ID["event_how_to_buy"], BY_ID["event_price_steps"]]
 
 
-def check(bubbles, user_text="¿cuánto cuesta?", lead=None, fichas=None, **mem_over):
-    return rag.check_reply(bubbles, mem=_mem(**mem_over), fichas=fichas or FICHAS,
+def check(bubbles, user_text="¿cuánto cuesta?", lead=None, fichas=None, dio_algo=True, **mem_over):
+    return rag.check_reply(bubbles, mem=_mem(**mem_over), fichas=fichas or FICHAS, dio_algo=dio_algo,
                            lead=lead or {"name": "Carlos", "is_single": True, "photo_received": True},
                            user_text=user_text)
 
@@ -326,24 +326,24 @@ class TestCheckReply:
         assert rag._caption_within_budget("Video 🎬", ["A 🤍"]) == "Video 🎬"
 
     def test_banned_opener_stripped(self):
-        b, _, _ = check(["¡Gracias por tu interés! Ahora cuesta 6000 MXN."])
-        assert b == ["Ahora cuesta 6000 MXN."]
-        b, _, _ = check(["¡Perfecto! Ahora cuesta 6000 MXN. Te va a encantar."])
-        assert b == ["Ahora cuesta 6000 MXN."]
+        b, _, _ = check(["¡Gracias por tu interés! Es en Polanco, CDMX."])
+        assert b == ["Es en Polanco, CDMX."]
+        b, _, _ = check(["¡Perfecto! Es en Polanco, CDMX. Te va a encantar."])
+        assert b == ["Es en Polanco, CDMX."]
 
     def test_name_at_start_stripped(self):
-        b, _, _ = check(["Carlos, ahora cuesta 6000 MXN."])
-        assert b == ["Ahora cuesta 6000 MXN."]
+        b, _, _ = check(["Carlos, es en Polanco, CDMX."])
+        assert b == ["Es en Polanco, CDMX."]
 
     def test_no_reintroduction(self):
         ya = memory.ya_hecho([msg("anna", "Hola, soy Anna", 100)], {}, SETTINGS, None, NOW)
-        b, _, _ = check(["Hola, soy Anna, fundadora de Match Match Agency. Ahora cuesta 6000 MXN."],
+        b, _, _ = check(["Hola, soy Anna, fundadora de Match Match Agency. Es en Polanco, CDMX."],
                         ya_hecho=ya)
-        assert b == ["Ahora cuesta 6000 MXN."]
+        assert b == ["Es en Polanco, CDMX."]
 
     def test_slang_sentence_removed(self):
-        b, _, _ = check(["Ahora cuesta 6000 MXN. Checa el link porfa."])
-        assert b == ["Ahora cuesta 6000 MXN."]
+        b, _, _ = check(["Es en Polanco, CDMX. Checa el link porfa."])
+        assert b == ["Es en Polanco, CDMX."]
 
     def test_service_price_blocked_in_calificacion(self):
         ya = memory.ya_hecho([], {}, SETTINGS, None, NOW)
@@ -546,9 +546,12 @@ class TestPipeline:
         async def boom(*a, **k):
             raise RuntimeError("429")
         monkeypatch.setattr(rag, "_chat", boom)
-        monkeypatch.setattr(ai.escalation, "notify_error", AsyncMock())
+        alert = AsyncMock()
+        monkeypatch.setattr(ai.escalation, "notify_error", alert)
         r = await rag.generate_reply(p.lead, [], "¿dónde es?")
-        assert r["action"] == "escalate"
+        # сбой нового режима: старый ответ не уходит — молчание, Аня и техалерт (2026-10-22)
+        assert r["action"] == "silent" and r["messages"] == [] and "сбой" in r["silent_reason"]
+        alert.assert_awaited()
 
 
 class TestSummary:
@@ -723,14 +726,14 @@ class TestReviewFixes:
         assert "[event_link]" in b[0]
 
     def test_price_question_is_not_purchase(self):
-        b, _, _ = check(["Ahora cuesta 6000 MXN.", "Puedes comprar tu boleto aquí: [event_link]"],
+        b, _, _ = check(["Es en Polanco, CDMX.", "Puedes comprar tu boleto aquí: [event_link]"],
                         user_text="¿cuánto cuesta el boleto?")
-        assert b == ["Ahora cuesta 6000 MXN."]
+        assert b == ["Es en Polanco, CDMX."]
 
     def test_link_sentence_removed_rest_kept(self):
-        b, _, _ = check(["Ahora cuesta 6000 MXN. Puedes comprar tu boleto aquí: [event_link]"],
+        b, _, _ = check(["Es en Polanco, CDMX. Puedes comprar tu boleto aquí: [event_link]"],
                         user_text="¿cuánto cuesta?")
-        assert b == ["Ahora cuesta 6000 MXN."]
+        assert b == ["Es en Polanco, CDMX."]
 
     def test_url_with_trailing_punct_and_capital(self):
         b, reason, _ = check([f"{LINK}?"], user_text="pásame el link")
@@ -919,52 +922,70 @@ class TestPhotoGateReview:
 
 
 class TestVerifierFromSmoke:
-    """Ложные «без источника» из платного смоука 2026-10-22: gpt-4.1-mini помечал фразы,
-    которые почти дословно есть в фичах, благодарности и вопросы."""
+    """Сверка утверждений (решения владелицы 2026-10-22): источник — только подтверждённая
+    база и карточка ивента; числа точно; отрицание должно совпадать; слову модели не верим."""
 
     RECS = knowledge.usable(SEED, SETTINGS, "2026-10-21")
 
-    async def _run(self, monkeypatch, items, bubbles=("x",), historial=None, anna=None):
+    async def _run(self, monkeypatch, items, bubbles=("x",)):
         async def chat(model, system, user, cost, **kw):
             self.payload = user
             return {"afirmaciones": items}
         monkeypatch.setattr(rag, "_chat", chat)
-        return await rag.verify_claims(list(bubbles), [], memory.evento_actual(SETTINGS),
-                                       ["¿cuánto cuesta?"], rag.Cost(), anna or [],
-                                       recs=self.RECS, historial=historial or [])
+        return await rag.verify_claims(list(bubbles), self.RECS, memory.evento_actual(SETTINGS),
+                                       ["¿cuánto cuesta?"], rag.Cost(), SETTINGS)
 
     @pytest.mark.parametrize("claim", [
         "incluye bebida de bienvenida y botanas",
         "Trabajo con más de 3,000 mujeres eslavas que buscan pareja.",
         "es una noche para conocer mujeres eslavas que buscan una relación seria",
+        "Ahora cuesta 6000 MXN.",
+        "Es en Polanco, CDMX.",
         "¡Gracias por tu foto, Javier! 🤍",
         "¿Cuántos años tienes y a qué te dedicas?",
     ])
     async def test_false_positives_dropped(self, monkeypatch, claim):
         assert await self._run(monkeypatch, [{"texto": claim, "respaldo": None}]) == []
 
-    async def test_all_usable_records_are_sources(self, monkeypatch):
+    async def test_only_confirmed_records_are_sources(self, monkeypatch):
         await self._run(monkeypatch, [])
-        assert len(self.payload["FUENTES"]["fichas"]) > 20
+        fichas = self.payload["FUENTES"]["fichas"]
+        assert len(fichas) > 20
+        assert not any("30 mujeres y 30 hombres" in f for f in fichas)   # неподтверждённое
+        assert "CONVERSACION" not in self.payload
 
-    async def test_manual_promise_from_conversation(self, monkeypatch):
-        hist = [{"autor": "anya_manual", "texto": "Te guardo un lugar hasta el viernes si me confirmas hoy."}]
-        claims = await self._run(monkeypatch, [{"texto": "te guardo el lugar hasta el viernes",
-                                                "respaldo": None}], historial=hist)
-        assert claims == []
-
-    @pytest.mark.parametrize("claim", ["Van 30 mujeres y 30 hombres.", "Hay valet parking gratis.",
-                                       "Es el único evento así en América Latina."])
-    async def test_real_inventions_kept(self, monkeypatch, claim):
+    @pytest.mark.parametrize("claim", [
+        "No incluye botanas.", "La entrada es gratis.", "Son 40 mujeres.", "Termina a la 1:00.",
+        "Van 30 mujeres y 30 hombres.", "Hay valet parking gratis.",
+        "Es el único evento así en América Latina.", "Puedes pagar en efectivo en OXXO.",
+    ])
+    async def test_inventions_kept_even_with_model_quote(self, monkeypatch, claim):
+        """Выдумка не проходит ни без цитаты, ни с цитатой модели из настоящей фичи."""
         assert await self._run(monkeypatch, [{"texto": claim, "respaldo": None}]) == [claim]
+        quote = "Incluye bebida de bienvenida y botanas."
+        assert await self._run(monkeypatch, [{"texto": claim, "respaldo": quote}]) == [claim]
 
-    async def test_quoted_support_trusted_and_old_format(self, monkeypatch):
-        assert await self._run(monkeypatch, [{"texto": "Hay valet parking", "respaldo": "x"}]) == []
+    async def test_paraphrase_with_real_quote_passes(self, monkeypatch):
+        quote = "puedes venir disfrazado y, si no tienes disfraz, los organizadores te dan una máscara"
+        assert await self._run(monkeypatch, [{"texto": "No es obligatorio ir disfrazado",
+                                              "respaldo": quote}]) == []
 
+    async def test_quote_from_old_bot_reply_not_trusted(self, monkeypatch):
+        """Цитата из старого ответа бота — не источник."""
+        claims = await self._run(monkeypatch, [{"texto": "Puedes pagar en OXXO",
+                                                "respaldo": "puedes pagar en efectivo en Oxxo"}])
+        assert claims == ["Puedes pagar en OXXO"]
+
+    async def test_old_format(self, monkeypatch):
         async def chat(model, system, user, cost, **kw):
             return {"sin_fuente": ["hay valet parking"]}
         monkeypatch.setattr(rag, "_chat", chat)
         assert await rag.verify_claims(["x"], [], None, [], rag.Cost()) == ["hay valet parking"]
+
+    def test_anya_promise_detected(self):
+        hist = [{"autor": "anya_manual", "texto": "Te guardo un lugar hasta el viernes si me confirmas hoy."}]
+        assert rag.promesa_de_anya(["te guardo el lugar hasta el viernes"], hist)
+        assert not rag.promesa_de_anya(["hay valet parking"], hist)
 
 
 def test_no_data_reply_goes_silent():
@@ -975,3 +996,198 @@ def test_no_data_reply_goes_silent():
 def test_opener_with_name_stripped():
     assert rag.clean_style(["¡Perfecto, Luis! Gracias por compartirlo."]) == ["Gracias por compartirlo."]
     assert rag.clean_style(["¡Perfecto! Te cuento."]) == ["Te cuento."]
+
+
+# ───────────────────────── решения владелицы 2026-10-22 ─────────────────────────
+
+class TestToneAndSale:
+    def test_ignored_slot_question_not_repeated(self):
+        """Прошлый ответ спросил возраст, лид спросил о другом → вопрос не повторяем подряд."""
+        last = "Es en Polanco, CDMX.\n\n¿Cuántos años tienes y a qué te dedicas?"
+        b, _, notes = check(["Incluye bebida de bienvenida y botanas.", "¿Cuántos años tienes?"],
+                            user_text="¿qué incluye?", ultimo_mensaje_anna=last)
+        assert b == ["Incluye bebida de bienvenida y botanas."]
+        assert "убрала повтор вопроса по слоту" in notes
+
+    def test_other_slot_question_kept(self):
+        b, _, _ = check(["Es en Polanco, CDMX.", "¿Me mandas una foto tuya?"], user_text="¿dónde es?",
+                        ultimo_mensaje_anna="¿Cuántos años tienes?")
+        assert b[-1] == "¿Me mandas una foto tuya?"
+
+    def test_ignored_question_counts_as_attempt(self):
+        prior = [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 10), msg("lead", "¿dónde es?", 9)]
+        ya = memory.ya_hecho(prior, {}, SETTINGS, None, NOW)
+        assert ya["preguntas_calificacion"]["age"] == 1
+        # «confirmas que estás soltero.» — утверждение, не вопрос: попыткой не считается
+        ya = memory.ya_hecho([msg("anna", "Al comprar el boleto confirmas que estás soltero.", 5)],
+                             {}, SETTINGS, None, NOW)
+        assert ya["preguntas_calificacion"]["is_single"] == 0
+
+    def test_last_reply_is_whole_group(self):
+        prior = [msg("lead", "hola", 10), msg("anna", "Es en Polanco.", 9),
+                 msg("anna", "¿Cuántos años tienes?", 8)]
+        assert memory.ultima_respuesta(prior) == "Es en Polanco.\n\n¿Cuántos años tienes?"
+
+    def test_thanks_only_when_lead_gave_something(self):
+        b, _, _ = check(["¡Gracias, Diego! Qué gusto saber de ti.", "Es en Polanco, CDMX."],
+                        user_text="hola, ¿dónde es?", dio_algo=False)
+        assert b == ["Qué gusto saber de ti.", "Es en Polanco, CDMX."]
+        b, _, _ = check(["¡Gracias por la foto!", "Es en Polanco, CDMX."], user_text="[фото одобрено]")
+        assert b[0] == "¡Gracias por la foto!"
+        assert rag.lead_dio_algo("me llamo Diego", {"name": "Diego"})
+        assert rag.lead_dio_algo("[фото одобрено]", {})
+        assert rag.lead_dio_algo("eres muy amable", {})
+        assert not rag.lead_dio_algo("¿cuánto cuesta el evento?", {"interest": "event"})
+
+    @pytest.mark.parametrize("given,expected", [
+        (["La siguiente es de 7000 MXN."], ["Más adelante el precio sube a [event_price_next] MXN."]),
+        (["Ahora cuesta 6000 MXN; la siguiente etapa es de 7000 MXN."],
+         ["Ahora cuesta [event_price_nonmember] MXN. Más adelante el precio sube a [event_price_next] MXN."]),
+        (["Ahora cuesta 6000 MXN.", "¿Cuántos años tienes?"],
+         ["Ahora cuesta 6000 MXN. Más adelante el precio sube a [event_price_next] MXN.",
+          "¿Cuántos años tienes?"]),
+        (["La inversión es desde $10,000 USD."], ["La inversión es desde $10,000 USD."]),
+    ])
+    def test_whole_price(self, given, expected):
+        assert rag.whole_price(given, SETTINGS) == expected
+
+    def test_whole_price_without_next_step(self):
+        assert rag.whole_price(["Ahora cuesta 6000 MXN."], {**SETTINGS, "event_price_next": ""}) == \
+            ["Ahora cuesta 6000 MXN."]
+
+    def test_empty_next_price_strips_sentence_not_record(self):
+        recs = knowledge.usable(SEED, {**SETTINGS, "event_price_next": ""}, "2026-10-21")
+        by = {r["id"]: r for r in recs}
+        assert by["event_price"]["contenido_es"] == "Ahora cuesta [event_price_nonmember] MXN."
+        assert "event_price_steps" not in by
+
+    def test_live_facts_not_repeated_and_alternate(self):
+        ya = memory.ya_hecho([msg("anna", "Es temática de Halloween.", 5)], {}, SETTINGS, EVENT_DESDE, NOW)
+        mem = _mem(ya_hecho=ya, ultimo_mensaje_anna="Es temática de Halloween.")
+        ids = [d["id"] for d in rag.datos_vivos(knowledge.usable(SEED, SETTINGS, "2026-10-21"), mem)]
+        assert "event_halloween" not in ids and "event_number_30" in ids
+        assert rag.extra_toca(_mem(ultimo_mensaje_anna="¿Cuántos años tienes?")) == "dato"
+
+
+OLD_LIES = [msg("lead", "¿cuántas van?", 60),
+            msg("anna", "Van 30 mujeres y 30 hombres, todos solteros.", 59),
+            msg("lead", "¿y cómo pago?", 58),
+            msg("anna", "Puedes pagar en efectivo en OXXO o por transferencia.", 57)]
+
+
+class TestOwnerRisks:
+    async def test_old_bot_lies_not_confirmed(self, monkeypatch):
+        """Старая переписка с выдумками legacy: новый бот их не подтверждает (пункт 6)."""
+        p = Pipe(monkeypatch, history=OLD_LIES, lead_extra={"name": "Carlos", "is_single": True,
+                                                             "interest": "event"})
+        p.chat_replies = [reply(["Van 30 mujeres y 30 hombres, como te dije."], fuentes=["event_what"])]
+        p.verify = {"afirmaciones": [{"texto": "Van 30 mujeres y 30 hombres",
+                                      "respaldo": "Van 30 mujeres y 30 hombres, todos solteros."}]}
+        r = await rag.generate_reply(p.lead, OLD_LIES, "¿al final cuántas mujeres van?")
+        assert r["action"] == "silent" and r["messages"] == []
+        verify_payload = [c[1] for c in p.chat_calls if c[0] == rag.CHECK_MODEL][0]
+        assert "OXXO" not in json.dumps(verify_payload, ensure_ascii=False)
+        assert "30 mujeres y 30 hombres, todos" not in json.dumps(verify_payload["FUENTES"],
+                                                                  ensure_ascii=False)
+
+    async def test_old_bot_payment_lie_not_confirmed(self, monkeypatch):
+        p = Pipe(monkeypatch, history=OLD_LIES, lead_extra={"name": "Carlos", "is_single": True,
+                                                             "interest": "event", "photo_received": True})
+        p.chat_replies = [reply(["Puedes pagar en efectivo en OXXO, como te comenté."])]
+        p.verify = {"afirmaciones": [{"texto": "Puedes pagar en efectivo en OXXO", "respaldo": None}]}
+        r = await rag.generate_reply(p.lead, OLD_LIES, "¿entonces cómo se paga al final?")
+        assert r["action"] == "silent" and r["messages"] == []
+
+    async def test_anya_promise_goes_to_anya(self, monkeypatch):
+        hist = [msg("anna", "Te guardo un lugar hasta el viernes si me confirmas hoy.", 30, manual=True)]
+        p = Pipe(monkeypatch, history=hist, lead_extra={"name": "Carlos", "is_single": True,
+                                                         "interest": "event"})
+        p.chat_replies = [reply(["Sí, te guardo el lugar hasta el viernes."])]
+        p.verify = {"afirmaciones": [{"texto": "te guardo el lugar hasta el viernes", "respaldo": None}]}
+        r = await rag.generate_reply(p.lead, hist, "¿me guardas el lugar hasta el viernes?")
+        assert r["action"] == "silent" and "policy_anya_promise" in r["silent_reason"]
+
+    async def test_photo_dead_end_goes_to_anya(self, monkeypatch):
+        """Две просьбы фото без ответа, лид спрашивает, как купить → ручной режим и Аня (пункт 8)."""
+        hist = [msg("anna", "¿Me mandas una foto tuya?", 60), msg("lead", "¿y dónde es?", 50),
+                msg("anna", "Es en Polanco, CDMX. ¿Me mandas una foto tuya?", 49)]
+        p = Pipe(monkeypatch, history=hist, lead_extra={"name": "Carlos", "is_single": True,
+                                                         "interest": "event", "age": 35,
+                                                         "profession": "médico"})
+        r = await rag.generate_reply(p.lead, hist, "¿cómo compro el boleto?")
+        assert r["action"] == "silent" and "без фото" in r["silent_reason"]
+        assert p.model_calls() == []
+
+    async def test_empty_next_price_token_never_sent(self, monkeypatch):
+        """Нет event_price_next, а модель написала токен → не отправляем, Аня + техалерт (п. 10)."""
+        settings = {**SETTINGS, "event_price_next": ""}
+        p = Pipe(monkeypatch, settings=settings, lead_extra={"name": "Carlos", "is_single": True,
+                                                             "interest": "event"})
+        alert = AsyncMock()
+        monkeypatch.setattr(ai.escalation, "notify_error", alert)
+        p.chat_replies = [reply(["Ahora cuesta [event_price_nonmember] MXN. Más adelante el precio "
+                                 "sube a [event_price_next] MXN."], fuentes=["event_price"])]
+        r = await rag.generate_reply(p.lead, [], "¿cuánto cuesta?")
+        assert r["action"] == "silent" and "токен" in r["silent_reason"]
+        alert.assert_awaited()
+
+
+async def _silent_case(monkeypatch, case):
+    """Пути молчания режима rag: каждый — action=silent с причиной и без текста лиду."""
+    lead = {"name": "Carlos", "is_single": True, "interest": "event", "photo_received": True}
+    p = Pipe(monkeypatch, lead_extra=lead)
+    monkeypatch.setattr(ai.escalation, "notify_error", AsyncMock())
+    text = "¿hay estacionamiento?"
+    if case == "falta_dato":
+        p.chat_replies = [reply([], falta_dato=True), reply([], falta_dato=True)]
+    elif case == "modelo_silent":
+        p.chat_replies = [reply([], accion="silent")]
+    elif case == "politica":
+        p.chat_replies = [reply(["x"], fuentes=["policy_companion"])]
+        monkeypatch.setattr(knowledge, "search", AsyncMock(return_value=[BY_ID["policy_companion"]]))
+    elif case == "fuera_de_tema":
+        p.lead["rag_estado"] = {"fuera_de_tema_seguidos": 2}
+        p.chat_replies = [reply(["Jaja."], en_tema=False)]
+    elif case == "5500":
+        p.chat_replies = [reply(["Son 5,500 MXN."])]
+    elif case == "no_data":
+        p.chat_replies = [reply(["No puedo decirte eso."])]
+    elif case == "sverka":
+        p.chat_replies = [reply(["Hay valet parking."])]
+        p.verify = {"afirmaciones": [{"texto": "Hay valet parking.", "respaldo": None}]}
+    elif case == "sverka_falla":
+        p.chat_replies = [reply(["Es en [event_address]."])]
+
+        async def chat(model, system, user, cost, **kw):
+            if model == rag.CHECK_MODEL:
+                raise RuntimeError("timeout")
+            return p.chat_replies.pop(0)
+        monkeypatch.setattr(rag, "_chat", chat)
+    elif case == "openai_429":
+        async def boom(*a, **k):
+            raise RuntimeError("429 Too Many Requests")
+        monkeypatch.setattr(rag, "_chat", boom)
+    elif case == "json_invalido":
+        async def bad(*a, **k):
+            raise json.JSONDecodeError("bad", "x", 0)
+        monkeypatch.setattr(rag, "_chat", bad)
+    elif case == "busqueda_falla":
+        monkeypatch.setattr(knowledge, "search", AsyncMock(side_effect=RuntimeError("db")))
+    elif case == "memoria_falla":
+        monkeypatch.setattr(memory, "build", AsyncMock(side_effect=RuntimeError("db")))
+    elif case == "tema_silencioso":
+        text = "¿puedo pagar en efectivo?"
+    return await rag.generate_reply(p.lead, [], text)
+
+
+SILENT_CASES = ["falta_dato", "modelo_silent", "politica", "fuera_de_tema", "5500", "no_data",
+                "sverka", "sverka_falla", "openai_429", "json_invalido", "busqueda_falla",
+                "memoria_falla", "tema_silencioso"]
+
+
+@pytest.mark.parametrize("case", SILENT_CASES)
+async def test_every_silent_has_reason(monkeypatch, case):
+    """Инвариант молчания (пункт 11): лиду ничего, причина для алерта Ане есть всегда."""
+    r = await _silent_case(monkeypatch, case)
+    assert r["action"] == "silent", case
+    assert r["messages"] == [] and r.get("silent_reason"), case

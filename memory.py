@@ -55,6 +55,14 @@ SLOT_QUESTION_RE = {
                         re.IGNORECASE),
     "email": re.compile(r"correo", re.IGNORECASE),
 }
+_QUESTION_RE = re.compile(r"¿[^?]*\?|[^.!¿?\n]*\?")
+
+
+def pregunta_slot(slot: str, text: str | None) -> bool:
+    """В тексте есть вопрос по слоту (именно вопрос: «…confirmas que estás soltero.» — нет)."""
+    return any(SLOT_QUESTION_RE[slot].search(q) for q in _QUESTION_RE.findall(text or ""))
+
+
 # Порядок вопросов квалификации. Ивент: имя и «холост ли», потом возраст и профессия
 # (спрашиваем, но ссылку они не блокируют), потом фото: ссылка на билет только после
 # одобренного фото, как на практике в legacy (решение владелицы 2026-10-22).
@@ -166,6 +174,7 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
         "objeciones": [], "preguntas_sin_respuesta": [],
         "boleto_comprado": lead.get("funnel_stage") == "event_attended",
         "llamada_agendada": None, "ana_escribio_a_mano": None, "pasado": [],
+        "datos_vivos_dados": [],
     }
     link = (settings.get("event_link") or "").strip()
     price = settings.get("event_price_nonmember") or ""
@@ -201,10 +210,9 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
             out["ana_escribio_a_mano"] = when
         if _SERVICE_PRICE_RE.search(text):
             out["precio_servicio_dado"] = when
-        if "?" in text:
-            for slot, rx in SLOT_QUESTION_RE.items():
-                if rx.search(text):
-                    out["preguntas_calificacion"][slot] += 1
+        for slot in SLOT_QUESTION_RE:
+            if pregunta_slot(slot, text):
+                out["preguntas_calificacion"][slot] += 1
         if not current:
             if _EVENT_TALK_RE.search(text):
                 out["pasado"].append({"fecha": when, "texto": text[:160]})
@@ -217,6 +225,9 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
             out["direccion_dada"] = when
         if "halloween" in text.lower():
             out["halloween_mencionado"] = when
+        for rid, rx in DATOS_VIVOS.items():
+            if rx.search(text) and rid not in out["datos_vivos_dados"]:
+                out["datos_vivos_dados"].append(rid)
 
     out["objeciones"] = out["objeciones"][-5:]
     out["preguntas_sin_respuesta"] = out["preguntas_sin_respuesta"][-3:]
@@ -227,6 +238,33 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
     elif lead.get("funnel_stage") == "videocall_set":
         out["llamada_agendada"] = "sí"
     return out
+
+
+# Живые факты для мягкой продажи (решение владелицы 2026-10-22): после ответа на вопрос лида
+# бот добавляет либо вопрос по слоту, либо один такой факт, не повторяя уже сказанные.
+DATOS_VIVOS = {
+    "event_halloween": re.compile(r"halloween", re.IGNORECASE),
+    "event_number_30": re.compile(r"n[uú]mero\s+30|evento\s+30\b|30\s*[º°]", re.IGNORECASE),
+    "event_couples_found": re.compile(r"encontrado\s+(?:a\s+)?(?:su\s+)?pareja|encontraron\s+pareja",
+                                      re.IGNORECASE),
+    "event_includes": re.compile(r"botanas", re.IGNORECASE),
+    "event_networking": re.compile(r"networking|contactos\s+de\s+negocio|hacen\s+amigos",
+                                   re.IGNORECASE),
+}
+
+
+def ultima_respuesta(prior: list[dict]) -> str | None:
+    """Последний ответ бота или Ани целиком (пузыри идут отдельными сообщениями подряд)."""
+    group: list[str] = []
+    for m in reversed(prior):
+        who = autor(m)
+        if who in ("anna_bot", "anya_manual"):
+            group.append(m.get("text") or "")
+        elif who == "sistema":
+            continue
+        elif group:
+            break
+    return "\n\n".join(reversed(group)) if group else None
 
 
 # ───────────────────────── слоты ─────────────────────────
@@ -285,14 +323,16 @@ def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None
     falta = [s for s in REQUIRED[r] if not _have(lead, s, user_text)
              and not (r != "servicio" and s != "photo" and agotado(s))]
     required_done = not falta
+    # Ивент: две просьбы прислать фото без ответа — дальше решает Аня (ссылки без фото нет).
+    foto_agotada = (r != "servicio" and not _have(lead, "photo", user_text) and agotado("photo")
+                    and not ya.get("enlace_enviado"))
     if ya.get("boleto_comprado"):
         etapa = "cliente"
     elif required_done or pasar_a_llamada or (r != "servicio" and ya.get("enlace_enviado")):
         etapa = "venta"          # ссылку уже прислали (бот или Аня вручную) — ворота пройдены
     else:
         etapa = "calificacion"
-    asked_last = bool(siguiente and last_outbound and "?" in last_outbound
-                      and SLOT_QUESTION_RE[siguiente].search(last_outbound))
+    asked_last = bool(siguiente and pregunta_slot(siguiente, last_outbound))
     blocked = bool(_PRICE_OBJECTION_RE.search(user_text or "") or _HESITATION_RE.search(user_text or "")
                    or _FAREWELL_RE.search(user_text or ""))
     return {
@@ -300,6 +340,7 @@ def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None
         "preguntado_en_ultimo_mensaje": asked_last,
         "puede_preguntar": bool(siguiente) and not asked_last and not blocked,
         "intentos": dict(tries), "etapa": etapa, "pasar_a_llamada": pasar_a_llamada,
+        "foto_agotada": foto_agotada,
     }
 
 
@@ -338,8 +379,7 @@ async def build(lead: dict, user_text: str, now: datetime | None = None) -> dict
         desde = await _evento_desde()
     prior, burst = split_current_burst(msgs, user_text)
     ya = ya_hecho(prior, lead, settings, desde, now)
-    last_out = next((m.get("text") for m in reversed(prior)
-                     if autor(m) in ("anna_bot", "anya_manual")), None)
+    last_out = ultima_respuesta(prior)
     lead_lines = [m.get("text") or "" for m in prior if autor(m) == "lead"]
     # Последние ответы Анны (бот или вручную) по текущему ивенту — источник для сверки.
     anna_reciente = [m.get("text") or "" for m in prior

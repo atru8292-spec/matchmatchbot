@@ -1780,7 +1780,8 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     """Сгенерировать ответ бота на склеенный текст лида.
 
     Режим выбирает app_settings.reply_mode (reply_mode.py): rag → ai_conversation,
-    иначе старый путь. Сбой режима rag → старый путь + техалерт: лид без ответа не остаётся.
+    иначе старый путь. Сбой режима rag → молчание (main: ручной режим + алерт Ане) и
+    техалерт; старый ответ в режиме rag не отправляем (решение владелицы 2026-10-22).
     Возвращает dict контракта: messages, funnel_stage, action, extracted,
     needs_escalation, used_scenario_id. Никогда не бросает — при сбоях fallback.
     """
@@ -1791,15 +1792,18 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         try:
             import ai_conversation  # лениво: ai_conversation сам импортирует ai
             return await ai_conversation.generate_reply(lead, history, user_text)
-        except NotImplementedError:
-            logger.warning("reply_mode=rag, но режим не готов → legacy")
         except Exception as e:
-            logger.exception("режим rag упал → legacy")
+            logger.exception("режим rag упал → молчание и алерт Ане")
             try:
                 await escalation.notify_error("ai_conversation.generate_reply", repr(e),
                                               lead.get("phone"))
             except Exception:
                 logger.exception("notify_error из режима rag упал")
+            return {"messages": [], "funnel_stage": None, "action": "silent", "extracted": {},
+                    "needs_escalation": True, "used_scenario_id": None,
+                    "send_event_photo": False, "send_event_video": False,
+                    "proposed_videocall_at": None,
+                    "silent_reason": f"Режим rag: сбой ({type(e).__name__}) — ответь сама"}
     return await _generate_reply_legacy(lead, history, user_text)
 
 

@@ -106,8 +106,32 @@ def is_usable(rec: dict, settings: dict, today: str) -> bool:
     return all((settings.get(t) or "").strip() for t in event_tokens)
 
 
+# Необязательные токены: если настройка пуста, убираем только фразу с ними, а не всю запись
+# («Ahora cuesta 6000 MXN.» остаётся, «Más adelante el precio sube a  MXN.» — нет).
+OPTIONAL_TOKENS = {"event_price_next"}
+
+
+def _without_empty_optional(rec: dict, settings: dict) -> dict:
+    empty = {t for t in tokens_of(rec) & OPTIONAL_TOKENS if not (settings.get(t) or "").strip()}
+    if not empty:
+        return rec
+    out = dict(rec)
+    for k in ("contenido_es", "bueno"):
+        if out.get(k):
+            parts = re.split(r"(?<=[.!?])\s+", out[k])
+            out[k] = " ".join(p for p in parts if not any(f"[{t}]" in p for t in empty)).strip()
+    return out
+
+
 def usable(recs: list[dict], settings: dict, today: str) -> list[dict]:
-    return [r for r in recs if is_usable(r, settings, today)]
+    out = []
+    for rec in recs:
+        r = _without_empty_optional(rec, settings)
+        if rec.get("contenido_es") and not r.get("contenido_es"):
+            continue                     # вся запись была про пустую ступень цены
+        if is_usable(r, settings, today):
+            out.append(r)
+    return out
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
