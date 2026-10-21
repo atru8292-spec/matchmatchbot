@@ -819,8 +819,11 @@ _EVENT_QUALIFY_ASK_RE = re.compile(
 # y la dueña lo marcó como "se ve como formulario, no como charla" (2026-09-13,
 # mismo motivo que la regla general del prompt sobre no pegar preguntas sueltas)
 # — partido en DOS bubbles más cortos y naturales.
-_EVENT_QUALIFY_BUBBLE = ("¡Perfecto! Antes de contarte todos los detalles, cuéntame: "
-                          "¿cómo te llamas? ¿Eres soltero?")
+_EVENT_QUALIFY_BUBBLE = ("Hola! 🤍 Soy Anna, fundadora de Match Match Agency. "
+                          "¿Cómo te llamas? ¿Eres soltero?")
+# Если Anna уже писала лиду (напр. ответ на «¿eres un bot?»), без повторной презентации:
+# иначе _enforce_no_reintroduce заменит пузырь на «¡Hola de nuevo!» и вопрос потеряется.
+_EVENT_QUALIFY_BUBBLE_SHORT = "¿Cómo te llamas? ¿Eres soltero?"
 _EVENT_AGE_PROFESSION_BUBBLE = "¡Va! Y una última cosa: ¿qué edad tienes y a qué te dedicas?"
 _EVENT_PHOTO_REQUEST_BUBBLE = "¡Perfecto! Y para terminar, ¿me mandas una foto tuya? 😊"
 
@@ -882,7 +885,8 @@ def _enforce_event_qualification_gate(result: dict, used: dict | None, history: 
     logger.info("guardrail: сценарий #%s дал детали ивента без вопроса soltero/edad "
                 "(первый раз в разговоре) → заменяю на вопрос", used["id"])
     result = dict(result)
-    result["messages"] = [_EVENT_QUALIFY_BUBBLE]
+    result["messages"] = [_EVENT_QUALIFY_BUBBLE_SHORT if _already_introduced(history)
+                          else _EVENT_QUALIFY_BUBBLE]
     result["send_event_photo"] = False
     result["send_event_video"] = False
     result.pop("video_caption", None)
@@ -911,7 +915,8 @@ async def _enforce_event_qualification_followup(result: dict, history: list[dict
     last_anna = _normalize_bubble(next((t.get("text") or "" for t in reversed(history or [])
                        if t.get("sender") == "anna"), ""))
 
-    if last_anna == _normalize_bubble(_EVENT_QUALIFY_BUBBLE):
+    if last_anna in (_normalize_bubble(_EVENT_QUALIFY_BUBBLE),
+                     _normalize_bubble(_EVENT_QUALIFY_BUBBLE_SHORT)):
         text = " ".join(result.get("messages") or [])
         if _EVENT_CONTENT_MARKER_RE.search(text):
             return result  # ya lo dio bien, no tocamos
@@ -1569,7 +1574,7 @@ def _build_user_context(lead: dict, history: list[dict], user_text: str,
         rag = [{"id": s["id"], "mode": s["mode"], "template_es": s["template_es"],
                 "score": round(s["score"], 3)} for s in scenarios]
     else:
-        rag = "sin escenario claro — responde amable y general, invita a videollamada, sin inventar"
+        rag = "sin escenario claro — responde tú, breve y natural como Anna, solo con los hechos del prompt y del contexto; si no sabes el dato, dilo y ofrece confirmarlo (videollamada solo si busca el servicio), sin inventar"
 
     return json.dumps({
         # Текущее «сейчас» CDMX — чтобы AI парсил относительные даты (el jueves/mañana)

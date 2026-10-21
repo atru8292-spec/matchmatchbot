@@ -443,7 +443,7 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
         # Лид дал Instagram вместо фото: бот не валидирует профиль как фото (Vision).
         # Короткий бридж-ответ, ставим manual (дальше ведёт Аня), алерт на ручную проверку.
         logger.info("РЕШЕНИЕ instagram_handoff [%s]", phone)
-        await sender.send(phone, ["Déjame revisar tu perfil y te confirmo en un momento 🤍"])
+        await sender.send(phone, ["Déjame revisarlo y te confirmo en un momento 🤍"])
         try:
             await db.update_lead_fields(phone, mode="manual")
         except Exception:

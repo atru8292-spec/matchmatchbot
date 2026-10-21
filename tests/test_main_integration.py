@@ -2048,6 +2048,19 @@ class TestDecisionBeatsPhoto:
         photos.assert_awaited_once()
 
 
+class TestInstagramHandoffText:
+    async def test_no_word_perfil(self, monkeypatch):
+        """Слово «perfil» лиду не пишем (правка владелицы 2026-08-12)."""
+        send = AsyncMock(); monkeypatch.setattr(main.sender, "send", send)
+        monkeypatch.setattr(db, "update_lead_fields", AsyncMock())
+        monkeypatch.setattr(main.escalation, "notify_photo_review", AsyncMock())
+        monkeypatch.setattr(main.escalation, "notify_escalation", AsyncMock())
+        await main._apply_decision("wa_1", filters.Decision("instagram_handoff", "r"), {}, "@carlos")
+        text = send.call_args.args[1][0]
+        assert text == "Déjame revisarlo y te confirmo en un momento 🤍"
+        assert "perfil" not in text.lower()
+
+
 class TestQuietOptout:
     async def test_quiet_optout_sends_nothing_but_blocks(self, monkeypatch):
         send = AsyncMock(); monkeypatch.setattr(main.sender, "send", send)

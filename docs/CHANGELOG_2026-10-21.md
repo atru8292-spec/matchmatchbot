@@ -75,6 +75,23 @@
   с включённым ивентом.
 - Новый `docs/LAUNCH_CHECKLIST_2026-10-21.md`.
 
+## 7. Правки по smoke-тесту (промпт и тексты в коде)
+
+- `anna_prompt_v5.md`: цена ивента только токенами `[event_price_nonmember] MXN[event_promo]`;
+  5,500 только на вопрос про друга; Хеллоуин один раз за разговор; окончание вместе с
+  началом в одном сообщении; новые факты «Lugar del evento» ([event_address]),
+  «Asistentes» (30 и 30), «Cómo comprar»; запрет выдуманных отзывов; максимум 1 эмодзи
+  на ответ, без повтора «¡Hola <nombre>!»; из правила цены ивента убрано «de inmediato,
+  incluso a un lead frío» (не конфликтует с проверкой квалификации в коде).
+  Бэкап: `docs/backups/anna_prompt_v5_before_smoke_fixes_20261020T185947Z.md`.
+- `ai.py`: вопрос квалификации ивента «Hola! 🤍 Soy Anna, fundadora de Match Match
+  Agency. ¿Cómo te llamas? ¿Eres soltero?»; если Anna уже писала лиду — только
+  «¿Cómo te llamas? ¿Eres soltero?» (иначе защита от повторной презентации заменила бы
+  вопрос на «¡Hola de nuevo!»). Подсказка модели без сценария: отвечать своими словами
+  из фактов, видеозвонок только для сервиса.
+- `main.py`: Instagram вместо фото — «Déjame revisarlo y te confirmo en un momento 🤍»
+  (без слова «perfil»).
+
 ## Тесты
 
-`venv/bin/python -m pytest -q` — 1734 passed (2026-10-21).
+`venv/bin/python -m pytest -q` — 1740 passed (2026-10-21).

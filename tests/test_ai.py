@@ -2884,3 +2884,47 @@ class TestFallbackAlertsDeveloper:
         assert result["messages"] and "429" not in " ".join(result["messages"])
         alert.assert_awaited_once()
         assert alert.await_args.args[2] == "wa_5215512345678"
+
+
+class TestLeadFacingTexts2026_10_21:
+    """Тексты, правленные по smoke-тесту 2026-10-21."""
+
+    def test_event_qualify_bubble_greets_without_narrating_order(self):
+        b = ai._EVENT_QUALIFY_BUBBLE
+        assert b.startswith("Hola! 🤍 Soy Anna, fundadora de Match Match Agency.")
+        assert "¿Cómo te llamas? ¿Eres soltero?" in b
+        assert "antes de" not in b.lower()
+
+    def test_no_scenario_hint_is_natural_not_forced_videocall(self):
+        ctx = json.loads(ai._build_user_context({}, [], "¿hay estacionamiento?", []))
+        rag = ctx["rag_scenarios"]
+        assert rag.startswith("sin escenario claro — responde tú, breve y natural como Anna")
+        assert "videollamada solo si busca el servicio" in rag
+        assert "sin inventar" in rag
+
+
+class TestEventQualifyBubbleAfterAnnaWrote:
+    """Вопрос квалификации ивента: с презентацией — только если Anna ещё не писала.
+    Иначе _enforce_no_reintroduce заменил бы пузырь на «¡Hola de nuevo!»."""
+
+    _PITCH = {"action": "respond", "messages": ["El precio es [event_price_nonmember] MXN: [event_link]"]}
+
+    def test_first_message_has_intro(self):
+        out = ai._enforce_event_qualification_gate(dict(self._PITCH), _make_scenario(id=2), [])
+        assert out["messages"] == [ai._EVENT_QUALIFY_BUBBLE]
+
+    def test_after_anna_wrote_no_intro_and_survives_reintroduce(self):
+        history = [{"sender": "lead", "text": "¿eres un bot?"},
+                   {"sender": "anna", "text": "Jajaja para nada, soy Anna, la fundadora 🤍"},
+                   {"sender": "lead", "text": "¿cuánto cuesta el evento?"}]
+        out = ai._enforce_event_qualification_gate(dict(self._PITCH), _make_scenario(id=2), history)
+        assert out["messages"] == [ai._EVENT_QUALIFY_BUBBLE_SHORT]
+        out2 = ai._enforce_no_reintroduce(out, history)
+        assert out2["messages"] == [ai._EVENT_QUALIFY_BUBBLE_SHORT]
+
+    async def test_followup_recognizes_short_bubble(self):
+        result = {"action": "respond", "messages": ["Va, gracias"]}
+        history = [{"sender": "anna", "text": ai._EVENT_QUALIFY_BUBBLE_SHORT}]
+        out = await ai._enforce_event_qualification_followup(
+            result, history, _make_scenario(id=2), _make_lead(), "Carlos, si soltero")
+        assert out["messages"] == [ai._EVENT_AGE_PROFESSION_BUBBLE]
