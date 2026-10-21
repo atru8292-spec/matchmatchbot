@@ -1441,6 +1441,8 @@ class TestProcessPhoto:
         mocks["_run_ai"].assert_awaited_once()
         run_ai_call = mocks["_run_ai"].call_args
         assert run_ai_call.args[2] == "[фото одобрено]"
+        # словарь лида для AI уже с флагом фото (режим rag открывает ссылку по нему)
+        assert run_ai_call.args[1]["photo_received"] is True
         mocks["save_photo"].assert_awaited_once()
         mocks["block_lead"].assert_not_awaited()
         mocks["notify_block"].assert_not_awaited()

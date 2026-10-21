@@ -187,6 +187,24 @@ def wants_to_buy(user_text: str, last_anna: str | None,
     if last_anna and _OFFER_LINK_RE.search(last_anna) and _AFFIRM_RE.search(user_text or ""):
         return True
     return any(_PURCHASE_RE.search(t or "") for t in (recent_lead or [])[-3:])
+
+
+def compra_pendiente(mem: dict, user_text: str) -> bool:
+    """Лид спрашивал, как купить (сейчас или в последних 10 сообщениях), а ссылку ещё не
+    получил: её придержали до имени, «холост ли» и одобренного фото."""
+    if mem["ya_hecho"].get("enlace_enviado"):
+        return False
+    if wants_to_buy(user_text, mem.get("ultimo_mensaje_anna"), (mem.get("lead_texts") or [])[:-1]):
+        return True
+    # Глубже 3 сообщений — только вопрос или просьба о покупке, а не «me registré en Instagram».
+    return any(_PURCHASE_RE.search(t or "") and (has_question(t) or _BUY_REQUEST_RE.search(t))
+               for t in (mem.get("lead_texts") or [])[:-1][-10:])
+
+
+_BUY_REQUEST_RE = re.compile(r"quiero|me\s+apunto|me\s+decid|p[aá]same|m[aá]ndame|ap[aá]rtame",
+                             re.IGNORECASE)
+
+
 # Прямая просьба ссылки: повторяем, даже если ya_hecho.enlace_enviado.
 _LINK_REQUEST_RE = re.compile(r"link|enlace|p[aá]same|m[aá]ndame\s+el|otra\s+vez|de\s+nuevo|"
                               r"c[oó]mo\s+(?:compro|pago|reservo)|d[oó]nde\s+(?:compro|pago|reservo)",
@@ -413,8 +431,8 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         return "[event_link]" in b or bool(link and _norm_url(link) in b.lower())
     if any(has_link(b) for b in bubbles):
         reason = None
-        if not wants_to_buy(user_text, mem.get("ultimo_mensaje_anna"),
-                            (mem.get("lead_texts") or [])[:-1]):
+        if not (mem.get("compra_pendiente") or wants_to_buy(
+                user_text, mem.get("ultimo_mensaje_anna"), (mem.get("lead_texts") or [])[:-1])):
             reason = "лид не спрашивал, как купить"
         elif cal["etapa"] == "calificacion":
             reason = "этап calificacion"
@@ -591,6 +609,7 @@ def _parse_model(raw: dict) -> dict:
 def build_context(lead: dict, mem: dict, fichas: list[dict], always: dict, user_text: str,
                   card: dict | None) -> dict:
     cal = {k: v for k, v in mem["calificacion"].items()}
+    cal["compra_pendiente"] = bool(mem.get("compra_pendiente"))
     return {
         "ahora_cdmx": ai._ahora_cdmx(),
         "evento_actual": card,
@@ -655,6 +674,11 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
 async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict:
     mem = await memory.build(lead, user_text)
     settings = mem["settings"]
+    mem["compra_pendiente"] = compra_pendiente(mem, user_text)
+    if mem["compra_pendiente"]:
+        # хочет купить: возраст и профессию не спрашиваем, следующий вопрос — фото
+        mem["calificacion"] = memory.calificacion(lead, mem["ya_hecho"], user_text,
+                                                  mem["ultimo_mensaje_anna"], compra=True)
     cal = mem["calificacion"]
     meta = {"etapa": cal["etapa"], "slot": cal["siguiente"]}
 

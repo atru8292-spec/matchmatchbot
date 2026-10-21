@@ -227,7 +227,7 @@
 **Перевод:** Купить билет можно здесь: [ссылка]. Оплата на странице, билет придёт на почту.
 
 - **Когда:** ¿cómo compro el boleto?, ¿dónde pago?, quiero mi boleto, ¿cómo reservo?, pásame el link, me interesa, quiero ir
-- **Как отвечать (для модели):** ÚNICO caso en que das el enlace: el lead pregunta cómo comprar o dice que quiere ir. Si ya_hecho.enlace_enviado es true y no lo pidió de nuevo explícitamente, no lo repitas. No pidas nombre ni correo para el evento.
+- **Как отвечать (для модели):** ÚNICO caso en que das el enlace: el lead pregunta cómo comprar o dice que quiere ir, y ya tienes su nombre, si está soltero y su foto aprobada. Antes de eso: responde que se compra en línea en la página del evento y haz la pregunta pendiente (nombre y soltero, o su foto), sin explicar para qué es la foto. Si ya_hecho.enlace_enviado es true y no lo pidió de nuevo explícitamente, no lo repitas. No pidas nombre ni correo para el evento.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
 - **Источник:** промпт «Cómo comprar», №21
 

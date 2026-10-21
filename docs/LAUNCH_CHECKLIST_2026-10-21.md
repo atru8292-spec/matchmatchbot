@@ -111,7 +111,8 @@ ssh root@2.26.71.254 'systemctl is-active matchmatch-bot; curl -s http://127.0.0
 - [ ] `reply_mode = rag_test`, тесты с тестовых номеров: «hola» → приветствие Ани дословно;
       «¿cuántas personas van?» → Ане (30 и 30 не подтверждено); «¿puedo ir con un amigo?» →
       молчание + алерт; «¿hay descuento?» → молчание + алерт; «¿cómo compro?» без имени →
-      ответ и «¿Cómo te llamas y estás soltero?».
+      ответ и «¿Cómo te llamas y estás soltero?»; после имени без фото → просьба прислать фото,
+      ссылки нет; фото одобрено → ссылка и видео сразу, без повторного вопроса.
 - [ ] В `/status` видно `reply_mode` и расход за сутки.
 - [ ] `rag` для всех — отдельной командой владелицы. Откат: `reply_mode = legacy`.
 

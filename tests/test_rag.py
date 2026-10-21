@@ -130,13 +130,41 @@ class TestCalificacion:
         assert c["ruta"] == "evento" and c["siguiente"] == "name" and c["etapa"] == "calificacion"
 
     def test_event_optional_age_does_not_block_venta(self):
-        lead = {"interest": "event", "name": "Carlos", "is_single": True}
+        lead = {"interest": "event", "name": "Carlos", "is_single": True, "photo_received": True}
         c = memory.calificacion(lead, self._ya(), "ok", None)
         assert c["etapa"] == "venta" and c["siguiente"] == "age"
 
     def test_event_slot_skipped_after_two_tries(self):
-        c = memory.calificacion({"interest": "event", "is_single": True}, self._ya(name=2), "ok", None)
+        lead = {"interest": "event", "is_single": True, "photo_received": True}
+        c = memory.calificacion(lead, self._ya(name=2), "ok", None)
         assert c["siguiente"] == "age" and c["etapa"] == "venta"
+
+    def test_event_needs_photo_for_venta(self):
+        """Ивент: имя и «холост ли» есть, фото нет → этап calificacion; порядок: возраст,
+        профессия, потом фото (решение владелицы 2026-10-22)."""
+        lead = {"interest": "event", "name": "Carlos", "is_single": True}
+        c = memory.calificacion(lead, self._ya(), "ok", None)
+        assert c["etapa"] == "calificacion" and c["siguiente"] == "age"
+        lead.update(age=35, profession="médico")
+        assert memory.calificacion(lead, self._ya(), "ok", None)["siguiente"] == "photo"
+
+    def test_event_purchase_skips_age_goes_to_photo(self):
+        lead = {"interest": "event", "name": "Carlos", "is_single": True}
+        c = memory.calificacion(lead, self._ya(), "ok", None, compra=True)
+        assert c["siguiente"] == "photo" and c["etapa"] == "calificacion"
+
+    def test_event_photo_not_skipped_after_two_tries(self):
+        """Фото не прислал после 2 просьб: больше не просим, но ссылка закрыта."""
+        lead = {"interest": "event", "name": "Carlos", "is_single": True, "age": 35, "profession": "x"}
+        c = memory.calificacion(lead, self._ya(photo=2), "ok", None)
+        assert c["siguiente"] is None and c["etapa"] == "calificacion"
+
+    def test_event_link_already_sent_is_venta(self):
+        """Ссылку уже прислали (бот или Аня вручную) — ворота пройдены, фото не нужно."""
+        lead = {"interest": "event", "name": "Carlos", "is_single": True}
+        ya = self._ya()
+        ya["enlace_enviado"] = "2026-10-20"
+        assert memory.calificacion(lead, ya, "ok", None)["etapa"] == "venta"
 
     def test_service_after_two_tries_goes_to_call(self):
         lead = {"interest": "agency", "name": "C", "is_single": True}
@@ -204,7 +232,8 @@ class TestKnowledgeUsable:
 
 def _mem(**over):
     ya = memory.ya_hecho([], {}, SETTINGS, None, NOW)
-    cal = memory.calificacion({"interest": "event", "name": "Carlos", "is_single": True}, ya, "x", None)
+    cal = memory.calificacion({"interest": "event", "name": "Carlos", "is_single": True,
+                               "photo_received": True}, ya, "x", None)
     base = {"settings": SETTINGS, "ya_hecho": ya, "calificacion": cal, "regreso": None,
             "lead_texts": ["hola"], "historial": [], "resumen": None}
     base.update(over)
@@ -216,7 +245,8 @@ FICHAS = [BY_ID["event_price"], BY_ID["event_how_to_buy"], BY_ID["event_price_st
 
 def check(bubbles, user_text="¿cuánto cuesta?", lead=None, fichas=None, **mem_over):
     return rag.check_reply(bubbles, mem=_mem(**mem_over), fichas=fichas or FICHAS,
-                           lead=lead or {"name": "Carlos", "is_single": True}, user_text=user_text)
+                           lead=lead or {"name": "Carlos", "is_single": True, "photo_received": True},
+                           user_text=user_text)
 
 
 class TestCheckReply:
@@ -497,7 +527,8 @@ class TestPipeline:
         assert r["messages"] == ["Texto 40"] and p.model_calls() == []
 
     async def test_video_once_with_first_link(self, monkeypatch):
-        p = Pipe(monkeypatch, lead_extra={"name": "Carlos", "is_single": True, "interest": "event"})
+        p = Pipe(monkeypatch, lead_extra={"name": "Carlos", "is_single": True, "interest": "event",
+                                          "photo_received": True})
         p.chat_replies = [reply(["Puedes comprar tu boleto aquí: [event_link]"], fuentes=["event_how_to_buy"])]
         r = await rag.generate_reply(p.lead, [], "¿cómo compro el boleto?")
         assert r["send_event_video"] is True
@@ -809,3 +840,79 @@ class TestReview3:
         assert cr.violations("Te cuento. Mira este video.")
         assert not cr.violations("Tenemos una base de datos de eventos.")
         assert not cr.violations("Puedes aprovechar para conocer gente.")
+
+
+class TestEventPhotoGate:
+    """Ссылка на ивент — только после одобренного фото (решение владелицы 2026-10-22)."""
+
+    NO_PHOTO = {"name": "Carlos", "is_single": True, "interest": "event"}
+
+    def test_link_removed_without_photo(self):
+        lead = dict(self.NO_PHOTO)
+        ya = memory.ya_hecho([], {}, SETTINGS, None, NOW)
+        cal = memory.calificacion(lead, ya, "¿cómo compro?", None, compra=True)
+        b, reason, notes = check(["Se compra en línea en la página del evento: [event_link]",
+                                  "¿Me mandas una foto tuya?"],
+                                 user_text="¿cómo compro el boleto?", lead=lead, calificacion=cal)
+        assert reason is None and all("[event_link]" not in x for x in b)
+        assert any("calificacion" in n for n in notes)
+
+    def test_pending_purchase_link_after_photo(self):
+        """«¿cómo compro?» давно (дальше 3 сообщений), фото одобрено → ссылка уходит."""
+        lead_texts = ["¿cómo compro el boleto?", "Carlos, soltero", "tengo 35", "soy médico",
+                      "ok", "[фото одобрено]"]
+        b, reason, _ = check(["¡Gracias por la foto! Puedes comprar tu boleto aquí: [event_link]"],
+                             user_text="[фото одобрено]", lead_texts=lead_texts,
+                             compra_pendiente=True)
+        assert reason is None and "[event_link]" in b[0]
+
+    def test_compra_pendiente_flag(self):
+        mem = _mem(lead_texts=["¿cómo compro el boleto?", "Carlos, soltero", "[фото одобрено]"],
+                   ultimo_mensaje_anna="¿Me mandas una foto tuya?")
+        assert rag.compra_pendiente(mem, "[фото одобрено]") is True
+        mem["ya_hecho"]["enlace_enviado"] = "2026-10-21"
+        assert rag.compra_pendiente(mem, "[фото одобрено]") is False
+        assert rag.compra_pendiente(_mem(lead_texts=["hola", "¿dónde es?"]), "¿dónde es?") is False
+
+    async def test_buy_before_photo_asks_photo(self, monkeypatch):
+        p = Pipe(monkeypatch, lead_extra=self.NO_PHOTO)
+        p.chat_replies = [reply(["Se compra en línea en la página del evento: [event_link]",
+                                 "¿Me mandas una foto tuya?"], fuentes=["event_how_to_buy"])]
+        r = await rag.generate_reply(p.lead, [], "¿cómo compro el boleto?")
+        ctx = p.model_calls()[0][1]
+        assert ctx["calificacion"]["siguiente"] == "photo"
+        assert ctx["calificacion"]["compra_pendiente"] is True
+        assert ctx["calificacion"]["etapa"] == "calificacion"
+        assert all("[event_link]" not in m for m in r["messages"])
+        assert not r.get("send_event_video")
+
+    async def test_photo_approved_sends_link_with_video(self, monkeypatch):
+        history = [msg("lead", "¿cómo compro el boleto?", 30),
+                   msg("anna", "Se compra en línea en la página del evento. ¿Cómo te llamas y estás soltero?", 29),
+                   msg("lead", "Carlos, soltero", 20),
+                   msg("anna", "Gracias, Carlos. ¿Me mandas una foto tuya?", 19)]
+        p = Pipe(monkeypatch, history=history, lead_extra={**self.NO_PHOTO, "photo_received": True})
+        p.chat_replies = [reply(["Gracias por la foto, Carlos.", "Puedes comprar tu boleto aquí: [event_link]"],
+                                fuentes=["event_how_to_buy"])]
+        r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
+        ctx = p.model_calls()[0][1]
+        assert ctx["calificacion"]["etapa"] == "venta" and ctx["calificacion"]["compra_pendiente"]
+        assert any("[event_link]" in m for m in r["messages"])
+        assert r["send_event_video"] is True
+
+
+class TestPhotoGateReview:
+    def test_marker_counts_without_flag(self):
+        """Флаг в словаре лида не дошёл, но маркер одобрения в этом ходе — фото есть."""
+        lead = {"interest": "event", "name": "Carlos", "is_single": True}
+        ya = memory.ya_hecho([], {}, SETTINGS, None, NOW)
+        assert memory.calificacion(lead, ya, "[фото одобрено]", None)["etapa"] == "venta"
+        assert memory.calificacion(lead, ya, "[фото одобрено вручную]", None)["etapa"] == "venta"
+
+    def test_old_registro_mention_is_not_pending_purchase(self):
+        mem = _mem(lead_texts=["me registré en Instagram para ver sus fotos", "Carlos", "ok",
+                               "soy médico", "[фото одобрено]"])
+        assert rag.compra_pendiente(mem, "[фото одобрено]") is False
+        mem = _mem(lead_texts=["¿cómo compro el boleto?", "Carlos", "ok", "soy médico",
+                               "[фото одобрено]"])
+        assert rag.compra_pendiente(mem, "[фото одобрено]") is True

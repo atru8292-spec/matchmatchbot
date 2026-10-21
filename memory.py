@@ -55,10 +55,14 @@ SLOT_QUESTION_RE = {
                         re.IGNORECASE),
     "email": re.compile(r"correo", re.IGNORECASE),
 }
-REQUIRED = {"evento": ["name", "is_single"],
+# Порядок вопросов квалификации. Ивент: имя и «холост ли», потом возраст и профессия
+# (спрашиваем, но ссылку они не блокируют), потом фото: ссылка на билет только после
+# одобренного фото, как на практике в legacy (решение владелицы 2026-10-22).
+ORDER = ["name", "is_single", "age", "profession", "photo"]
+REQUIRED = {"evento": ["name", "is_single", "photo"],
             "servicio": ["name", "is_single", "age", "profession", "photo"],
-            "sin_definir": ["name", "is_single"]}
-OPTIONAL = {"evento": ["age", "profession"], "servicio": [], "sin_definir": []}
+            "sin_definir": ["name", "is_single", "photo"]}
+OPTIONAL = {"evento": ["age", "profession"], "servicio": [], "sin_definir": ["age", "profession"]}
 MAX_SLOT_TRIES = 2
 
 
@@ -242,41 +246,49 @@ def ruta(lead: dict, user_text: str) -> str:
     return "evento" if _EVENT_WORD_RE.search(user_text or "") else "sin_definir"
 
 
-def _have(lead: dict, slot: str) -> bool:
+def _have(lead: dict, slot: str, user_text: str = "") -> bool:
     if slot == "is_single":
         return lead.get("is_single") is True
     if slot == "photo":
-        return bool(lead.get("photo_received"))
+        # маркер одобрения в этом же ходе тоже считается (флаг в БД мог не дойти до словаря)
+        return bool(lead.get("photo_received")) or "[фото одобрено" in (user_text or "")
     return bool(lead.get(slot))
 
 
-def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None) -> dict:
+def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None,
+                 compra: bool = False) -> dict:
+    """Слоты и этап лида. compra — лид спрашивал, как купить, и ссылку ещё не получил:
+    тогда возраст и профессию не спрашиваем, следующий вопрос — сразу фото."""
     r = ruta(lead, user_text)
     tries = ya["preguntas_calificacion"]
     tenemos = {s: (lead.get("is_single") if s == "is_single" else
-                   bool(lead.get("photo_received")) if s == "photo" else lead.get(s))
+                   _have(lead, s, user_text) if s == "photo" else lead.get(s))
                for s in ("name", "is_single", "age", "profession", "photo", "email")}
+
+    def agotado(slot):
+        return tries.get(slot, 0) >= MAX_SLOT_TRIES
+
+    order = [s for s in ORDER if not (compra and s in OPTIONAL[r])]
     siguiente, pasar_a_llamada = None, False
-    for slot in REQUIRED[r]:
-        if _have(lead, slot):
+    for slot in order:
+        if _have(lead, slot, user_text):
             continue
-        if tries.get(slot, 0) >= MAX_SLOT_TRIES:
-            if r == "servicio":
+        if agotado(slot):
+            if r == "servicio" and slot in REQUIRED[r]:
                 pasar_a_llamada = True   # услуга: после 2 попыток — звонок и Аня
                 break
-            continue                     # ивент: слот пропускаем
+            continue                     # больше не спрашиваем
         siguiente = slot
         break
-    required_done = siguiente is None
-    if required_done and not pasar_a_llamada:
-        for slot in OPTIONAL[r]:
-            if not _have(lead, slot) and tries.get(slot, 0) < MAX_SLOT_TRIES:
-                siguiente = slot
-                break
+    # Чего не хватает до этапа venta. Ивент: имя и «холост ли» после 2 попыток пропускаем
+    # (как раньше), а фото — нет: без одобренного фото ссылки нет.
+    falta = [s for s in REQUIRED[r] if not _have(lead, s, user_text)
+             and not (r != "servicio" and s != "photo" and agotado(s))]
+    required_done = not falta
     if ya.get("boleto_comprado"):
         etapa = "cliente"
-    elif required_done or pasar_a_llamada:
-        etapa = "venta"
+    elif required_done or pasar_a_llamada or (r != "servicio" and ya.get("enlace_enviado")):
+        etapa = "venta"          # ссылку уже прислали (бот или Аня вручную) — ворота пройдены
     else:
         etapa = "calificacion"
     asked_last = bool(siguiente and last_outbound and "?" in last_outbound

@@ -459,7 +459,7 @@
       "titulo": "Cómo comprar el boleto",
       "contenido_es": "Puedes comprar tu boleto aquí: [event_link]\n\nEl pago se hace en la página y el boleto te llega por correo.",
       "cuando_usar": "¿cómo compro el boleto?, ¿dónde pago?, quiero mi boleto, ¿cómo reservo?, pásame el link, me interesa, quiero ir",
-      "como_responder": "ÚNICO caso en que das el enlace: el lead pregunta cómo comprar o dice que quiere ir. Si ya_hecho.enlace_enviado es true y no lo pidió de nuevo explícitamente, no lo repitas. No pidas nombre ni correo para el evento.",
+      "como_responder": "ÚNICO caso en que das el enlace: el lead pregunta cómo comprar o dice que quiere ir, y ya tienes su nombre, si está soltero y su foto aprobada. Antes de eso: responde que se compra en línea en la página del evento y haz la pregunta pendiente (nombre y soltero, o su foto), sin explicar para qué es la foto. Si ya_hecho.enlace_enviado es true y no lo pidió de nuevo explícitamente, no lo repitas. No pidas nombre ni correo para el evento.",
       "notas_tono": null,
       "frases_ejemplo": [],
       "malo": null,

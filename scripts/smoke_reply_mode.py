@@ -82,10 +82,13 @@ MESSAGES = [
     "¿cómo compro el boleto?", "¿eres un bot?"]]
 
 DAY = 24 * 60
+# Как в main.py: фото прошло проверку → photo_received=True и маркер в тексте для AI.
+PHOTO_OK = "[фото одобрено]"
 DIALOGS = [
-    ("1. Ивент с нуля", [], {}, [
+    # Ссылка на ивент — только после одобренного фото (решение владелицы 2026-10-22).
+    ("1. Ивент с нуля: покупка до фото, потом фото", [], {}, [
         "hola, vi el evento", "me llamo Javier, sí soltero", "¿qué incluye?",
-        "¿a qué hora empieza?", "ok, ¿cómo compro el boleto?"]),
+        "ok, ¿cómo compro el boleto?", PHOTO_OK]),
     ("2. Услуга", [], {}, [
         "hola, quiero conocer mujeres rusas", "Luis, soltero", "tengo 41, soy abogado",
         "¿cómo funciona el servicio?", "¿cuánto cuesta?"]),
@@ -117,6 +120,8 @@ DIALOGS = [
                    M("anna", "Hola Carlos, soy Anna. Te guardo un lugar hasta el viernes si me confirmas hoy.", 19, manual=True),
                    M("lead", "ok, déjame ver", 18)],
      BASE_LEAD, ["¿entonces me guardas el lugar hasta el viernes?", "¿qué incluye el boleto?"]),
+    ("11. Фото прислал сам, потом спросил, как купить", BASE_EVENT, BASE_LEAD,
+     [PHOTO_OK, "¿cómo compro el boleto?"]),
 ]
 
 # ───────────────────────── бюджет и заглушки ─────────────────────────
@@ -195,7 +200,10 @@ _EMOJI = re.compile("[\U0001F300-\U0001FAFF☀-➿⭐⏰]")
 _PURCHASE = re.compile(r"compr|reserv|apart|quiero ir|link|enlace|\bpag(?:o|ar)\b", re.I)
 
 
-def judge(bubbles: list[str], lead_text: str, presented_before: bool) -> list[str]:
+def judge(bubbles: list[str], lead_text: str, presented_before: bool,
+          buying: bool | None = None, photo: bool = True) -> list[str]:
+    """buying — лид спрашивал, как купить (сейчас или раньше, а ссылку ещё не получил);
+    photo — фото лида одобрено (без него ссылки на ивент нет)."""
     out = []
     text = "\n\n".join(bubbles)
     if text.count("?") > 1:
@@ -208,8 +216,12 @@ def judge(bubbles: list[str], lead_text: str, presented_before: bool) -> list[st
         out.append("; ".join(v))
     if re.search(r"(?<!\d)5[\s.,]?500(?!\d)", text):
         out.append("5,500")
-    if (LINK in text or "rusaencdmx.com" in text) and not _PURCHASE.search(lead_text):
+    if buying is None:
+        buying = bool(_PURCHASE.search(lead_text))
+    if (LINK in text or "rusaencdmx.com" in text) and not buying:
         out.append("ссылка без вопроса о покупке")
+    if LINK in text and not photo:
+        out.append("ссылка до фото")
     if presented_before and re.search(r"soy anna", text, re.I):
         out.append("повторная презентация")
     if re.search(r"medianoche|12:00|único", text, re.I):
@@ -232,10 +244,17 @@ class Lead:
 
 async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
     spend.mode = mode
-    d = filters.decide(L.lead, False, text, L.phone, frozenset(), bot_paused=False)
+    link_before = any(LINK in (m["text"] or "") for m in L.history if m["sender"] == "anna")
+    buying = bool(_PURCHASE.search(text)) or (not link_before and any(
+        _PURCHASE.search(m["text"] or "") for m in L.history if m["sender"] == "lead"))
+    if text == PHOTO_OK:
+        L.lead["photo_received"] = True          # main.py ставит флаг до вызова AI
+    else:
+        d = filters.decide(L.lead, False, text, L.phone, frozenset(), bot_paused=False)
+        if d.action != "needs_ai":
+            L.history.append(M("lead", text, 0))
+            return {"decision": d.action, "bubbles": [], "violations": [], "usd": 0.0}
     L.history.append(M("lead", text, 0))
-    if d.action != "needs_ai":
-        return {"decision": d.action, "bubbles": [], "violations": [], "usd": 0.0}
     before = spend.usd
     if mode == "legacy":
         r = await ai._generate_reply_legacy(L.lead, L.history[-21:-1], text)
@@ -255,7 +274,9 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
             "silent_reason": r.get("silent_reason"),
             "meta": r.get("rag_meta"), "media": [k for k in ("send_event_photo", "send_event_video")
                                                    if r.get(k)],
-            "violations": judge(bubbles, text, presented), "usd": spend.usd - before}
+            "violations": judge(bubbles, text, presented, buying,
+                                bool(L.lead.get("photo_received"))),
+            "usd": spend.usd - before}
 
 
 def install_db(leads_by_phone: dict) -> None:

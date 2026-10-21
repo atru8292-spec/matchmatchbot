@@ -337,6 +337,9 @@ async def _process_photos(phone: str, lead: dict, content_uris: list[str],
         # Хотя бы одно фото одобрено → лид квалифицирован, AI переходит к питчу.
         await db.mark_photo_received(phone, True)
         await db.set_funnel_stage(phone, "qualified", meta={"photo": "ok"})
+        # lead прочитан из БД до проверки фото — флаг в словаре тоже ставим, иначе режим rag
+        # считает фото не присланным и не даёт ссылку на ивент (code-review 2026-10-22)
+        lead = {**lead, "photo_received": True}
         user_text = (f"{accompanying_text}\n\n[фото одобрено]" if accompanying_text
                      else "[фото одобрено]")
         await _run_ai(phone, lead, user_text)
