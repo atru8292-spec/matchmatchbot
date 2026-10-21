@@ -103,8 +103,22 @@ UPDATE app_settings SET value = '1', updated_at = now() WHERE key = 'event_activ
 ssh root@2.26.71.254 'systemctl is-active matchmatch-bot; curl -s http://127.0.0.1:8000/health; echo; curl -s https://2-26-71-254.sslip.io/health; echo; journalctl -u matchmatch-bot -n 100 --no-pager | grep -c Traceback; git -C /opt/matchmatch-bot log -1 --oneline'
 ```
 
+## 6.5. Режим ответов rag (после «деплой ок», отдельно от запуска)
+
+- [ ] Шаги 1–7 `docs/DEPLOY_rag.md`: бэкап → миграция 008 → импорт базы знаний →
+      патч сценариев №2/№15/№39/№51 → очистить `event_price_old` → `WAZZUP_CHANNEL_ID` →
+      код с `reply_mode` = legacy.
+- [ ] `reply_mode = rag_test`, тесты с тестовых номеров: «hola» → приветствие Ани дословно;
+      «¿cuántas personas van?» → Ане (30 и 30 не подтверждено); «¿puedo ir con un amigo?» →
+      молчание + алерт; «¿hay descuento?» → молчание + алерт; «¿cómo compro?» без имени →
+      ответ и «¿Cómo te llamas y estás soltero?».
+- [ ] В `/status` видно `reply_mode` и расход за сутки.
+- [ ] `rag` для всех — отдельной командой владелицы. Откат: `reply_mode = legacy`.
+
 ## 7. После ивента 18.11
 
 - [ ] Убрать Хеллоуин из сценариев №2 и №15 и из `anna_prompt_v5.md` (блок фактов
       об ивенте) — иначе бот скажет его про следующий ивент.
 - [ ] Новые данные ивента в CRM (дата, ссылка, цены) или `event_active = 0`.
+- [ ] Режим rag: записи ивента в базе знаний закончатся сами (`valid_to` 2026-11-18);
+      для нового ивента — новые записи и `event_price_next`.
