@@ -384,6 +384,19 @@ async def _hand_off_call_request(phone: str, lead: dict, text: str) -> None:
                                          text, manual_ok=manual_ok)
 
 
+async def _hand_off_companion_question(phone: str, lead: dict, text: str) -> None:
+    """Вопрос про спутника: ручной режим + алерт Ане, лиду ничего (как просьба позвонить)."""
+    manual_ok = True
+    try:
+        await db.set_manual(phone)
+    except Exception as e:
+        manual_ok = False
+        logger.exception("companion_question: не смог поставить manual для %s", phone)
+        await escalation.notify_error("companion_question: set_manual", repr(e), phone)
+    await escalation.notify_companion_question(
+        {**(lead or {}), "phone": (lead or {}).get("phone") or phone}, text, manual_ok=manual_ok)
+
+
 async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
                           combined: str) -> None:
     """Выполнить решение filters.decide. needs_ai → реальный вызов AI (ai.py)."""
@@ -418,6 +431,13 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
         # Аня получает алерт и звонит. Лиду бот ничего не пишет.
         logger.info("РЕШЕНИЕ call_request [%s]: ручной режим + алерт Ане", phone)
         await _hand_off_call_request(phone, lead, combined)
+        return
+
+    if decision.action == "companion_question":
+        # Друг, девушка, пара, группа, цена на двоих (решение владелицы 2026-10-21): бот это
+        # не обсуждает и 5,500 не называет. Ручной режим + алерт Ане, лиду ничего, AI не зовём.
+        logger.info("РЕШЕНИЕ companion_question [%s]: ручной режим + алерт Ане", phone)
+        await _hand_off_companion_question(phone, lead, combined)
         return
 
     if decision.action == "optout":

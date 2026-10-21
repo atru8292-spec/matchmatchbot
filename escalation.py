@@ -286,6 +286,21 @@ async def notify_call_request(lead: dict, last_msg: str, manual_ok: bool = True)
     await _send_business_alert(text, vip_action_kb(phone) if phone else None)
 
 
+async def notify_companion_question(lead: dict, last_msg: str, manual_ok: bool = True) -> None:
+    """Лид спрашивает про спутника (друг, девушка, пара, группа, цена на двоих) — бот это
+    не обсуждает: чат в ручном режиме, лиду ничего не отправлено, отвечает Аня."""
+    phone = (lead or {}).get("phone", "")
+    status = ("⚠️ Чат в ручном режиме, бот лиду ничего не отправил" if manual_ok else
+              "❗️ Ручной режим НЕ включился (сбой) — нажми «Общаться лично», иначе бот ответит лиду")
+    text = (
+        "👥 Лид спрашивает про спутника (друг, пара, группа)\n"
+        f"{_lead_name(lead)} · {_wa_link(phone)}\n"
+        f'Последнее сообщение: "{last_msg}"\n'
+        f"{status}"
+    )
+    await _send_business_alert(text, vip_action_kb(phone) if phone else None)
+
+
 async def notify_optout(lead: dict) -> None:
     """Лид сам попросил не писать (opt-out) — бот замолчал навсегда. Аня в курсе; если
     это ошибка (ложное срабатывание) — может вернуть боту кнопкой."""

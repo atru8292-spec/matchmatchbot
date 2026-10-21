@@ -107,6 +107,8 @@ async def _run(title: str, name: str, lines: list[str], idx: int) -> None:
                 print(f"    ↳ main отправил бы лиду: {main._OPTOUT_CONFIRM!r}")
             elif d.action == "call_request":
                 print("    ↳ лиду ничего; ручной режим + алерт Ане (notify_call_request)")
+            elif d.action == "companion_question":
+                print("    ↳ лиду ничего; ручной режим + алерт Ане (notify_companion_question)")
             break
         r = await ai.generate_reply(lead, history[:-1], text)
         bubbles = await sender.render_bubbles(r.get("messages") or [], None, True)

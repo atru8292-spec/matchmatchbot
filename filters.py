@@ -186,10 +186,44 @@ _CALL_NEGATED_RE = re.compile(
 )
 
 
+# Вопрос про спутника (2026-10-21, решение владелицы): прийти с другом, подругой, девушкой,
+# парой, группой, цена на двоих. Бот это не обсуждает (5,500 не называет никогда):
+# ручной режим + алерт Ане, лиду ничего. Нужен контекст «с кем-то / привести / он тоже хочет»:
+# голое «amigo» («me recomendó un amigo»), «busco pareja», «tengo novia» (это №9, не холост)
+# и «¿puedo ir solo?» не срабатывают.
+_COMPANION_NOUN = (r"(?:amig[oa]s?|novi[oa]s?|parejas?|espos[oa]s?|acompa[ñn]antes?|"
+                   r"herman[oa]s?|prim[oa]s?|compa[ñn]er[oa]s?|cuates?|colegas?|socios?)")
+_COMPANION_DET = (r"(?:(?:mi|mis|tu|un|una|unos|unas|el|la|los|las|otro|otra|otros|otras|"
+                  r"alg[uú]n|alguna)\s+)?")
+_COMPANION_RE = re.compile(
+    rf"\bcon\s+{_COMPANION_DET}{_COMPANION_NOUN}\b|"
+    rf"\b(?:llevar|traer|invitar|llevo|traigo|invito|lleve|traiga|invite)\s+(?:a\s+)?"
+    rf"{_COMPANION_DET}{_COMPANION_NOUN}\b|"
+    rf"\b(?:mi|mis|un|una|unos|unas)\s+{_COMPANION_NOUN}\s+(?:tambi[eé]n\s+)?"
+    r"(?:quiere|quieren|quisiera|quisieran|puede|pueden|podr[ií]a|podr[ií]an|va|van|"
+    r"ir[ií]a|ir[ií]an|vendr[ií]a|vendr[ií]an|le\s+interesa|les\s+interesa|"
+    r"est[aá]n?\s+interesad)|"
+    r"\bcon\s+(?:alguien|otra\s+persona|otras\s+personas)\b|\bacompa[ñn]ad[oa]s?\b|"
+    r"\bacompa[ñn]antes?\b|"
+    r"\bpara\s+(?:dos|tres|2|3)\b(?!\s+(?:semanas|meses|d[ií]as|horas|a[ñn]os|minutos))|"
+    r"\b(?:dos|tres|2|3)\s+(?:personas|boletos|entradas|lugares|tickets)\b|"
+    r"\ben\s+grupo\b|\bun\s+grupo\b|"
+    r"\b(?:somos|vamos|ser[ií]amos|ir[ií]amos)\s+(?:dos|tres|cuatro|varios|2|3|4)\b|"
+    r"\ben\s+pareja\b|\bpor\s+pareja\b|\bpara\s+parejas?\b|\b2\s*x\s*1\b|\bdos\s+por\s+uno\b",
+    re.IGNORECASE,
+)
+# Вырезаем до проверки: «terminé con mi novia» (холост), «mi pareja ideal», «futura pareja».
+_COMPANION_EXCLUDE_RE = re.compile(
+    r"\b(?:termin|cort|romp|separ|divorci)\w*\s+(?:con|de)\s+" + _COMPANION_DET + _COMPANION_NOUN
+    + r"|\b(?:futura|nueva)\s+pareja\b|\bpareja\s+ideal\b",
+    re.IGNORECASE,
+)
+
+
 @dataclass(frozen=True)
 class Decision:
     """Результат детерминированного решения по залпу лида."""
-    action: str                 # respond | silent_whitelist | silent | silent_language | call_request | optout | blocked | rejected | needs_ai
+    action: str                 # respond | silent_whitelist | silent | silent_language | call_request | companion_question | optout | blocked | rejected | needs_ai
     reason: str                 # краткая причина (для лога/алерта/эскалации)
     alert_manager: bool = False # нужно ли уведомить Аню (сам алерт — блок 8)
     block_permanent: bool = False  # блок навсегда (do_not_contact + manual надолго)
@@ -248,6 +282,12 @@ def is_call_request(text: str) -> bool:
     if _CALL_NEGATED_RE.search(text):
         return False
     return is_optout(text) and bool(_CALL_VERB_RE.search(text))
+
+
+def is_companion_question(text: str) -> bool:
+    """Лид спрашивает про спутника (друг, девушка, пара, группа, цена на двоих)."""
+    cleaned = _COMPANION_EXCLUDE_RE.sub(" ", text or "")
+    return bool(_COMPANION_RE.search(cleaned))
 
 
 def has_instagram(text: str) -> bool:
@@ -321,6 +361,15 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     # и в ручном режиме (Аня должна узнать, что лид ждёт звонка).
     if is_call_request(text):
         return Decision("call_request", "лид просит позвонить вместо переписки",
+                        alert_manager=True)
+    # Вопрос про спутника (друг, девушка, пара, группа) — ДО AI и до №9 «не холост»: «¿puedo
+    # ir con mi novia?» не должно навсегда блокировать лида. Ручной режим + алерт Ане, лиду
+    # ничего. Opt-out важнее («no me escribas, voy con mi amigo» — это отказ). На паузе
+    # (кроме тестовых номеров) и в ручном режиме не срабатывает: бот и так молчит, Аня видит
+    # такие сообщения в сводке паузы или сама ведёт чат.
+    if (is_companion_question(text) and not is_optout(text)
+            and not (bot_paused and not is_bypass) and not _manual_active(lead)):
+        return Decision("companion_question", "лид спрашивает про спутника (друг/пара/группа)",
                         alert_manager=True)
     # Opt-out ДО manual/региона: явная просьба «не пиши» ставит do_not_contact навсегда,
     # даже если лида вёл менеджер (иначе при возврате в auto догоны возобновятся).
