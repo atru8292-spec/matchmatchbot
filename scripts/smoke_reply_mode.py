@@ -337,6 +337,7 @@ async def amain(args) -> None:
     await db.init_pool()
     lines = [f"# Смоук reply_mode ({'DRY' if args.dry else 'OpenAI'}) {NOW:%Y-%m-%d %H:%M} UTC", ""]
     rows = []
+    modes = ("legacy", "rag") if args.modes == "both" else ("rag",)
     try:
         idx = 0
         if args.part in ("messages", "all"):
@@ -344,30 +345,30 @@ async def amain(args) -> None:
             for text, hist, prof in MESSAGES:
                 idx += 1
                 res = {}
-                for mode in ("legacy", "rag"):
+                for mode in modes:
                     L = Lead(mode, idx, hist, prof)
                     leads[L.phone] = L
                     res[mode] = await one_turn(mode, L, text, spend)
                 rows.append(("сообщение", text, res))
-                lines += _fmt(text, res)
+                lines += _fmt(text, res, modes)
         if args.part in ("dialogs", "all"):
             for title, hist, prof, turns in DIALOGS:
                 idx += 1
                 lines.append(f"\n## {title}\n")
-                Ls = {mode: Lead(mode, idx, hist, prof) for mode in ("legacy", "rag")}
+                Ls = {mode: Lead(mode, idx, hist, prof) for mode in modes}
                 for L in Ls.values():
                     leads[L.phone] = L
                 for text in turns:
                     res = {mode: await one_turn(mode, Ls[mode], text, spend) for mode in Ls}
                     rows.append((title, text, res))
-                    lines += _fmt(text, res)
+                    lines += _fmt(text, res, modes)
     except Budget as e:
         lines.append(f"\n⛔ ОСТАНОВЛЕНО: {e}")
         print(f"⛔ ОСТАНОВЛЕНО: {e}")
     finally:
         await db.close_pool()
-    silent = sum(1 for _, _, r in rows if r["rag"]["decision"] == "silent")
-    viol = {m: sum(1 for _, _, r in rows if r[m]["violations"]) for m in ("legacy", "rag")}
+    silent = sum(1 for _, _, r in rows if r.get("rag", {}).get("decision") == "silent")
+    viol = {m: sum(1 for _, _, r in rows if r.get(m, {}).get("violations")) for m in ("legacy", "rag")}
     lines += ["", "## Итог",
               f"- ходов: {len(rows)}; вызовов OpenAI: {spend.calls}; потрачено ${spend.usd:.3f} "
               f"(legacy ${spend.by_mode['legacy']:.3f}, rag ${spend.by_mode['rag']:.3f})",
@@ -383,9 +384,9 @@ async def amain(args) -> None:
                       ensure_ascii=False, indent=1, default=str)
 
 
-def _fmt(text: str, res: dict) -> list[str]:
+def _fmt(text: str, res: dict, modes=("legacy", "rag")) -> list[str]:
     out = [f"**Лид:** {text}"]
-    for mode in ("legacy", "rag"):
+    for mode in modes:
         r = res[mode]
         head = f"- **{mode}** ({r['decision']}, ${r['usd']:.4f})"
         if r.get("silent_reason"):
@@ -410,4 +411,6 @@ if __name__ == "__main__":
     ap.add_argument("--budget", type=float, default=2.0)
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("--out", default="")
+    # повторный прогон только нового режима (ответы legacy не меняются) — вдвое дешевле
+    ap.add_argument("--modes", choices=["both", "rag"], default="both")
     asyncio.run(amain(ap.parse_args()))

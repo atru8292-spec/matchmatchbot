@@ -916,3 +916,62 @@ class TestPhotoGateReview:
         mem = _mem(lead_texts=["¿cómo compro el boleto?", "Carlos", "ok", "soy médico",
                                "[фото одобрено]"])
         assert rag.compra_pendiente(mem, "[фото одобрено]") is True
+
+
+class TestVerifierFromSmoke:
+    """Ложные «без источника» из платного смоука 2026-10-22: gpt-4.1-mini помечал фразы,
+    которые почти дословно есть в фичах, благодарности и вопросы."""
+
+    RECS = knowledge.usable(SEED, SETTINGS, "2026-10-21")
+
+    async def _run(self, monkeypatch, items, bubbles=("x",), historial=None, anna=None):
+        async def chat(model, system, user, cost, **kw):
+            self.payload = user
+            return {"afirmaciones": items}
+        monkeypatch.setattr(rag, "_chat", chat)
+        return await rag.verify_claims(list(bubbles), [], memory.evento_actual(SETTINGS),
+                                       ["¿cuánto cuesta?"], rag.Cost(), anna or [],
+                                       recs=self.RECS, historial=historial or [])
+
+    @pytest.mark.parametrize("claim", [
+        "incluye bebida de bienvenida y botanas",
+        "Trabajo con más de 3,000 mujeres eslavas que buscan pareja.",
+        "es una noche para conocer mujeres eslavas que buscan una relación seria",
+        "¡Gracias por tu foto, Javier! 🤍",
+        "¿Cuántos años tienes y a qué te dedicas?",
+    ])
+    async def test_false_positives_dropped(self, monkeypatch, claim):
+        assert await self._run(monkeypatch, [{"texto": claim, "respaldo": None}]) == []
+
+    async def test_all_usable_records_are_sources(self, monkeypatch):
+        await self._run(monkeypatch, [])
+        assert len(self.payload["FUENTES"]["fichas"]) > 20
+
+    async def test_manual_promise_from_conversation(self, monkeypatch):
+        hist = [{"autor": "anya_manual", "texto": "Te guardo un lugar hasta el viernes si me confirmas hoy."}]
+        claims = await self._run(monkeypatch, [{"texto": "te guardo el lugar hasta el viernes",
+                                                "respaldo": None}], historial=hist)
+        assert claims == []
+
+    @pytest.mark.parametrize("claim", ["Van 30 mujeres y 30 hombres.", "Hay valet parking gratis.",
+                                       "Es el único evento así en América Latina."])
+    async def test_real_inventions_kept(self, monkeypatch, claim):
+        assert await self._run(monkeypatch, [{"texto": claim, "respaldo": None}]) == [claim]
+
+    async def test_quoted_support_trusted_and_old_format(self, monkeypatch):
+        assert await self._run(monkeypatch, [{"texto": "Hay valet parking", "respaldo": "x"}]) == []
+
+        async def chat(model, system, user, cost, **kw):
+            return {"sin_fuente": ["hay valet parking"]}
+        monkeypatch.setattr(rag, "_chat", chat)
+        assert await rag.verify_claims(["x"], [], None, [], rag.Cost()) == ["hay valet parking"]
+
+
+def test_no_data_reply_goes_silent():
+    assert rag._NO_DATA_RE.search("No puedo decirte cuántas personas van")
+    assert not rag._NO_DATA_RE.search("No es obligatorio ir disfrazado")
+
+
+def test_opener_with_name_stripped():
+    assert rag.clean_style(["¡Perfecto, Luis! Gracias por compartirlo."]) == ["Gracias por compartirlo."]
+    assert rag.clean_style(["¡Perfecto! Te cuento."]) == ["Te cuento."]

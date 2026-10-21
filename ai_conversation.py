@@ -393,6 +393,8 @@ def clean_style(bubbles: list[str]) -> list[str]:
         m = conversation_rules.BANNED_OPENER_RE.search(b)
         if m:
             rest = b[m.end():]
+            # «¡Perfecto, Luis! Gracias…» — запятая, потом имя: срезаем и обращение (смоук 2026-10-22)
+            rest = re.sub(r"^\s*,", "", rest, count=1)
             tail = re.match(r"^[^,.!:;?¿]{0,15}[,.!:;]", rest)   # «Claro que sí, …»
             b = re.sub(r"^[\s,.!:;]+", "", rest[tail.end():] if tail else rest)
             b = _capitalize(b)
@@ -475,29 +477,81 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
 
 
 VERIFY_SYSTEM = (
-    "Eres un verificador. Recibes la RESPUESTA de una asesora a un cliente y las FUENTES "
-    "permitidas. Lista las afirmaciones de hecho de la RESPUESTA (sobre el evento, la "
-    "agencia, precios, fechas, lugares, personas, cantidades, condiciones, procesos) que NO "
-    "estén respaldadas por las FUENTES o por lo que el propio cliente dijo. Preguntas, "
-    "saludos, empatía y frases de cortesía no son afirmaciones. Los tokens entre corchetes "
-    "como [event_price_nonmember] son valores de las fuentes. Responde SOLO JSON: "
-    '{"sin_fuente": ["afirmación", ...]} (lista vacía si todo está respaldado).'
+    "Eres un verificador. Recibes la RESPUESTA de una asesora a un cliente, las FUENTES "
+    "permitidas y la CONVERSACION. Busca en la RESPUESTA las afirmaciones de hecho sobre el "
+    "evento, la agencia, el servicio, precios, fechas, lugares, cantidades, condiciones o "
+    "promesas al cliente. Para cada una, copia la frase de FUENTES o de CONVERSACION que la "
+    "respalda: vale si lo dice con otras palabras o es una consecuencia directa. Si ninguna "
+    "la respalda, respaldo = null. NO son afirmaciones y no las listes: preguntas, pedidos al "
+    "cliente (nombre, edad, profesión, foto), agradecimientos, saludos, reacciones, empatía, "
+    "bromas o comentarios personales de la asesora sin datos, y lo que dijo el cliente. Los "
+    "tokens entre corchetes como [event_price_nonmember] son valores de las fuentes. "
+    'Responde SOLO JSON: {"afirmaciones": [{"texto": "...", "respaldo": "cita" o null}]}.'
 )
+
+# Пустая отписка вместо ответа («No puedo decirte…») — данных нет: молча Ане, как falta_dato.
+_NO_DATA_RE = re.compile(
+    r"no\s+(?:puedo\s+decirte|te\s+puedo\s+decir|tengo\s+(?:ese\s+dato|esa\s+informaci[oó]n|"
+    r"el\s+dato)|s[eé]\s+(?:cu[aá]nt|exactamente))", re.IGNORECASE)
+_THANKS_RE = re.compile(r"^\W*(?:gracias|muchas\s+gracias|mil\s+gracias|hola|jaja)", re.IGNORECASE)
+
+
+def _words(text: str) -> set[str]:
+    t = (text or "").lower().translate(str.maketrans("áéíóúü", "aeiouu"))
+    # слова от 4 букв и любые числа («30 mujeres» без источника не пройдёт по словам)
+    return {w for w in re.findall(r"[a-zñ0-9]+", t) if len(w) >= 4 or w.isdigit()}
+
+
+def _supported_by_text(claim: str, sources: list[str]) -> bool:
+    """Почти все значимые слова утверждения есть в одном-двух источниках — это не выдумка
+    (gpt-4.1-mini в смоуке помечал дословные фразы из фич, 2026-10-22). Модель часто склеивает
+    две фичи в одну фразу («más de 3,000 mujeres eslavas que buscan pareja»)."""
+    words = _words(claim)
+    if not words:
+        return True
+    hits = sorted((words & _words(src) for src in sources), key=len, reverse=True)
+    best = len(hits[0]) if hits else 0
+    for i, a in enumerate(hits[:5]):            # лучшая пара источников
+        for b in hits[i + 1:6]:
+            best = max(best, len(a | b))
+    return best >= 0.8 * len(words)
 
 
 async def verify_claims(bubbles: list[str], fichas: list[dict], card: dict | None,
                         lead_texts: list[str], cost: Cost,
-                        anna_reciente: list[str] | None = None) -> list[str]:
+                        anna_reciente: list[str] | None = None,
+                        recs: list[dict] | None = None,
+                        historial: list[dict] | None = None) -> list[str]:
+    """Утверждения ответа без источника. Источник — подтверждённые записи базы (все usable,
+    а не только найденные поиском), карточка ивента, прошлые ответы Анны и переписка."""
+    contenidos = [f.get("contenido_es") for f in (recs or fichas) if f.get("contenido_es")]
+    conversacion = [f"{m.get('autor')}: {m.get('texto')}" for m in (historial or [])[-20:]
+                    if m.get("texto")]
     payload = {
         "RESPUESTA": bubbles,
-        "FUENTES": {"evento_actual": card,
-                    "fichas": [f.get("contenido_es") for f in fichas if f.get("contenido_es")],
+        "FUENTES": {"evento_actual": card, "fichas": contenidos,
                     "lo_que_ya_dijo_anna": list(anna_reciente or [])},
+        "CONVERSACION": conversacion,
         "LO_QUE_DIJO_EL_CLIENTE": lead_texts[-15:],
     }
-    out = await _chat(CHECK_MODEL, VERIFY_SYSTEM, payload, cost, max_tokens=300, temperature=0)
-    claims = out.get("sin_fuente") or []
-    return [str(c) for c in claims if str(c).strip()]
+    out = await _chat(CHECK_MODEL, VERIFY_SYSTEM, payload, cost, max_tokens=500, temperature=0)
+    items = out.get("afirmaciones")
+    if items is None:                       # старый формат ответа
+        items = [{"texto": c, "respaldo": None} for c in out.get("sin_fuente") or []]
+    sources = contenidos + list(anna_reciente or []) + conversacion + list(lead_texts)
+    if card:
+        sources.append(json.dumps(card, ensure_ascii=False))
+    claims = []
+    for it in items:
+        texto = str((it or {}).get("texto") if isinstance(it, dict) else it).strip()
+        if not texto or (isinstance(it, dict) and it.get("respaldo")):
+            continue
+        if texto.rstrip().endswith("?") or _THANKS_RE.match(texto):
+            continue                        # вопрос или благодарность — не факт
+        if _supported_by_text(texto, sources):
+            continue
+        claims.append(texto)
+    return claims
 
 
 # ───────────────────────── сводка памяти ─────────────────────────
@@ -802,10 +856,13 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     meta["notas"] = notes
     if reason:
         return _silent(reason, **extra)
+    if any(_NO_DATA_RE.search(x) for x in bubbles):
+        return _silent("нет данных в базе (модель ответила отпиской)", **extra)
 
     try:
         claims = await verify_claims(bubbles, fichas, card, mem["lead_texts"], cost,
-                                     mem.get("anna_reciente"))
+                                     mem.get("anna_reciente"), recs=recs,
+                                     historial=mem.get("historial"))
     except Exception:
         logger.exception("rag: проверка второй моделью упала → silent")
         return _silent("проверка утверждений недоступна", **extra)
