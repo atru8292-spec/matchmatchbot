@@ -122,8 +122,11 @@ DIALOGS = [
 # ───────────────────────── бюджет и заглушки ─────────────────────────
 
 
-class Budget(Exception):
-    pass
+class Budget(BaseException):
+    """BaseException: конвейеры ловят Exception и отвечали бы заглушкой вместо остановки."""
+
+
+RESERVE_USD = 0.05
 
 
 class Spend:
@@ -139,7 +142,7 @@ def install(spend: Spend, dry: bool) -> None:
     orig_post = ai._openai_post
 
     async def post(url, payload, timeout):
-        if spend.usd >= spend.limit:
+        if spend.usd + RESERVE_USD >= spend.limit:   # запас на один вызов
             raise Budget(f"бюджет ${spend.limit:.2f} исчерпан (${spend.usd:.3f})")
         r = await (_fake_post(url, payload) if dry else orig_post(url, payload, timeout))
         usage = r.json().get("usage") or {}
@@ -188,8 +191,8 @@ async def _fake_post(url, payload):
 
 # ───────────────────────── оценка ответа ─────────────────────────
 
-_EMOJI = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
-_PURCHASE = re.compile(r"compr|reserv|apart|quiero ir|link|enlace|pag", re.I)
+_EMOJI = re.compile("[\U0001F300-\U0001FAFF☀-➿⭐⏰]")
+_PURCHASE = re.compile(r"compr|reserv|apart|quiero ir|link|enlace|\bpag(?:o|ar)\b", re.I)
 
 
 def judge(bubbles: list[str], lead_text: str, presented_before: bool) -> list[str]:
@@ -211,7 +214,7 @@ def judge(bubbles: list[str], lead_text: str, presented_before: bool) -> list[st
         out.append("повторная презентация")
     if re.search(r"medianoche|12:00|único", text, re.I):
         out.append("неподтверждённый факт")
-    if re.search(r"~|8,?000", text):
+    if re.search(r"~|(?<!\d)8,?000(?!\d)", text):
         out.append("зачёркнутая/8000")
     return out
 
@@ -303,6 +306,9 @@ async def amain(args) -> None:
         return await orig(*a, **k)
     asyncpg.create_pool = ro_pool
 
+    from config import settings
+    if not args.dry and not (settings.openai_api_key or "").startswith("sk-"):
+        raise SystemExit("нет OPENAI_API_KEY в окружении процесса")
     spend = Spend(args.budget)
     install(spend, args.dry)
     leads: dict[str, Lead] = {}
@@ -336,6 +342,7 @@ async def amain(args) -> None:
                     lines += _fmt(text, res)
     except Budget as e:
         lines.append(f"\n⛔ ОСТАНОВЛЕНО: {e}")
+        print(f"⛔ ОСТАНОВЛЕНО: {e}")
     finally:
         await db.close_pool()
     silent = sum(1 for _, _, r in rows if r["rag"]["decision"] == "silent")

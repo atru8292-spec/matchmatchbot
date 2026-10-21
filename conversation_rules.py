@@ -27,8 +27,8 @@ BANNED_PHRASE_RE = re.compile(
     r"(?:ideal|para\s+ti)|"
     r"(?:as[ií]|para)\s+(?:veo|ver|saber)\s+si\s+(?:encajas|el\s+evento\s+es\s+para\s+ti)|"
     r"es\s+ideal\s+para\s+ti|dos\s+caminos|dos\s+opciones|\bavanzar\b|\bperfil\b|\bguapo\b|"
-    r"\bbase\s+de\b|muchos\s+(?:me\s+)?dicen|quedan\s+pocos|[uú]ltimos\s+lugares|"
-    r"no\s+te\s+lo\s+pierdas|aprovecha|antes\s+de\s+que\s+suba|vale\s+la\s+pena|"
+    r"\bbase\s+de\b(?!\s+datos)|muchos\s+(?:me\s+)?dicen|quedan\s+pocos|[uú]ltimos\s+lugares|"
+    r"no\s+te\s+lo\s+pierdas|\baprovecha\b|antes\s+de\s+que\s+suba|vale\s+la\s+pena|"
     r"inversi[oó]n\s+en\s+algo\s+tan\s+importante|"
     # похвала самого лида и агентства
     r"(?:eres|se\s+nota\s+que\s+eres)\s+(?:un\s+)?(?:hombre\s+)?(?:muy\s+)?"
@@ -42,15 +42,16 @@ BANNED_PHRASE_RE = re.compile(
 # «jaja» разрешено (смех, когда лид шутит), его повтор в начале ловит check_reply.
 SLANG_RE = re.compile(
     r"\b(?:porfa|ahorita|checa|checar|chequ\w+|chance|te\s+late|padr[ií]simo|"
-    r"muy\s+padre|[óo]rale|oye|embone|chido|neta|g[üu]ey|wey)\b|\bmira,|¡va!|^\W*va[,!.]",
+    r"muy\s+padre|[óo]rale|oye|embone|chido|neta|g[üu]ey|wey)\b|(?:^|[.!?¿¡]\s*)mira\b|"
+    r"¡va!|^\W*va[,!.]",
     re.IGNORECASE | re.MULTILINE,
 )
 
 # Короткая реакция в начале пузыря — её повтор подряд звучит как шаблон.
+# Только белый список реакций: «¡Es en Polanco!» — информация, а не реакция (code-review).
 REACTION_START_RE = re.compile(
-    r"^\s*(?:¡[^!¡?¿.\n]{1,30}!|ja(?:ja)+\w*[\s,!.]*|"
-    r"(?:claro|qu[eé]\s+gusto|qu[eé]\s+bien|me\s+encanta|entiendo|te\s+entiendo|ok|bueno)"
-    r"[,!.])\s*",
+    r"^\s*(?:ja(?:ja)+\w*[\s,!.]*|¡?\s*(?:claro|qu[eé]\s+gusto|qu[eé]\s+bien|me\s+encanta|"
+    r"qu[eé]\s+alegr[ií]a|qu[eé]\s+emoci[oó]n|entiendo|te\s+entiendo|ok|bueno|wow|ay)\s*[,!.])\s*",
     re.IGNORECASE,
 )
 

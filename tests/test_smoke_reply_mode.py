@@ -17,3 +17,14 @@ def test_plan_sizes():
     assert len(s.MESSAGES) == 13 and len(s.DIALOGS) == 10
     assert s.EVENT_SETTINGS["event_price_old"] == ""      # без зачёркнутой «было»
     assert s.EVENT_SETTINGS["event_price_next"] == "7000"
+
+
+def test_budget_is_base_exception():
+    """Конвейеры ловят Exception — остановка бюджета не должна превращаться в заглушку."""
+    assert issubclass(s.Budget, BaseException) and not issubclass(s.Budget, Exception)
+    assert s.RESERVE_USD > 0
+
+
+def test_judge_page_word_is_not_purchase_and_big_numbers():
+    assert "ссылка без вопроса о покупке" in s.judge([s.LINK], "¿qué hay en la página?", False)
+    assert "зачёркнутая/8000" not in s.judge(["Son 18,000 personas"], "x", False)

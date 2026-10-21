@@ -766,3 +766,46 @@ class TestPromoTrigger:
                                       "mi código postal es 11560"])
     def test_ad_mentions_not_silent(self, text):
         assert not rag._SILENT_TOPIC_RE.search(text), text
+
+
+class TestReview3:
+    def test_link_after_pending_purchase_and_name(self):
+        """«¿cómo compro?» до имени → ссылку придержали; «Carlos, soltero» → ссылка уходит."""
+        mem_over = {"lead_texts": ["hola, vi el evento", "¿cómo compro el boleto?", "Carlos, soltero"],
+                    "ultimo_mensaje_anna": "Se compra en línea. ¿Cómo te llamas y estás soltero?"}
+        b, _, _ = check(["Puedes comprar tu boleto aquí: [event_link]"], user_text="Carlos, soltero",
+                        **mem_over)
+        assert "[event_link]" in b[0]
+
+    @pytest.mark.parametrize("text", ["quiero asistir", "me gustaría ir", "quiero 2 boletos",
+                                      "¿dónde consigo los boletos?"])
+    def test_purchase_phrases(self, text):
+        assert rag.wants_to_buy(text, None)
+
+    def test_offer_variants(self):
+        assert rag.wants_to_buy("sí", "¿Te lo mando?")
+        assert rag.wants_to_buy("claro", "¿Te gustaría el enlace?")
+
+    @pytest.mark.parametrize("text", ["¿cuál es el código de vestimenta?", "mi código postal es 11560"])
+    def test_codigo_not_silent(self, text):
+        assert not rag._SILENT_TOPIC_RE.search(text)
+
+    @pytest.mark.parametrize("text", ["quiero la promo", "¿la promo sigue vigente?",
+                                      "¿tienen código de descuento?", "¿algún código?"])
+    def test_promo_requests_silent(self, text):
+        assert rag._SILENT_TOPIC_RE.search(text)
+
+    def test_informative_exclamation_not_reaction(self):
+        import conversation_rules as cr
+        assert cr.reaction_start("¡Es en Polanco!") is None
+        assert cr.reaction_start("¡Hola Carlos!") is None
+        assert cr.reaction_start("¡Qué bien, gracias!") == "que bien"
+        b, _, _ = check(["¡Es en Polanco, CDMX!"], inicios_recientes=["es en polanco cdmx"])
+        assert b == ["¡Es en Polanco, CDMX!"]
+
+    def test_mira_slang_and_base_de_datos(self):
+        import conversation_rules as cr
+        assert cr.violations("Mira, el evento es en Polanco.")
+        assert cr.violations("Te cuento. Mira este video.")
+        assert not cr.violations("Tenemos una base de datos de eventos.")
+        assert not cr.violations("Puedes aprovechar para conocer gente.")

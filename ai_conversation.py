@@ -151,31 +151,42 @@ _AGENCY_INTEREST_RE = re.compile(r"rus[ao]s?|eslav[ao]s?|ucranian|bielorrus|matc
                                  re.IGNORECASE)
 _PURCHASE_RE = re.compile(
     r"\bcompr(?:o|ar|arlo|arla|a)\b|\bpag(?:o|ar|arlo)\b|\blink\b|\benlace\b|"
-    r"\breserv(?:o|ar)\b|\bapart(?:o|ar)\b|quiero\s+(?:ir|mi\s+boleto|el\s+boleto|comprar)|"
+    r"\breserv(?:o|ar)\b|\bapart(?:o|ar)\b|quiero\s+(?:ir|asistir|mi\s+boleto|el\s+boleto|comprar)|"
+    r"me\s+gustar[ií]a\s+(?:ir|asistir)|quiero\s+(?:\d+|un|uno|dos)\s+boletos?|"
+    r"d[oó]nde\s+(?:consigo|compro|pago|obtengo)|c[oó]mo\s+(?:consigo|obtengo)|"
     r"me\s+apunto|inscrib|registr|ya\s+me\s+decid", re.IGNORECASE)
 # Анна предложила ссылку, лид согласился — это тоже покупка.
-_OFFER_LINK_RE = re.compile(r"(?:te\s+paso|quieres|te\s+mando|te\s+comparto)\s+(?:el\s+)?"
-                            r"(?:link|enlace)|apartar\s+tu\s+lugar|reservar\s+tu\s+lugar",
-                            re.IGNORECASE)
+_OFFER_LINK_RE = re.compile(
+    r"(?:te\s+paso|quieres|te\s+mando|te\s+comparto)\s+(?:el\s+)?(?:link|enlace)|"
+    r"te\s+lo\s+(?:mando|paso|comparto)|te\s+gustar[ií]a\s+(?:el\s+|que\s+te\s+(?:mande|pase)\s+el\s+)"
+    r"(?:link|enlace)|apartar\s+tu\s+lugar|reservar\s+tu\s+lugar", re.IGNORECASE)
 _AFFIRM_RE = re.compile(r"^\W*(?:s[ií]|claro|ok|okay|dale|por\s+favor|me\s+interesa|sale|"
                         r"de\s+acuerdo)\b", re.IGNORECASE)
 # Решения владелицы: скидки, наличные, перевод, возврат — молча Ане (не полагаемся на модель).
 # «promo» — только вопрос о скидке («¿hay promo?», «¿tienen alguna promoción?», «¿y la promo?»),
 # не «vi la promo en Instagram» / «vi su promoción» (решение владелицы 2026-10-21).
 _SILENT_TOPIC_RE = re.compile(
-    r"\bdescuento|\bcup[oó]n|\bc[oó]digo\b(?!\s+postal)|"
+    r"\bdescuento|\bcup[oó]n|c[oó]digo\s+(?:de\s+)?(?:descuento|promo\w*)|alg[uú]n\s+c[oó]digo|"
+    r"c[oó]digo\s*\?|"
     r"\b(?:hay|tienen|tienes|manejan|aplica|aplican|existe|dan|alg[uú]n|alguna)\s+"
     r"(?:alguna?\s+|una\s+)?promo(?:ci[oó]n|ciones)?\b|\bpromo(?:ci[oó]n)?\s*\?|"
+    r"quiero\s+(?:la|el|una|un)\s+(?:promo\w*|descuento)|"
+    r"promo(?:ci[oó]n)?\s+(?:sigue|est[aá]|aplica|vigente)|"
     r"\brebaja|m[aá]s\s+barato|"
     r"precio\s+especial|\befectivo\b|\boxxo\b|\bwalmart\b|transferencia|dep[oó]sito|"
     r"depositar|reembolso|devoluci[oó]n|regr[eé]s\w*\s+(?:mi|el)\s+dinero|"
     r"cancelar\s+(?:mi\s+)?boleto", re.IGNORECASE)
 
 
-def wants_to_buy(user_text: str, last_anna: str | None) -> bool:
+def wants_to_buy(user_text: str, last_anna: str | None,
+                 recent_lead: list[str] | None = None) -> bool:
+    """Лид хочет купить: спросил сейчас, согласился на предложенную ссылку или спрашивал,
+    как купить, в последних сообщениях (ссылку тогда придержали до имени и «холост ли»)."""
     if _PURCHASE_RE.search(user_text or ""):
         return True
-    return bool(last_anna and _OFFER_LINK_RE.search(last_anna) and _AFFIRM_RE.search(user_text or ""))
+    if last_anna and _OFFER_LINK_RE.search(last_anna) and _AFFIRM_RE.search(user_text or ""):
+        return True
+    return any(_PURCHASE_RE.search(t or "") for t in (recent_lead or [])[-3:])
 # Прямая просьба ссылки: повторяем, даже если ya_hecho.enlace_enviado.
 _LINK_REQUEST_RE = re.compile(r"link|enlace|p[aá]same|m[aá]ndame\s+el|otra\s+vez|de\s+nuevo|"
                               r"c[oó]mo\s+(?:compro|pago|reservo)|d[oó]nde\s+(?:compro|pago|reservo)",
@@ -402,7 +413,8 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         return "[event_link]" in b or bool(link and _norm_url(link) in b.lower())
     if any(has_link(b) for b in bubbles):
         reason = None
-        if not wants_to_buy(user_text, mem.get("ultimo_mensaje_anna")):
+        if not wants_to_buy(user_text, mem.get("ultimo_mensaje_anna"),
+                            (mem.get("lead_texts") or [])[:-1]):
             reason = "лид не спрашивал, как купить"
         elif cal["etapa"] == "calificacion":
             reason = "этап calificacion"
