@@ -1393,3 +1393,72 @@ class TestReReview:
     def test_whole_price_keeps_tail(self):
         out = rag.whole_price(["Más adelante sube a 7,000 MXN y se paga en la página."], SETTINGS)
         assert out == ["Más adelante el precio sube a [event_price_next] MXN. Se paga en la página."]
+
+
+class TestLiveRun2Fixes:
+    """Точные тексты из живого прогона 2026-10-22: ложные молчания и промахи тона."""
+
+    RECS = knowledge.usable(SEED, SETTINGS, "2026-10-21")
+
+    async def _verify(self, monkeypatch, texto, quote=None, name="Carlos"):
+        async def chat(model, system, user, cost, **kw):
+            return {"afirmaciones": [{"texto": texto, "respaldo": quote}]}
+        monkeypatch.setattr(rag, "_chat", chat)
+        return await rag.verify_claims([texto], self.RECS, memory.evento_actual(SETTINGS), [],
+                                       rag.Cost(), SETTINGS, name)
+
+    @pytest.mark.parametrize("texto,quote", [
+        ("La última vez platicamos del evento Slavic-Latino Connect Night, que será el 18 de "
+         "noviembre en Polanco.", None),
+        ("No es obligatorio ir disfrazado, pero puedes hacerlo si quieres.", None),
+        ("No es obligatorio ir disfrazado, Carlos.", None),
+        ("No es obligatorio ir disfrazado, pero puedes hacerlo si quieres.",
+         "puedes venir disfrazado y, si no tienes disfraz, los organizadores te dan una máscara"),
+    ])
+    async def test_false_silences_fixed(self, monkeypatch, texto, quote):
+        assert await self._verify(monkeypatch, texto, quote) == []
+
+    @pytest.mark.parametrize("texto", [
+        "El evento empieza a las [event_start], pero no hay una hora fija de cierre: suele terminar "
+        "cuando la mayoría ya se va.",
+        "Van 30 mujeres eslavas solteras y 30 hombres.",
+    ])
+    async def test_correct_silences_kept(self, monkeypatch, texto):
+        assert await self._verify(monkeypatch, texto)
+
+    def test_no_puedo_darte_is_no_data(self):
+        assert rag._NO_DATA_RE.search("No puedo darte el número exacto, pero este es nuestro evento número 30")
+
+    def _mem_buy(self, last=None):
+        lead = {"interest": "event", "name": "Carlos", "is_single": True}
+        ya = memory.ya_hecho([], {}, SETTINGS, None, NOW)
+        cal = memory.calificacion(lead, ya, "¿cómo compro el boleto?", last, compra=True)
+        return _mem(calificacion=cal, ultimo_mensaje_anna=last), lead
+
+    def test_buy_before_photo_answer_and_photo_without_why(self):
+        mem, lead = self._mem_buy()
+        out = rag.purchase_before_photo(
+            ["Solo me falta una foto tuya para completar tu registro. ¿Me la mandas por aquí?"],
+            mem, "¿cómo compro el boleto?")
+        assert out == [rag.BUY_ONLINE_SENTENCE, "¿Me mandas una foto tuya?"]
+
+    def test_buy_before_photo_adds_photo_request(self):
+        mem, lead = self._mem_buy("¿Cuántos años tienes y a qué te dedicas?")
+        out = rag.purchase_before_photo(["El pago se hace en la página y el boleto te llega por correo."],
+                                        mem, "ok, ¿cómo compro el boleto?")
+        assert out == ["El pago se hace en la página y el boleto te llega por correo.",
+                       rag.PHOTO_REQUEST]
+        assert rag.extra_toca({**mem, "compra_pendiente": True}) == "pregunta"
+
+    def test_orphan_me_la_fixed(self):
+        mem, _ = self._mem_buy()
+        mem["calificacion"] = {**mem["calificacion"], "etapa": "venta"}
+        out = rag.purchase_before_photo(["Gracias por compartirlo.", "¿Me la puedes mandar aquí?"],
+                                        mem, "tengo 41, soy abogado")
+        assert out == ["Gracias por compartirlo.", "¿Me mandas una foto tuya?"]
+
+    def test_why_removed_in_question(self):
+        mem, _ = self._mem_buy()
+        out = rag.purchase_before_photo(["Solo me falta una foto tuya para continuar, ¿me la puedes mandar?"],
+                                        mem, "¿y cómo se paga el boleto?")
+        assert "continuar" not in " ".join(out) and "foto" in " ".join(out)

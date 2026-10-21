@@ -1,6 +1,6 @@
 # База знаний режима rag: ревью
 
-Источник: `knowledge/seed.json`, версия 2026-10-21. Записей: 96, ждут Аню: 11.
+Источник: `knowledge/seed.json`, версия 2026-10-21. Записей: 97, ждут Аню: 11.
 Документ собран скриптом `scripts/knowledge_review.py`, руками не править.
 
 - Записи с `confirmado=false` в ответы не подаются, пока Аня не подтвердит.
@@ -152,6 +152,19 @@
 - **Как отвечать (для модели):** Menciónalo una sola vez en la conversación (ver ya_hecho). Si pregunta cómo vestirse fuera del disfraz, no inventes un código de vestimenta: falta_dato.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
 - **Источник:** №2, промпт
+
+### `event_costume_optional` · El disfraz no es obligatorio · ✅ подтверждено
+
+**Текст (es):**
+
+> Ir disfrazado no es obligatorio.
+
+**Перевод:** Костюм не обязателен.
+
+- **Когда:** ¿es obligatorio ir disfrazado?, ¿tengo que ir disfrazado?, no tengo disfraz
+- **Как отвечать (для модели):** Junto con event_halloween si pregunta por el disfraz.
+- **Флаги:** действие: ответить; действует до 2026-11-18
+- **Источник:** следует из №2 и промпта: без костюма организаторы дают маску (проверить у владелицы)
 
 ### `event_single_confirmation` · Al comprar confirma que está soltero · ✅ подтверждено
 

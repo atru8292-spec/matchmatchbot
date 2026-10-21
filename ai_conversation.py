@@ -479,6 +479,43 @@ def whole_price(bubbles: list[str], settings: dict) -> list[str]:
     return out
 
 
+BUY_ONLINE_SENTENCE = "El boleto se compra en línea, en la página del evento."
+PHOTO_REQUEST = "¿Me mandas una foto tuya?"
+# «para completar tu registro», «para continuar» — объяснение, зачем фото (владелица: без него)
+_PHOTO_WHY_RE = re.compile(r"\s*,?\s*(?:para|antes\s+de)\s+(?:completar|continuar|seguir|terminar|"
+                           r"avanzar|registrarte|darte|enviarte|pasarte|confirmar)\b[^.?!¿]*",
+                           re.IGNORECASE)
+_ORPHAN_LA_RE = re.compile(r"¿?\s*me\s+la\s+(?:puedes\s+)?(?:mandar|enviar|mandas|env[ií]as|compartes)"
+                           r"[^?]*\??", re.IGNORECASE)
+
+
+def purchase_before_photo(bubbles: list[str], mem: dict, user_text: str) -> list[str]:
+    """Лид спросил, как купить, а ссылку давать рано (этап calificacion): ответ по сути
+    («se compra en línea…») и просьба фото, без объяснений вслух, зачем (решение 2026-10-22).
+    Плюс осиротевшее «¿Me la puedes mandar?» после срезанной фразы про фото."""
+    cal = mem["calificacion"]
+    out = []
+    for b in bubbles:
+        if memory.pregunta_slot("photo", b) or re.search(r"\bfoto", b, re.IGNORECASE):
+            b = _PHOTO_WHY_RE.sub("", b)
+            b = re.sub(r"^\s*(?:s[oó]lo\s+)?(?:me\s+)?falta\s+una\s+foto\s+tuya\s*[.,]?\s*", "", b,
+                       flags=re.IGNORECASE)
+        out.append(b.strip())
+    text = " ".join(out)
+    if not re.search(r"\bfoto", text, re.IGNORECASE):
+        out = [_ORPHAN_LA_RE.sub(PHOTO_REQUEST, b) for b in out]
+    out = [b for b in out if b and _words(b)]
+    buying = wants_to_buy(user_text, mem.get("ultimo_mensaje_anna"))
+    if buying and cal["etapa"] == "calificacion" and cal.get("siguiente") == "photo":
+        text = " ".join(out)
+        if not re.search(r"en\s+l[ií]nea|p[aá]gina", text, re.IGNORECASE):
+            out.insert(0, BUY_ONLINE_SENTENCE)
+        if not memory.pregunta_slot("photo", text) and \
+                not memory.pregunta_slot("photo", mem.get("ultimo_mensaje_anna")):
+            out.append(PHOTO_REQUEST)
+    return out or bubbles
+
+
 def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict,
                 user_text: str, dio_algo: bool = True,
                 answered: set[str] | frozenset = frozenset()) -> tuple[list[str], str | None, list[str]]:
@@ -542,6 +579,10 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         if new != bubbles:
             notes.append("убрала «Gracias» без повода")
             bubbles = new
+    new = purchase_before_photo(bubbles, mem, user_text)
+    if new != bubbles:
+        notes.append("покупка до фото: ответ по сути и просьба фото без объяснений")
+        bubbles = new
     new = whole_price(bubbles, settings)
     if new != bubbles:
         notes.append("цена целой мыслью")
@@ -579,7 +620,7 @@ VERIFY_SYSTEM = (
 
 # Пустая отписка вместо ответа («No puedo decirte…») — данных нет: молча Ане, как falta_dato.
 _NO_DATA_RE = re.compile(
-    r"no\s+(?:puedo\s+decirte|te\s+puedo\s+decir|tengo\s+(?:ese\s+dato|esa\s+informaci[oó]n|"
+    r"no\s+(?:puedo\s+(?:decirte|darte)|te\s+puedo\s+(?:decir|dar)|tengo\s+(?:ese\s+dato|esa\s+informaci[oó]n|"
     r"el\s+dato)|s[eé]\s+(?:cu[aá]nt|exactamente))", re.IGNORECASE)
 _THANKS_RE = re.compile(r"^\W*(?:gracias|muchas\s+gracias|mil\s+gracias|hola|jaja)", re.IGNORECASE)
 # Отрицание меняет смысл: «No incluye botanas» не подтверждается фразой «Incluye … botanas».
@@ -697,26 +738,60 @@ def fact_sources(recs: list[dict], card: dict | None, settings: dict) -> list[st
         out += [f"{k}: {v}" for k, v in (card.get("valores") or {}).items()]
         if (card.get("valores") or {}).get("event_date"):
             out.append(sender._fmt_date_es(card["valores"]["event_date"]))
+        # Одна фраза со всей карточкой: «El evento Slavic-Latino Connect Night será el 18 de
+        # noviembre en Polanco» подтверждается целиком (смоук 2026-10-22).
+        out.append(render_tokens(
+            f"El evento {card.get('nombre', '')} es y será el {card.get('fecha', '')}, empieza a "
+            f"las {card.get('inicio', '')}, en {card.get('lugar', '')}; cuesta {card.get('precio', '')}.",
+            settings))
     return out
 
 
-def _fact_sentences(text: str) -> list[str]:
-    """Предложения-утверждения: без вопросов и без вводного «Gracias…/Hola…/Jaja…»."""
+# Пересказ разговора — не факт об ивенте: «La última vez platicamos del evento …» (смоук).
+_RECAP_RE = re.compile(r"^\W*(?:la\s+)?[uú]ltima\s+vez\s+(?:que\s+)?(?:platicamos|hablamos|"
+                       r"me\s+escribiste|nos\s+escribimos)\s*(?:de|del|sobre)?\s*", re.IGNORECASE)
+# Служебные основы без фактов: «pero puedes hacerlo si quieres» — фактов нет.
+_STOP_STEMS = {"pero", "pued", "hace", "quie", "tamb", "aqui", "ahor", "algo", "esto", "esta",
+               "este", "como", "para", "todo", "toda", "bien", "clar", "much", "poco", "podr",
+               "tien", "teng", "siem", "cada", "otra", "otro", "mism", "dond", "cuan", "porq",
+               "verd", "cier", "segu", "rato", "tant", "quis"}
+
+
+def _content_stems(text: str) -> set[str]:
+    return _stems(text) - _STOP_STEMS
+
+
+def _fact_sentences(text: str, name: str | None = None) -> list[str]:
+    """Предложения-утверждения: без вопросов, без вводного «Gracias…/Hola…/Jaja…», без
+    пересказа разговора и без имени лида («No es obligatorio ir disfrazado, Carlos.»)."""
     out = []
     for part in (text or "").split("\n"):
         for sent in _sentences(part):
+            if name:
+                sent = re.sub(rf",?\s*\b{re.escape(name)}\b", "", sent, flags=re.IGNORECASE)
+            sent = _RECAP_RE.sub("", sent)
             sent = _GRACIAS_START_RE.sub("", sent).strip() if _THANKS_RE.match(sent) else sent
             sent = re.sub(r"^\W*(?:hola|jaja\w*)\b[^.!?]*[.!?,]+\s*", "", sent, flags=re.IGNORECASE)
             # «Incluye cena para 30 personas, ¿te late?» — утверждение с хвостом-вопросом
             sent = re.sub(r"[,;:\s]*¿[^?]*\?\s*$", "", sent).strip()
-            if sent and not sent.endswith("?") and _words(sent):
+            if sent and not sent.endswith("?") and _content_stems(sent):
                 out.append(sent)
     return out
 
 
+def sentence_supported(sent: str, sources: list[str], respaldo: str | None = None) -> bool:
+    """Целиком или по частям: «No es obligatorio ir disfrazado, pero puedes hacerlo si
+    quieres» — вторая часть фактов не содержит."""
+    if claim_supported(sent, sources, respaldo):
+        return True
+    clauses = _clauses(sent)
+    parts = [c for c in clauses if _content_stems(c)]
+    return len(clauses) > 1 and bool(parts) and all(claim_supported(c, sources, respaldo) for c in parts)
+
+
 async def verify_claims(bubbles: list[str], recs: list[dict], card: dict | None,
                         lead_texts: list[str], cost: Cost,
-                        settings: dict | None = None) -> list[str]:
+                        settings: dict | None = None, name: str | None = None) -> list[str]:
     """Утверждения ответа без источника (список пуст — всё подтверждено)."""
     contenidos = [r.get("contenido_es") for r in recs if r.get("contenido_es")]
     payload = {
@@ -732,12 +807,12 @@ async def verify_claims(bubbles: list[str], recs: list[dict], card: dict | None,
     claims: list[str] = []
     for it in items:
         it = it if isinstance(it, dict) else {"texto": it, "respaldo": None}
-        for sent in _fact_sentences(str(it.get("texto") or "")):
-            if not claim_supported(sent, sources, it.get("respaldo")) and sent not in claims:
+        for sent in _fact_sentences(str(it.get("texto") or ""), name):
+            if not sentence_supported(sent, sources, it.get("respaldo")) and sent not in claims:
                 claims.append(sent)
     # Страховка кодом: «опасные» темы проверяем сами, независимо от списка модели.
     for b in bubbles:
-        for sent in _fact_sentences(b):
+        for sent in _fact_sentences(b, name):
             if any(rx.search(sent) for rx in _HARD_FACT_RES) and \
                     not hard_fact_supported(sent, sources) and sent not in claims:
                 claims.append(sent)
@@ -914,6 +989,9 @@ def extra_toca(mem: dict) -> str:
     Чередуем: если в прошлом ответе уже был вопрос по слоту — теперь факт."""
     cal = mem["calificacion"]
     last = mem.get("ultimo_mensaje_anna")
+    if mem.get("compra_pendiente") and cal.get("siguiente") in ("name", "is_single", "photo") \
+            and not memory.pregunta_slot(cal["siguiente"], last):
+        return "pregunta"          # хочет купить: следующий шаг — то, чего не хватает для ссылки
     if any(memory.pregunta_slot(s, last) for s in memory.SLOT_QUESTION_RE):
         return "dato"
     return "pregunta" if cal.get("puede_preguntar") else "dato"
@@ -1136,7 +1214,8 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         return _silent("нет данных в базе (модель ответила отпиской)", **extra)
 
     try:
-        claims = await verify_claims(bubbles, recs, card, mem["lead_texts"], cost, settings)
+        claims = await verify_claims(bubbles, recs, card, mem["lead_texts"], cost, settings,
+                                     merged.get("name") or ai._plausible_name(lead.get("whatsapp_name")))
     except Exception:
         logger.exception("rag: проверка второй моделью упала → silent")
         return _silent("проверка утверждений недоступна", **extra)
