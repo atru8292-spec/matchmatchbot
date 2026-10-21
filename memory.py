@@ -53,7 +53,8 @@ SLOT_QUESTION_RE = {
                              re.IGNORECASE),
     # «mándame una foto», «que te mande una foto», «¿me pasas una foto tuya?», «compárteme
     # una foto», «una foto tuya» (code-review 2026-10-22: «mande»/«pásame» не считались).
-    "photo": re.compile(r"(?:m[aá]nd|env[ií]|p[aá]s|compart|comp[aá]rt)\w*\s+(?:\w+\s+){0,3}fotos?\b(?!\s+de(?:l|\s+los)?\s+eventos?)|"
+    "photo": re.compile(r"(?:m[aá]nd|env[ií]|p[aá]s|compart|comp[aá]rt)\w*\s+(?:\w+\s+){0,3}fotos?\b"
+                        r"(?!\s+(?:y\s+videos?\s+)?(?:del?|de\s+l[oa]s)\s+(?:eventos?|lugar|fiestas?|noches?))|"
                         r"fotos?\s+(?:tuyas?|de\s+ti)\b", re.IGNORECASE),
     "email": re.compile(r"correo", re.IGNORECASE),
 }

@@ -424,16 +424,19 @@ def lead_dio_algo(user_text: str, extracted: dict) -> bool:
         bool(_COMPLIMENT_RE.search(user_text or ""))
 
 
-def drop_repeated_slot_question(bubbles: list[str], last_reply: str | None) -> list[str]:
+def drop_repeated_slot_question(bubbles: list[str], last_reply: str | None,
+                                answered: set[str] | frozenset = frozenset()) -> list[str]:
     """Вопрос по слоту, заданный в прошлом ответе и оставленный без ответа, не повторяем
-    в следующем ответе подряд (решение владелицы 2026-10-22)."""
+    в следующем ответе подряд (решение владелицы 2026-10-22). Лид ответил на часть
+    («¿Cómo te llamas y estás soltero?» → «Luis») — оставшееся переспросить можно."""
     asked = [slot for slot in memory.SLOT_QUESTION_RE if memory.pregunta_slot(slot, last_reply)]
-    if not asked:
+    if not asked or set(asked) & set(answered):
         return bubbles
 
     def repeated(sent):
         return any(memory.pregunta_slot(slot, sent) for slot in asked)
-    return [_drop_sentences(b, repeated) for b in bubbles]
+    out = [_drop_sentences(b, repeated) for b in bubbles]
+    return out if any(b.strip() for b in out) else bubbles   # пустым ответ не делаем
 
 
 def drop_unearned_thanks(bubbles: list[str]) -> list[str]:
@@ -459,6 +462,11 @@ def whole_price(bubbles: list[str], settings: dict) -> list[str]:
             if says(sent, "[event_price_next]", nxt):
                 new = CURRENT_PRICE_SENTENCE + " " if says(sent, "[event_price_nonmember]", now) else ""
                 new += "" if has_next else NEXT_PRICE_SENTENCE
+                # «…sube a 7,000 MXN y se paga en la página.» — хвост после цены сохраняем
+                tail = re.search(r".*(?:\[event_price_next\]|\d[\d,.]*)\s*MXN\s*,?\s*(?:y\s+)?(.+?)[.!]?$",
+                                 sent, re.IGNORECASE)
+                if tail and _words(tail.group(1)):
+                    new += " " + _capitalize(tail.group(1).strip()) + "."
                 b = b.replace(sent, new.strip(), 1)
                 has_next = True
         out.append(re.sub(r"[ \t]{2,}", " ", b).strip())
@@ -472,7 +480,8 @@ def whole_price(bubbles: list[str], settings: dict) -> list[str]:
 
 
 def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict,
-                user_text: str, dio_algo: bool = True) -> tuple[list[str], str | None, list[str]]:
+                user_text: str, dio_algo: bool = True,
+                answered: set[str] | frozenset = frozenset()) -> tuple[list[str], str | None, list[str]]:
     """Проверки кодом. Возвращает (пузыри, причина silent или None, список правок)."""
     notes: list[str] = []
     settings, ya, cal = mem["settings"], mem["ya_hecho"], mem["calificacion"]
@@ -486,6 +495,9 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
     # Числа — только из подтверждённой базы, карточки ивента и профиля лида (возраст).
     # Прошлые ответы бота и сообщения лида источником не считаются (решение 2026-10-22).
     extra = set(numbers_in(text)) - allowed_numbers(fichas, settings, lead, [])
+    # Возраст лида можно повторить как «45 años» — но не как «30 mujeres» (ревью 2026-10-22).
+    own = {str(lead.get(k)) for k in ("age",) if lead.get(k)} | numbers_in(user_text)
+    extra = {n for n in extra if not (n in own and re.search(rf"(?<!\d){re.escape(n)}\s+a[ñn]os", text))}
     if extra:
         return [], f"числа без источника: {sorted(extra)}", ["numbers"]
 
@@ -521,7 +533,7 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         if new != bubbles:
             notes.append("убрала повторную презентацию")
             bubbles = new
-    new = drop_repeated_slot_question(bubbles, mem.get("ultimo_mensaje_anna"))
+    new = drop_repeated_slot_question(bubbles, mem.get("ultimo_mensaje_anna"), answered)
     if new != bubbles:
         notes.append("убрала повтор вопроса по слоту")
         bubbles = new
@@ -571,15 +583,17 @@ _NO_DATA_RE = re.compile(
     r"el\s+dato)|s[eé]\s+(?:cu[aá]nt|exactamente))", re.IGNORECASE)
 _THANKS_RE = re.compile(r"^\W*(?:gracias|muchas\s+gracias|mil\s+gracias|hola|jaja)", re.IGNORECASE)
 # Отрицание меняет смысл: «No incluye botanas» не подтверждается фразой «Incluye … botanas».
-_NEG_RE = re.compile(r"\b(?:no|ni|nunca|sin|ning[uú]n[oa]?|tampoco|jam[aá]s|nada|nadie|"
-                     r"s[oó]lo|[uú]nicamente|salvo|excepto)\b", re.IGNORECASE)
+# «solo/únicamente» не считаем отрицанием: «Solo trabajamos con hombres solteros» ≈ «Aceptamos
+# hombres solteros» (повторное ревью 2026-10-22). Отрицание сравниваем по частям фразы.
+_NEG_RE = re.compile(r"\b(?:no|ni|nunca|sin|ning[uú]n[oa]?|tampoco|jam[aá]s|nada|nadie)\b",
+                     re.IGNORECASE)
 # Темы, где старый бот и модель выдумывали (оплата, что входит, скидки, время, люди):
 # каждое такое предложение ответа код сверяет сам, даже если модель-сверщик его не назвала
 # (code-review 2026-10-22: сверщик fail-open — пустой список пропускал всё).
 _HARD_FACT_RES = [re.compile(p, re.IGNORECASE) for p in (
     r"\befectivo\b", r"\boxxo\b", r"\bwalmart\b", r"transferencia", r"dep[oó]sito", r"\btarjeta",
     r"meses\s+sin\s+intereses", r"\bpag(?:o|ar|as|a)\b", r"\bgratis\b|\bgratuit", r"descuento",
-    r"promoci[oó]n", r"reembolso|devoluci[oó]n", r"\binclu(?:ye|ido|ida|idos|idas|yen)\b",
+    r"promoci[oó]n", r"reembolso|devoluci[oó]n", r"\bno\s+(?:se\s+)?inclu",
     r"\bcena\b", r"barra\s+libre", r"alcohol", r"estacionamiento|\bvalet\b",
     r"\d[\d,.]*\s+(?:mujeres|hombres|personas|chicas|invitad[oa]s|asistentes)",
     r"\btermina\b|\bacaba\b|hasta\s+las\b|medianoche", r"garant[ií]a", r"\bcupo\b|\blugares\b")]
@@ -601,10 +615,10 @@ def _neg(text: str) -> bool:
 def _fits(claim: str, sent: str, min_overlap: float) -> bool:
     """Одно предложение источника подтверждает утверждение: все числа (суммы, даты, время)
     есть в этом предложении точно, отрицание совпадает, значимых слов ≥ min_overlap."""
-    words = _words(claim)
+    words = _stems(claim)       # основы: «compra» ≈ «comprar», «incluidas» ≈ «incluye»
     if not numbers_in(claim) <= numbers_in(sent) or _neg(claim) != _neg(sent):
         return False
-    return not words or len(words & _words(sent)) >= min_overlap * len(words)
+    return not words or len(words & _stems(sent)) >= min_overlap * len(words)
 
 
 def claim_supported(claim: str, sources: list[str], respaldo: str | None = None) -> bool:
@@ -620,24 +634,38 @@ def claim_supported(claim: str, sources: list[str], respaldo: str | None = None)
     """
     if any(_fits(claim, sent, 0.8) for sent in sources):
         return True
-    words = _words(claim)
+    words = _stems(claim)
     if words and not _neg(claim):
-        plain = [w & words for w in (_words(x) for x in sources if not _neg(x))]
+        plain = [w & words for w in (_stems(x) for x in sources if not _neg(x))]
         plain = sorted(plain, key=len, reverse=True)[:6]
-        anchors = ([_words(x) & words for x in sources if _fits(claim, x, 0.5)]
+        anchors = ([_stems(x) & words for x in sources if _fits(claim, x, 0.5)]
                    if numbers_in(claim) else plain)
         if any(len(a | b) >= 0.8 * len(words) for a in anchors for b in plain):
             return True
-    if respaldo and _words(respaldo):
+    if respaldo and _stems(respaldo):
         for sent in sources:
-            if len(_words(respaldo) & _words(sent)) >= 0.8 * min(len(_words(respaldo)),
-                                                                   len(_words(sent)) or 1):
+            if len(_stems(respaldo) & _stems(sent)) >= 0.8 * min(len(_stems(respaldo)),
+                                                                   len(_stems(sent)) or 1):
                 if _fits(claim, sent, 0.5):
                     return True
     return False
 
 
+def _clauses(text: str) -> list[str]:
+    """Части фразы: по , ; : и « y »."""
+    return [c for c in re.split(r"[,;:]\s*|\s+y\s+", text or "") if c.strip()]
+
+
 def hard_fact_supported(sent: str, sources: list[str]) -> bool:
+    """Каждая часть ответа с «опасной» темой подтверждается отдельно: «El boleto cuesta
+    6,000 MXN y se paga en la página» — цена и оплата из разных фраз базы."""
+    for part in _clauses(sent) if len(_clauses(sent)) > 1 else [sent]:
+        if any(rx.search(part) for rx in _HARD_FACT_RES) and not _hard_part_supported(part, sources):
+            return False
+    return True
+
+
+def _hard_part_supported(sent: str, sources: list[str]) -> bool:
     """Предложение на «опасную» тему: в одном предложении источника есть те же темы,
     числа, то же отрицание и хотя бы четверть основ слов («Puedes pagar en la página del
     evento» ← «El pago se hace en la página…»). Выдумку отсекает тема: «efectivo», «OXXO»,
@@ -659,7 +687,11 @@ def fact_sources(recs: list[dict], card: dict | None, settings: dict) -> list[st
     for r in recs:
         txt = r.get("contenido_es") or ""
         for variant in (txt, render_tokens(txt, settings)) if txt else ():
-            out += [x for part in variant.split("\n") for x in _sentences(part)]
+            for sent in (x for part in variant.split("\n") for x in _sentences(part)):
+                out.append(sent)
+                # части фразы: «…puedes venir disfrazado y, si no tienes disfraz, …» — отрицание
+                # второй части не должно мешать подтвердить первую (повторное ревью 2026-10-22)
+                out += [c.strip() for c in _clauses(sent) if c.strip() != sent and _stems(c)]
     if card:
         out += [render_tokens(f"{k}: {v}", settings) for k, v in card.items() if k != "valores"]
         out += [f"{k}: {v}" for k, v in (card.get("valores") or {}).items()]
@@ -1094,7 +1126,9 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     seen_recs = fichas + [by_id[v["id"]] for v in vivos if v["id"] in by_id]
     bubbles, reason, notes = check_reply(out["bubbles"], mem=mem, fichas=seen_recs, lead=merged,
                                          user_text=user_text,
-                                         dio_algo=lead_dio_algo(user_text, out["extracted"]))
+                                         dio_algo=lead_dio_algo(user_text, out["extracted"]),
+                                         answered={k for k, v in out["extracted"].items()
+                                                   if v not in (None, "")})
     meta["notas"] = notes
     if reason:
         return _silent(reason, **extra)

@@ -1,6 +1,6 @@
 # База знаний режима rag: ревью
 
-Источник: `knowledge/seed.json`, версия 2026-10-21. Записей: 95, ждут Аню: 11.
+Источник: `knowledge/seed.json`, версия 2026-10-21. Записей: 96, ждут Аню: 11.
 Документ собран скриптом `scripts/knowledge_review.py`, руками не править.
 
 - Записи с `confirmado=false` в ответы не подаются, пока Аня не подтвердит.
@@ -230,6 +230,19 @@
 - **Как отвечать (для модели):** ÚNICO caso en que das el enlace: el lead pregunta cómo comprar o dice que quiere ir, y ya tienes su nombre, si está soltero y su foto aprobada. Antes de eso: responde que se compra en línea en la página del evento y haz la pregunta pendiente (nombre y soltero, o su foto), sin explicar para qué es la foto. Si ya_hecho.enlace_enviado es true y no lo pidió de nuevo explícitamente, no lo repitas. No pidas nombre ni correo para el evento.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
 - **Источник:** промпт «Cómo comprar», №21
+
+### `event_buy_online` · Se compra en línea · ✅ подтверждено
+
+**Текст (es):**
+
+> El boleto se compra en línea, en la página del evento.
+
+**Перевод:** Билет покупается онлайн, на странице ивента.
+
+- **Когда:** ¿cómo compro?, ¿dónde se compra?, ¿se compra en línea?, ¿cómo se paga? (antes de poder dar el enlace)
+- **Как отвечать (для модели):** Úsalo cuando el lead pregunta cómo comprar y todavía no toca el enlace (falta nombre, estado civil o foto); junto con la pregunta pendiente.
+- **Флаги:** действие: ответить; действует до 2026-11-18
+- **Источник:** решение владелицы 2026-10-21/22 (ответ до фото)
 
 ### `event_number_30` · Evento número 30 · ✅ подтверждено
 

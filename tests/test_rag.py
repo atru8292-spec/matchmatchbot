@@ -1336,3 +1336,60 @@ class TestKnowledgeFallbackReview2:
         recs = await knowledge.records()
         assert len(recs) > 50 and alert.await_count == 1
         knowledge.reset_cache()
+
+
+class TestReReview:
+    """Повторное ревью 2026-10-22: ложные молчания сверки и мелочи тона."""
+
+    RECS = knowledge.usable(SEED, SETTINGS, "2026-10-21")
+    SRC = rag.fact_sources(RECS, memory.evento_actual(SETTINGS), SETTINGS)
+
+    @pytest.mark.parametrize("claim", [
+        "Si no tienes disfraz, te dan una máscara",
+        "Se compra en línea en la página del evento",
+    ])
+    def test_natural_paraphrases_supported(self, claim):
+        assert rag.claim_supported(claim, self.SRC), claim
+
+    @pytest.mark.parametrize("claim,quote", [
+        ("Puedes ir disfrazado a la fiesta de Halloween", "puedes venir disfrazado"),
+        ("Aceptamos hombres solteros", "Solo trabajamos con hombres solteros."),
+    ])
+    def test_paraphrases_with_model_quote_supported(self, claim, quote):
+        """Пересказ другими словами проходит с цитатой сверщика (как в реальном потоке)."""
+        assert rag.claim_supported(claim, self.SRC, quote), claim
+
+    @pytest.mark.parametrize("sent", [
+        "El boleto cuesta [event_price_nonmember] MXN y se paga en la página del evento.",
+        "Puedes pagar en la página del evento.",
+    ])
+    def test_compound_hard_sentence_supported(self, sent):
+        assert rag.hard_fact_supported(sent, self.SRC), sent
+
+    @pytest.mark.parametrize("sent", ["Puedes pagar en efectivo en OXXO.", "No incluye botanas.",
+                                      "Hay valet parking.", "Incluye cena y barra libre."])
+    def test_hard_inventions_still_rejected(self, sent):
+        assert not rag.hard_fact_supported(sent, self.SRC), sent
+
+    def test_partial_answer_reask_allowed(self):
+        last = "¿Cómo te llamas y estás soltero?"
+        assert rag.drop_repeated_slot_question(["Mucho gusto, Luis.", "¿Estás soltero?"], last,
+                                               {"name"}) == ["Mucho gusto, Luis.", "¿Estás soltero?"]
+
+    def test_never_empties_reply(self):
+        assert rag.drop_repeated_slot_question(["¿Cuántos años tienes?"], "¿Cuántos años tienes?") == \
+            ["¿Cuántos años tienes?"]
+
+    @pytest.mark.parametrize("q", ["¿Quieres que te mande fotos y videos de eventos pasados?",
+                                   "¿Te mando fotos del lugar?"])
+    def test_event_media_offers_not_photo_request(self, q):
+        assert not memory.pregunta_slot("photo", q)
+
+    def test_lead_age_echo_allowed_as_years(self):
+        lead = {"name": "Carlos", "is_single": True, "age": 45, "photo_received": True}
+        _, reason, _ = check(["Con 45 años estás dentro del rango."], fichas=[BY_ID["event_price"]], lead=lead)
+        assert reason is None
+
+    def test_whole_price_keeps_tail(self):
+        out = rag.whole_price(["Más adelante sube a 7,000 MXN y se paga en la página."], SETTINGS)
+        assert out == ["Más adelante el precio sube a [event_price_next] MXN. Se paga en la página."]
