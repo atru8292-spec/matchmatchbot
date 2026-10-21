@@ -55,6 +55,9 @@ PRICES = {
 }
 
 VIDEO_CAPTION = "Te dejo también un video con los detalles del evento."
+# Запасной текст, если сценария №9 нет в БД (иначе лид без блока получил бы обычный ответ).
+NOT_SINGLE_FALLBACK = ("Te entiendo, pero trabajamos solo con hombres solteros: las mujeres "
+                       "buscan algo serio. Te deseo lo mejor 🤍")
 PHOTO_CAPTION = "Así se ven nuestros eventos."
 
 _prompt_cache: str | None = None
@@ -135,17 +138,39 @@ async def _embed_batch(texts: list[str], cost: Cost | None = None) -> list[list[
 
 # ───────────────────────── распознавание сообщения ─────────────────────────
 
+# Вопрос без «?» в любом месте сообщения («Hola buenas tardes\ncuanto cuesta el boleto»):
+# code-review 2026-10-21 — иначе первое сообщение с вопросом получало дословное приветствие.
 _QUESTION_WORD_RE = re.compile(
-    r"^\W*(?:qu[eé]|cu[aá]nto|cu[aá]ntos|cu[aá]ntas|cu[aá]ndo|d[oó]nde|c[oó]mo|cu[aá]l|"
-    r"qui[eé]n|por\s*qu[eé]|hay|puedo|se\s+puede|tienen|tienes|aceptan|incluye|es\s+)\b",
+    r"\b(?:cu[aá]nto|cu[aá]ntos|cu[aá]ntas|cu[aá]ndo|d[oó]nde|c[oó]mo|cu[aá]l|cu[aá]les|"
+    r"qui[eé]n|por\s*qu[eé]|se\s+puede|aceptan|incluye|precio|costo|requisitos)\b|"
+    r"(?:^|\n|[,.]\s*)(?:qu[eé]|hay|puedo|tienen|tienes|es)\s",
     re.IGNORECASE)
 _EVENT_INTEREST_RE = re.compile(r"evento|boleto|halloween|slavic|novia\s+rusa", re.IGNORECASE)
 _AGENCY_INTEREST_RE = re.compile(r"rus[ao]s?|eslav[ao]s?|ucranian|bielorrus|matchmak|agencia|"
                                  r"servicio|conocer\s+mujeres|busco\s+(?:pareja|esposa|novia)",
                                  re.IGNORECASE)
-_PURCHASE_RE = re.compile(r"compr|boleto|pag[oa]r?\b|pago|link|enlace|reserv|apart|"
-                          r"quiero\s+ir|me\s+apunto|inscrib|registr|d[oó]nde\s+(?:compro|pago)",
-                          re.IGNORECASE)
+_PURCHASE_RE = re.compile(
+    r"\bcompr(?:o|ar|arlo|arla|a)\b|\bpag(?:o|ar|arlo)\b|\blink\b|\benlace\b|"
+    r"\breserv(?:o|ar)\b|\bapart(?:o|ar)\b|quiero\s+(?:ir|mi\s+boleto|el\s+boleto|comprar)|"
+    r"me\s+apunto|inscrib|registr|ya\s+me\s+decid", re.IGNORECASE)
+# Анна предложила ссылку, лид согласился — это тоже покупка.
+_OFFER_LINK_RE = re.compile(r"(?:te\s+paso|quieres|te\s+mando|te\s+comparto)\s+(?:el\s+)?"
+                            r"(?:link|enlace)|apartar\s+tu\s+lugar|reservar\s+tu\s+lugar",
+                            re.IGNORECASE)
+_AFFIRM_RE = re.compile(r"^\W*(?:s[ií]|claro|ok|okay|dale|por\s+favor|me\s+interesa|sale|"
+                        r"de\s+acuerdo)\b", re.IGNORECASE)
+# Решения владелицы: скидки, наличные, перевод, возврат — молча Ане (не полагаемся на модель).
+_SILENT_TOPIC_RE = re.compile(
+    r"\bdescuento|\bpromo(?:ci[oó]n)?\b|\bcup[oó]n|\brebaja|m[aá]s\s+barato|"
+    r"precio\s+especial|\befectivo\b|\boxxo\b|\bwalmart\b|transferencia|dep[oó]sito|"
+    r"depositar|reembolso|devoluci[oó]n|regr[eé]s\w*\s+(?:mi|el)\s+dinero|"
+    r"cancelar\s+(?:mi\s+)?boleto", re.IGNORECASE)
+
+
+def wants_to_buy(user_text: str, last_anna: str | None) -> bool:
+    if _PURCHASE_RE.search(user_text or ""):
+        return True
+    return bool(last_anna and _OFFER_LINK_RE.search(last_anna) and _AFFIRM_RE.search(user_text or ""))
 # Прямая просьба ссылки: повторяем, даже если ya_hecho.enlace_enviado.
 _LINK_REQUEST_RE = re.compile(r"link|enlace|p[aá]same|m[aá]ndame\s+el|otra\s+vez|de\s+nuevo|"
                               r"c[oó]mo\s+(?:compro|pago|reservo)|d[oó]nde\s+(?:compro|pago|reservo)",
@@ -200,9 +225,12 @@ def situacion_ok(sit: dict, mem: dict, user_text: str, lead: dict) -> bool:
 
 _TOKEN_RE = re.compile(r"\[[a-z_]+\]")
 _NUM_RE = re.compile(r"\d+(?:[.,:]\d+)*")
-_URL_RE = re.compile(r"https?://\S+|\bwww\.\S+", re.IGNORECASE)
-_5500_RE = re.compile(r"5[\s.,]?500")
-_EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
+_URL_RE = re.compile(r"https?://\S+|\bwww\.\S+|\b(?:[\w-]+\.)+(?:com|mx|net|org|io)\b(?:/\S*)?",
+                     re.IGNORECASE)
+_URL_TRAIL = ".,;:!?)]}\"'»*"
+_5500_RE = re.compile(r"(?<!\d)5[\s.,]?500(?!\d)|cinco\s+mil\s+quinientos|5[.,]5\s*(?:mil|k)\b",
+                      re.IGNORECASE)
+_EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿]\uFE0F?")
 _QUESTION_SENT_RE = re.compile(r"¿[^?]*\?|[^.!¿?]*\?")
 _INTRO_RE = re.compile(r"\bsoy\s+anna\b[^.!?]*[.!?]?\s*", re.IGNORECASE)
 _HOLA_START_RE = re.compile(r"^\s*¡?\s*hola\b[^.!?,]*[.!?,]?\s*", re.IGNORECASE)
@@ -210,11 +238,19 @@ _SERVICE_PRICE_RE = re.compile(r"10[.,]?000\s*(?:usd|d[oó]lares)?|\$\s*10", re.
 
 
 def _norm_num(s: str) -> str:
-    return s if ":" in s else s.replace(",", "").replace(".", "")
+    if ":" in s:
+        return s
+    s = re.sub(r"[.,]00$", "", s)          # 6,000.00 → 6,000
+    return s.replace(",", "").replace(".", "")
+
+
+def _norm_url(u: str) -> str:
+    return re.sub(r"^(?:https?://)?(?:www\.)?", "", u.rstrip(_URL_TRAIL).lower())
 
 
 def numbers_in(text: str) -> set[str]:
-    return {_norm_num(n) for n in _NUM_RE.findall(_TOKEN_RE.sub(" ", text or ""))}
+    text = _URL_RE.sub(" ", _TOKEN_RE.sub(" ", text or ""))   # цифры внутри ссылок не считаем
+    return {_norm_num(n) for n in _NUM_RE.findall(text)}
 
 
 def render_tokens(text: str, settings: dict) -> str:
@@ -227,6 +263,8 @@ def render_tokens(text: str, settings: dict) -> str:
 
 
 def allowed_numbers(fichas: list[dict], settings: dict, lead: dict, lead_texts: list[str]) -> set[str]:
+    """Числа из фичей, карточки ивента, текущего сообщения лида и недавних ответов Анны
+    по текущему ивенту, плюс возраст из профиля. Сводка памяти источником не является."""
     nums: set[str] = set()
     for f in fichas:
         nums |= numbers_in(render_tokens(f.get("contenido_es") or "", settings))
@@ -247,7 +285,10 @@ def _sentences(text: str) -> list[str]:
 
 
 def _drop_sentences(text: str, pred) -> str:
-    return " ".join(s for s in _sentences(text) if not pred(s)).strip()
+    parts = _sentences(text)
+    if not any(pred(p) for p in parts):
+        return text
+    return " ".join(p for p in parts if not pred(p)).strip()
 
 
 def keep_one_emoji(bubbles: list[str]) -> list[str]:
@@ -292,12 +333,21 @@ def clean_style(bubbles: list[str]) -> list[str]:
     for b in bubbles:
         m = conversation_rules.BANNED_OPENER_RE.search(b)
         if m:
-            b = re.sub(r"^[\s,.!:;]+", "", b[m.end():])
-            b = b[:1].upper() + b[1:]
+            rest = b[m.end():]
+            tail = re.match(r"^[^,.!:;?¿]{0,15}[,.!:;]", rest)   # «Claro que sí, …»
+            b = re.sub(r"^[\s,.!:;]+", "", rest[tail.end():] if tail else rest)
+            b = _capitalize(b)
         b = _drop_sentences(b, lambda s: bool(conversation_rules.BANNED_PHRASE_RE.search(s)
                                               or conversation_rules.SLANG_RE.search(s)))
         out.append(b)
     return out
+
+
+def _capitalize(b: str) -> str:
+    """Заглавная первая буква, кроме ссылок и токенов (Https:// ломает сверку ссылки)."""
+    if not b or re.match(r"^(?:https?://|www\.|\[)", b, re.IGNORECASE):
+        return b
+    return b[:1].upper() + b[1:]
 
 
 def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict,
@@ -310,28 +360,32 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         return [], "в ответе 5,500", ["5500"]
     link = (settings.get("event_link") or "").strip()
     for url in _URL_RE.findall(text):
-        if not (link and url.rstrip(".,)") == link):
+        if not (link and _norm_url(url) == _norm_url(link)):
             return [], f"ссылка не из базы: {url}", ["url"]
-    extra = set(numbers_in(text)) - allowed_numbers(fichas, settings, lead, mem["lead_texts"])
+    sources = [user_text] + list(mem.get("anna_reciente") or [])
+    extra = set(numbers_in(text)) - allowed_numbers(fichas, settings, lead, sources)
     if extra:
         return [], f"числа без источника: {sorted(extra)}", ["numbers"]
 
     # Ссылка на билет: только на вопрос о покупке, только в этапе venta, без повтора.
     def has_link(b):
-        return "[event_link]" in b or bool(link and link in b)
+        return "[event_link]" in b or bool(link and _norm_url(link) in b.lower())
     if any(has_link(b) for b in bubbles):
         reason = None
-        if not _PURCHASE_RE.search(user_text or ""):
+        if not wants_to_buy(user_text, mem.get("ultimo_mensaje_anna")):
             reason = "лид не спрашивал, как купить"
         elif cal["etapa"] == "calificacion":
             reason = "этап calificacion"
         elif ya.get("enlace_enviado") and not _LINK_REQUEST_RE.search(user_text or ""):
             reason = "ссылка уже отправлена"
         if reason:
-            bubbles = [b for b in bubbles if not has_link(b)]
+            # убираем только предложение со ссылкой, остальной текст пузыря сохраняем
+            bubbles = [_drop_sentences(b, has_link) if has_link(b) else b for b in bubbles]
+            bubbles = [b for b in bubbles if b and not has_link(b)]
             notes.append(f"убрала ссылку ({reason})")
-    # Цена услуги — только в этапе venta.
-    if cal["etapa"] == "calificacion" and cal["ruta"] == "servicio":
+    # Цена услуги — в этапе venta или на прямой вопрос о цене (вопрос лида не ждёт слотов).
+    if cal["etapa"] == "calificacion" and cal["ruta"] == "servicio" \
+            and not ai._is_price_question(user_text):
         new = [_drop_sentences(b, lambda s: bool(_SERVICE_PRICE_RE.search(s))) for b in bubbles]
         if new != bubbles:
             notes.append("убрала цену услуги (этап calificacion)")
@@ -351,7 +405,7 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         notes.append("убрала зачин/фразу/сленг")
         bubbles = styled
     bubbles = keep_last_question(keep_one_emoji(bubbles))
-    bubbles = [b[:1].upper() + b[1:] for b in (b.strip() for b in bubbles) if b]
+    bubbles = [_capitalize(b) for b in (b.strip() for b in bubbles) if b]
     if len(bubbles) > MAX_BUBBLES:
         bubbles = bubbles[:MAX_BUBBLES]
     if not bubbles:
@@ -371,11 +425,13 @@ VERIFY_SYSTEM = (
 
 
 async def verify_claims(bubbles: list[str], fichas: list[dict], card: dict | None,
-                        lead_texts: list[str], cost: Cost) -> list[str]:
+                        lead_texts: list[str], cost: Cost,
+                        anna_reciente: list[str] | None = None) -> list[str]:
     payload = {
         "RESPUESTA": bubbles,
         "FUENTES": {"evento_actual": card,
-                    "fichas": [f.get("contenido_es") for f in fichas if f.get("contenido_es")]},
+                    "fichas": [f.get("contenido_es") for f in fichas if f.get("contenido_es")],
+                    "lo_que_ya_dijo_anna": list(anna_reciente or [])},
         "LO_QUE_DIJO_EL_CLIENTE": lead_texts[-15:],
     }
     out = await _chat(CHECK_MODEL, VERIFY_SYSTEM, payload, cost, max_tokens=300, temperature=0)
@@ -561,11 +617,16 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     query = user_text
     if len((user_text or "").split()) < 4 and mem["ultimo_mensaje_anna"]:
         query = f"{mem['ultimo_mensaje_anna']} {user_text}"
-    vec = (await _embed_batch([query], cost))[0]
+    # Склейка с последней репликой Анны — только для поиска по базе знаний. Дословные
+    # блок-сценарии ищем по одному тексту лида, как legacy (иначе «45» после «¿Qué edad
+    # tienes?» могло набрать порог блока №7/№8).
+    texts = [user_text or ""] + ([query] if query != user_text else [])
+    vecs = await _embed_batch(texts, cost)
+    vec_user, vec = vecs[0], vecs[-1]
 
     # 1. Дословные сценарии (бот?, блоки) — как в legacy, без модели.
     try:
-        top = await _verbatim_scenario(vec)
+        top = await _verbatim_scenario(vec_user)
     except Exception:
         logger.exception("rag: поиск дословных сценариев упал")
         top = None
@@ -586,6 +647,11 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
             return _result([b.strip() for b in rec["contenido_es"].split("\n\n") if b.strip()],
                            funnel_stage=stage, extracted={"interest": interest} if interest else {},
                            rag_meta={**meta, "fuentes": [rid], "literal": True})
+
+    # 2.5. Скидки, наличные, перевод, возврат — решение владелицы: молча Ане.
+    if _SILENT_TOPIC_RE.search(user_text or ""):
+        return _silent("скидка, способ оплаты или возврат (решение владелицы)",
+                       rag_meta={**meta, "fuentes": ["policy_silent_topic"]})
 
     # 3. Поиск по базе знаний и вызов модели.
     async def embed_records(texts):
@@ -624,6 +690,7 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     estado = dict(lead.get("rag_estado") or {})
     if out["en_tema"]:
         estado["fuera_de_tema_seguidos"] = 0
+        estado["regresos"] = 0
     else:
         estado["fuera_de_tema_seguidos"] = int(estado.get("fuera_de_tema_seguidos") or 0) + 1
     extra = {"rag_estado": estado, "extracted": out["extracted"], "rag_meta": meta}
@@ -644,16 +711,17 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     # Фильтры по данным, названным в этом сообщении: дословно №7/№8/№9 и блок.
     merged = {**lead, **out["extracted"]}
     age = merged.get("age")
+    if isinstance(age, str) and age.strip().isdigit():
+        age = int(age.strip())
     if isinstance(age, int) and not (MIN_AGE <= age <= MAX_AGE):
-        reply = await _scenario_reply(7 if age < MIN_AGE else 8)
-        if reply:
-            reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
-            return reply
+        reply = await _scenario_reply(7 if age < MIN_AGE else 8) or _result(
+            list(ai._AGE_OUT_OF_RANGE_BUBBLES), "block")
+        reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
+        return reply
     if out["extracted"].get("is_single") is False:
-        reply = await _scenario_reply(9)
-        if reply:
-            reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
-            return reply
+        reply = await _scenario_reply(9) or _result([NOT_SINGLE_FALLBACK], "block")
+        reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
+        return reply
 
     bubbles, reason, notes = check_reply(out["bubbles"], mem=mem, fichas=fichas, lead=merged,
                                          user_text=user_text)
@@ -662,7 +730,8 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         return _silent(reason, **extra)
 
     try:
-        claims = await verify_claims(bubbles, fichas, card, mem["lead_texts"], cost)
+        claims = await verify_claims(bubbles, fichas, card, mem["lead_texts"], cost,
+                                     mem.get("anna_reciente"))
     except Exception:
         logger.exception("rag: проверка второй моделью упала → silent")
         return _silent("проверка утверждений недоступна", **extra)

@@ -15,7 +15,7 @@ import csv
 import io
 import logging
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
@@ -959,6 +959,15 @@ async def put_event(body: EventSettingsIn, _: dict = Depends(require_admin)) -> 
         "invitation_ready": "1" if body.invitationReady else "0",
         "event_guest_tab": (body.eventGuestTab or "").strip(),  # strip: у вкладок бывают хвостовые пробелы
     }
+    # Режим rag: дата объявления ивента — граница «прошлый / текущий ивент» в памяти лида.
+    # Только при реальной смене даты или ссылки (форма пересохраняет всё целиком). Сбой не
+    # мешает сохранению ивента.
+    try:
+        before = await db.get_settings(["event_date", "event_link"])
+        if (before.get("event_date") or "") != date or (before.get("event_link") or "") != event_link:
+            await db.set_setting("event_announced_at", datetime.now(timezone.utc).isoformat())
+    except Exception:
+        logger.exception("put_event: event_announced_at не обновлён")
     try:
         for key, val in values.items():
             await db.set_setting(key, val)

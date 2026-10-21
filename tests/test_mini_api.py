@@ -560,6 +560,24 @@ class TestEvent:
         assert "event_men" not in saved and "event_women" not in saved
         assert r.json()["eventActive"] is True and "eventWomen" not in r.json()
 
+    @pytest.mark.parametrize("before,announced", [
+        ({"event_date": "2026-08-15", "event_link": "https://pay.example"}, False),  # пересохранение
+        ({"event_date": "2026-07-01", "event_link": "https://pay.example"}, True),   # новая дата
+        ({"event_date": "2026-08-15", "event_link": "https://old.example"}, True),   # новая ссылка
+    ])
+    def test_put_event_announced_at_only_on_change(self, client, monkeypatch, before, announced):
+        """Режим rag: граница «прошлый / текущий ивент» сдвигается только при реальной смене."""
+        saved = {}
+
+        async def fake_set(k, v):
+            saved[k] = v
+        monkeypatch.setattr(db, "set_setting", fake_set)
+        monkeypatch.setattr(db, "get_settings", lambda keys: _async(before))
+        body = {"eventActive": True, "eventDate": "2026-08-15", "eventStart": "8:30 PM",
+                "eventAddress": "Av. Reforma 123", "eventLink": "https://pay.example"}
+        assert client.put("/api/mini/event", json=body).status_code == 200
+        assert ("event_announced_at" in saved) is announced
+
     def test_put_event_saves_prices(self, client, monkeypatch):
         saved = {}
         async def fake_set(k, v):

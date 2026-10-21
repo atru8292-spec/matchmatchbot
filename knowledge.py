@@ -70,7 +70,7 @@ async def records() -> list[dict]:
         recs = await _load_from_db()
     except Exception:
         logger.exception("knowledge: не прочитала таблицу → seed.json")
-    if recs is None:
+    if not recs:   # нет таблицы или она пустая (импорт ещё не делали) → seed
         recs, source = [r for r in load_seed() if r.get("activo", True)], "seed"
     if source != _cache["source"]:
         logger.info("knowledge: источник %s, записей %d", source, len(recs))

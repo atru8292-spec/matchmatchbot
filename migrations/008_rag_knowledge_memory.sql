@@ -50,3 +50,9 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS rag_estado jsonb NOT NULL DEFAULT '{}
 -- Следующая ступень цены ивента (сайт: MXN 6000 → 7000 → 8000), токен [event_price_next].
 INSERT INTO app_settings (key, value, updated_at) VALUES ('event_price_next', '7000', now())
 ON CONFLICT (key) DO NOTHING;
+
+-- Дата объявления текущего ивента (18.11.2026: ссылка задана 2026-10-20 17:45 UTC) — граница
+-- «прошлый / текущий ивент» в памяти лида. Дальше мини-CRM обновляет её сама, только когда
+-- реально меняются дата или ссылка ивента.
+INSERT INTO app_settings (key, value, updated_at) VALUES ('event_announced_at', '2026-10-20T17:45:22+00:00', now())
+ON CONFLICT (key) DO NOTHING;

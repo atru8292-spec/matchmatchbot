@@ -65,10 +65,10 @@ MAX_SLOT_TRIES = 2
 
 def autor(msg: dict) -> str:
     text = msg.get("text") or ""
+    if msg.get("sender") == "lead" or msg.get("direction") == "inbound":
+        return "lead"                    # «[voice message]» от лида — тоже лид
     if _SYSTEM_TEXT_RE.match(text):
         return "sistema"
-    if msg.get("sender") == "lead" or msg.get("direction") == "inbound":
-        return "lead"
     meta = msg.get("meta") or {}
     if meta.get("manual") or meta.get("source") == "echo":
         return "anya_manual"
@@ -100,8 +100,11 @@ def split_current_burst(msgs: list[dict], user_text: str) -> tuple[list[dict], l
     прошлой переписки: хвост из сообщений лида после последнего не-лидового, чьи тексты
     входят в user_text."""
     i = len(msgs)
-    while i > 0 and autor(msgs[i - 1]) == "lead" and (msgs[i - 1].get("text") or "").strip() \
-            and (msgs[i - 1].get("text") or "").strip() in (user_text or ""):
+    while i > 0 and autor(msgs[i - 1]) == "lead":
+        t = (msgs[i - 1].get("text") or "").strip()
+        # медиа без подписи и служебные «[…]» входят в залп вместе с текстом
+        if t and not _SYSTEM_TEXT_RE.match(t) and t not in (user_text or ""):
+            break
         i -= 1
     return msgs[:i], msgs[i:]
 
@@ -223,7 +226,8 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
 
 # ───────────────────────── слоты ─────────────────────────
 
-_EVENT_WORD_RE = re.compile(r"evento|boleto|halloween|slavic|fiesta|noche", re.IGNORECASE)
+# Без «noche»/«fiesta»: «buenas noches» — обычное приветствие (code-review 2026-10-21).
+_EVENT_WORD_RE = re.compile(r"evento|boleto|halloween|slavic", re.IGNORECASE)
 
 
 def ruta(lead: dict, user_text: str) -> str:
@@ -289,12 +293,18 @@ def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None
 # ───────────────────────── сборка из БД ─────────────────────────
 
 async def _evento_desde() -> datetime | None:
+    """Когда объявлен текущий ивент: app_settings.event_announced_at (мини-CRM ставит его,
+    только когда реально меняется дата или ссылка). Нет ключа → updated_at event_date/link
+    (сдвигается при любом пересохранении формы — поэтому только запасной вариант)."""
     try:
+        raw = await db.get_setting("event_announced_at")
+        if raw:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
         rows = await db._get_pool().fetch(
             "SELECT updated_at FROM app_settings WHERE key = ANY($1::text[])",
             ["event_date", "event_link"])
     except Exception:
-        logger.exception("memory: не прочитала даты объявления ивента")
+        logger.exception("memory: не прочитала дату объявления ивента")
         return None
     dates = [r["updated_at"] for r in rows if r["updated_at"]]
     return max(dates) if dates else None
@@ -318,7 +328,13 @@ async def build(lead: dict, user_text: str, now: datetime | None = None) -> dict
     last_out = next((m.get("text") for m in reversed(prior)
                      if autor(m) in ("anna_bot", "anya_manual")), None)
     lead_lines = [m.get("text") or "" for m in prior if autor(m) == "lead"]
+    # Последние ответы Анны (бот или вручную) по текущему ивенту — источник для сверки.
+    anna_reciente = [m.get("text") or "" for m in prior
+                     if autor(m) in ("anna_bot", "anya_manual")
+                     and not (desde and isinstance(m.get("created_at"), datetime)
+                              and _aware(m["created_at"]) < _aware(desde))][-5:]
     return {
+        "anna_reciente": anna_reciente,
         "settings": settings,
         "historial": historial(prior),
         "mensajes_totales": len(prior),
