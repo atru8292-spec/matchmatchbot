@@ -93,8 +93,12 @@ class TestDispatch:
         legacy.assert_not_awaited()
 
     async def test_rag_not_ready_falls_back_silently(self, monkeypatch, legacy):
-        """Этап 0: ai_conversation ещё заглушка → старый путь, без техалерта."""
+        """Нет промпта режима rag (NotImplementedError) → старый путь, без техалерта."""
         monkeypatch.setattr(reply_mode, "resolve", AsyncMock(return_value="rag"))
+
+        def no_prompt():
+            raise NotImplementedError("нет anna_prompt_conversation.md")
+        monkeypatch.setattr(ai_conversation, "load_prompt", no_prompt)
         err = AsyncMock()
         monkeypatch.setattr(escalation, "notify_error", err)
         assert await ai.generate_reply({"phone": TEST_PHONE}, [], "hola") == self.LEGACY_REPLY
