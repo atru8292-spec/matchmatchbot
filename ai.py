@@ -1788,8 +1788,8 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     mode = await reply_mode.resolve(lead.get("phone"))
     logger.info("reply_mode=%s [%s]", mode, lead.get("phone"))
     if mode == reply_mode.RAG:
-        import ai_conversation  # лениво: ai_conversation сам импортирует ai
         try:
+            import ai_conversation  # лениво: ai_conversation сам импортирует ai
             return await ai_conversation.generate_reply(lead, history, user_text)
         except NotImplementedError:
             logger.warning("reply_mode=rag, но режим не готов → legacy")

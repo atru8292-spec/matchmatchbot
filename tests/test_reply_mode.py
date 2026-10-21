@@ -117,17 +117,13 @@ class TestDispatch:
 
 class TestRestoreDiff:
     ROW = {"id": 2, "title": "t", "trigger_description": None, "trigger_es": "evento",
-           "template_es": "Hola", "links": '{"a": 1}', "rules": None, "mode": "bot_auto",
+           "template_es": "Hola", "links": None, "rules": "", "mode": "bot_auto",
            "ai_allowed": True, "blocks_lead": False, "is_active": True,
            "trigger_type": "reply", "embedding": "[0.1,0.2]"}
 
     def test_identical_no_diff(self):
         plan = restore_scenarios.diff_rows([self.ROW], [dict(self.ROW)])
         assert plan == {"update": [], "insert": [], "extra": []}
-
-    def test_json_formatting_is_not_a_diff(self):
-        cur = dict(self.ROW, links='{"a":1}')
-        assert restore_scenarios.diff_rows([self.ROW], [cur])["update"] == []
 
     def test_changed_fields_listed(self):
         cur = dict(self.ROW, template_es="otro", ai_allowed=False)
@@ -145,3 +141,59 @@ class TestRestoreDiff:
         cur = [dict(self.ROW, template_es="x"), dict(other, template_es="y")]
         plan = restore_scenarios.diff_rows([self.ROW, other], cur, ids={3})
         assert plan["update"] == [(3, ["template_es"])]
+
+
+class _FakeConn:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, sql, *params):
+        self.calls.append((sql, params))
+
+    def transaction(self):
+        conn = self
+
+        class _Tx:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *a):
+                return False
+        return _Tx()
+
+
+class _FakePool:
+    def __init__(self):
+        self.conn = _FakeConn()
+
+    def acquire(self):
+        conn = self.conn
+
+        class _Acq:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *a):
+                return False
+        return _Acq()
+
+
+class TestRestoreApply:
+    async def test_update_sql_and_params(self):
+        row = dict(TestRestoreDiff.ROW, rules="regla")
+        pool = _FakePool()
+        await restore_scenarios.apply(pool, [row], {"update": [(2, ["rules", "embedding"])],
+                                                     "insert": [], "extra": []})
+        sql, params = pool.conn.calls[0]
+        assert sql == ("UPDATE scenarios SET rules = $2, embedding = $3::vector, "
+                       "updated_at = now() WHERE id = $1")
+        assert params == (2, "regla", "[0.1,0.2]")   # text как есть, без json.dumps
+
+    async def test_insert_sql_and_params(self):
+        pool = _FakePool()
+        await restore_scenarios.apply(pool, [TestRestoreDiff.ROW],
+                                      {"update": [], "insert": [2], "extra": []})
+        sql, params = pool.conn.calls[0]
+        assert sql.startswith("INSERT INTO scenarios (id, title,")
+        assert "::jsonb" not in sql and sql.count("::vector") == 1
+        assert params[0] == 2 and len(params) == 1 + len(restore_scenarios.RESTORE_FIELDS)

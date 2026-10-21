@@ -44,6 +44,17 @@ COMPANION = [
     "¿puedo ir con mi esposa?",
     "¿llevo acompañante?",
     "y si voy con otra persona?",
+    "mi amigo y yo queremos ir",
+    "¿podemos ir yo y mi novia?",
+    "nosotros dos queremos boletos",
+    "¿puedo llevar a alguien?",
+    "¿cuánto por persona?",
+    "voy con mi compa",
+    "¿puedo ir con mi chava?",
+    "¿y con mi novia?",
+    "¿y si es con mi esposa?",
+    "boletos para 2",
+    "¿puedo ir en pareja?",
 ]
 
 NOT_COMPANION = [
@@ -65,6 +76,21 @@ NOT_COMPANION = [
     "en dos semanas te aviso",
     "lo veo para dos semanas",
     "hola, vi el evento",
+    # ложные срабатывания из code-review 2026-10-21: цель знакомства, работа, семья
+    "quiero compartir mi vida con alguien",
+    "busco estar con alguien especial",
+    "trabajo con mi hermano en la empresa familiar",
+    "tengo un negocio con mi socio",
+    "vivo con mi hermano",
+    "estuve casado con mi esposa 20 años",
+    "ya no estoy con mi pareja",
+    "terminé hace años con mi novia",
+    "me enteré de ustedes con un amigo",
+    "vi su anuncio en un grupo de Facebook",
+    "conozco dos personas que fueron",
+    "tengo para dos mil dólares",
+    "estoy bien acompañado",
+    "me siento solo, quiero estar acompañado",
     "",
 ]
 
@@ -118,6 +144,14 @@ class TestDecide:
                            bypass_phones=frozenset({PHONE}), bot_paused=True)
         assert d.action == "companion_question"
 
+    def test_escort_wins(self):
+        d = filters.decide({}, False, "busco escort, voy con mi amigo", PHONE)
+        assert d.action == "blocked"
+
+    def test_rejected_lead_no_alert(self):
+        d = filters.decide({"funnel_stage": "lost"}, False, "¿puedo ir con un amigo?", PHONE)
+        assert d.action != "companion_question"
+
     def test_manual_silent(self):
         lead = {"mode": "manual",
                 "manual_until": datetime.now(timezone.utc) + timedelta(hours=5)}
@@ -169,6 +203,14 @@ class TestBurst:
         burst["send"].assert_not_awaited()        # лиду ничего
         burst["gen"].assert_not_awaited()         # AI не зовём
         burst["block_lead"].assert_not_awaited()  # не блокируем
+
+    async def test_no_lead_row_reports_manual_not_set(self, monkeypatch, burst):
+        """set_manual вернул False (строки лида нет) — алерт не обещает ручной режим."""
+        burst["set_manual"].return_value = False
+        monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(
+            return_value=[_msg("c", "¿puedo ir con un amigo?")]))
+        await main._process_burst(PHONE)
+        assert burst["companion_alert"].await_args.kwargs["manual_ok"] is False
 
     async def test_manual_failure_warns_anya(self, monkeypatch, burst):
         burst["set_manual"].side_effect = RuntimeError("db")

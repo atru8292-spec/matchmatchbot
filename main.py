@@ -386,9 +386,9 @@ async def _hand_off_call_request(phone: str, lead: dict, text: str) -> None:
 
 async def _hand_off_companion_question(phone: str, lead: dict, text: str) -> None:
     """Вопрос про спутника: ручной режим + алерт Ане, лиду ничего (как просьба позвонить)."""
-    manual_ok = True
+    # set_manual возвращает False, если строки лида нет: тогда ручной режим не включён.
     try:
-        await db.set_manual(phone)
+        manual_ok = bool(await db.set_manual(phone))
     except Exception as e:
         manual_ok = False
         logger.exception("companion_question: не смог поставить manual для %s", phone)

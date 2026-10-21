@@ -46,8 +46,8 @@ async def resolve(phone: str | None) -> str:
             return LEGACY
         try:
             bypass = await db.bypass_phone_set()
+            return RAG if canonical_phone(phone) in bypass else LEGACY
         except Exception:
             logger.exception("reply_mode: не прочитала тестовые номера → legacy")
             return LEGACY
-        return RAG if canonical_phone(phone) in bypass else LEGACY
     return LEGACY

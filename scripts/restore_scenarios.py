@@ -6,6 +6,9 @@
   - строки в БД, которых нет в бэкапе, только показываются, НЕ удаляются.
 Эмбеддинг берётся из бэкапа текстом (OpenAI не вызывается).
 
+⚠️ Без --ids сверяется ВСЯ таблица: правки сценариев, внесённые в прод после бэкапа,
+будут откачены. Сначала всегда сухой прогон, при точечном откате — --ids.
+
 Режимы:
   venv/bin/python -m scripts.restore_scenarios --file <бэкап.json>            # сухой прогон: расхождения
   venv/bin/python -m scripts.restore_scenarios --file <бэкап.json> --verify   # только сверка, код выхода 1 при расхождениях
@@ -35,19 +38,6 @@ CURRENT_SQL = (
 )
 
 
-def _norm(v):
-    """Сравнение без ложных расхождений: jsonb из asyncpg приходит строкой, из бэкапа — тоже,
-    но с другим форматированием; приводим к python-объекту, если это JSON."""
-    if isinstance(v, str):
-        s = v.strip()
-        if s[:1] in "[{":
-            try:
-                return json.loads(s)
-            except ValueError:
-                return v
-    return v
-
-
 def diff_rows(backup: list[dict], current: list[dict], ids: set[int] | None = None) -> dict:
     """Чистая функция: что поменяется. {'update': [(id, [поля])], 'insert': [id], 'extra': [id]}."""
     cur = {r["id"]: r for r in current}
@@ -61,22 +51,17 @@ def diff_rows(backup: list[dict], current: list[dict], ids: set[int] | None = No
         if sid not in cur:
             insert.append(sid)
             continue
-        fields = [f for f in RESTORE_FIELDS if _norm(b.get(f)) != _norm(cur[sid].get(f))]
+        fields = [f for f in RESTORE_FIELDS if b.get(f) != cur[sid].get(f)]
         if fields:
             update.append((sid, fields))
     extra = sorted(set(cur) - set(bak))
     return {"update": update, "insert": insert, "extra": extra}
 
 
-def _param(field: str, value):
-    """Значение для параметра SQL: links/rules — jsonb (строка JSON), остальное как есть."""
-    if field in ("links", "rules") and value is not None and not isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
-    return value
-
-
 def _cast(field: str) -> str:
-    return {"embedding": "::vector", "links": "::jsonb", "rules": "::jsonb"}.get(field, "")
+    """links/rules в scenarios — text (не jsonb), id без последовательности: каст нужен
+    только эмбеддингу (в бэкапе он текстом)."""
+    return "::vector" if field == "embedding" else ""
 
 
 async def apply(pool, backup: list[dict], plan: dict) -> None:
@@ -87,13 +72,13 @@ async def apply(pool, backup: list[dict], plan: dict) -> None:
                 sets = ", ".join(f"{f} = ${i + 2}{_cast(f)}" for i, f in enumerate(fields))
                 await conn.execute(
                     f"UPDATE scenarios SET {sets}, updated_at = now() WHERE id = $1",
-                    sid, *[_param(f, bak[sid].get(f)) for f in fields])
+                    sid, *[bak[sid].get(f) for f in fields])
             for sid in plan["insert"]:
                 cols = ("id",) + RESTORE_FIELDS
                 vals = ", ".join(f"${i + 1}{_cast(c)}" for i, c in enumerate(cols))
                 await conn.execute(
                     f"INSERT INTO scenarios ({', '.join(cols)}) VALUES ({vals})",
-                    sid, *[_param(f, bak[sid].get(f)) for f in RESTORE_FIELDS])
+                    sid, *[bak[sid].get(f) for f in RESTORE_FIELDS])
 
 
 def _print_plan(plan: dict) -> None:

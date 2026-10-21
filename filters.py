@@ -188,33 +188,50 @@ _CALL_NEGATED_RE = re.compile(
 
 # Вопрос про спутника (2026-10-21, решение владелицы): прийти с другом, подругой, девушкой,
 # парой, группой, цена на двоих. Бот это не обсуждает (5,500 не называет никогда):
-# ручной режим + алерт Ане, лиду ничего. Нужен контекст «с кем-то / привести / он тоже хочет»:
-# голое «amigo» («me recomendó un amigo»), «busco pareja», «tengo novia» (это №9, не холост)
-# и «¿puedo ir solo?» не срабатывают.
-_COMPANION_NOUN = (r"(?:amig[oa]s?|novi[oa]s?|parejas?|espos[oa]s?|acompa[ñn]antes?|"
-                   r"herman[oa]s?|prim[oa]s?|compa[ñn]er[oa]s?|cuates?|colegas?|socios?)")
+# ручной режим + алерт Ане, лиду ничего. Срабатывает только в контексте «пойти/прийти/привести
+# вместе» или количества билетов: голое «con mi hermano» («trabajo con mi hermano»),
+# «con alguien» («compartir mi vida con alguien»), «busco pareja», «tengo novia» (это №9),
+# «me recomendó un amigo» и «¿puedo ir solo?» не срабатывают (code-review 2026-10-21).
+_COMPANION_NOUN = (r"(?:amig[oa]s?|novi[oa]s?|parejas?|espos[oa]s?|mujer|se[ñn]ora|chava|"
+                   r"morra|vieja|chica|acompa[ñn]antes?|herman[oa]s?|prim[oa]s?|"
+                   r"compa[ñn]er[oa]s?|compas?|carnal(?:a)?|cuates?|cu[ñn]ad[oa]s?|compadre|"
+                   r"comadre|hij[oa]s?|pap[aá]|mam[aá]|colegas?|socios?)")
 _COMPANION_DET = (r"(?:(?:mi|mis|tu|un|una|unos|unas|el|la|los|las|otro|otra|otros|otras|"
                   r"alg[uú]n|alguna)\s+)?")
+_COMPANION_WHO = rf"(?:{_COMPANION_DET}{_COMPANION_NOUN}|alguien|otra\s+persona|otras\s+personas|una\s+persona)"
+# Глаголы «пойти / прийти / попасть на ивент».
+_GO = (r"(?:ir|voy|vamos|ir[ií]a|ir[ií]amos|venir|vengo|vendr[ií]a|vendr[ií]amos|asistir|"
+       r"asisto|llegar|llego|entrar|entro|acudir)")
 _COMPANION_RE = re.compile(
-    rf"\bcon\s+{_COMPANION_DET}{_COMPANION_NOUN}\b|"
-    rf"\b(?:llevar|traer|invitar|llevo|traigo|invito|lleve|traiga|invite)\s+(?:a\s+)?"
-    rf"{_COMPANION_DET}{_COMPANION_NOUN}\b|"
+    # «voy / puedo ir … con mi amigo», «y si voy con otra persona»
+    rf"\b{_GO}\b(?:\s+\S+){{0,3}}?\s+con\s+{_COMPANION_WHO}\b|"
+    # короткий уточняющий вопрос: «¿y con mi novia?», «y si es con mi esposa?»
+    rf"^\W*(?:y\s+)?(?:si\s+(?:es|voy|vamos)\s+)?con\s+{_COMPANION_DET}{_COMPANION_NOUN}\b|"
+    # «llevar / traer / invitar a mi amigo / a alguien»
+    rf"\b(?:llevar|traer|invitar|llevo|traigo|invito|lleve|traiga|invite)\s+(?:a\s+)?{_COMPANION_WHO}\b|"
+    # «mi amigo también quiere ir», «un amigo iría»
     rf"\b(?:mi|mis|un|una|unos|unas)\s+{_COMPANION_NOUN}\s+(?:tambi[eé]n\s+)?"
-    r"(?:quiere|quieren|quisiera|quisieran|puede|pueden|podr[ií]a|podr[ií]an|va|van|"
-    r"ir[ií]a|ir[ií]an|vendr[ií]a|vendr[ií]an|le\s+interesa|les\s+interesa|"
-    r"est[aá]n?\s+interesad)|"
-    r"\bcon\s+(?:alguien|otra\s+persona|otras\s+personas)\b|\bacompa[ñn]ad[oa]s?\b|"
-    r"\bacompa[ñn]antes?\b|"
-    r"\bpara\s+(?:dos|tres|2|3)\b(?!\s+(?:semanas|meses|d[ií]as|horas|a[ñn]os|minutos))|"
-    r"\b(?:dos|tres|2|3)\s+(?:personas|boletos|entradas|lugares|tickets)\b|"
-    r"\ben\s+grupo\b|\bun\s+grupo\b|"
+    r"(?:(?:quiere|quieren|quisiera|quisieran|puede|pueden|podr[ií]a|podr[ií]an)\s+"
+    r"(?:ir|venir|asistir|entrar)\b|ir[ií]an?\b|vendr[ií]an?\b|van?\s+conmigo\b|"
+    r"les?\s+interesa\s+(?:ir|el\s+evento)\b)|"
+    # «mi amigo y yo», «yo y mi novia», «nosotros dos»
+    rf"\b{_COMPANION_DET}{_COMPANION_NOUN}\s+y\s+yo\b|\byo\s+y\s+{_COMPANION_DET}{_COMPANION_NOUN}\b|"
+    r"\bnosotros\s+(?:dos|tres)\b|"
+    # количество: «para dos?», «dos boletos», «boletos para 2», «por persona», «somos tres»
+    r"\bpara\s+(?:dos|tres|2|3)(?:\s+personas)?\s*(?:[?¿!.,]|$)|"
+    r"\b(?:boletos?|entradas?|lugares|tickets?)\s+para\s+(?:dos|tres|2|3)\b|"
+    r"\b(?:dos|tres|2|3)\s+(?:boletos|entradas|lugares|tickets)\b|\bpor\s+persona\b|"
     r"\b(?:somos|vamos|ser[ií]amos|ir[ií]amos)\s+(?:dos|tres|cuatro|varios|2|3|4)\b|"
-    r"\ben\s+pareja\b|\bpor\s+pareja\b|\bpara\s+parejas?\b|\b2\s*x\s*1\b|\bdos\s+por\s+uno\b",
+    # «ir en grupo / en pareja / acompañado», «precio por pareja», «es para parejas», 2x1
+    rf"\b{_GO}\s+(?:en\s+grupo|en\s+pareja|acompa[ñn]ad[oa]s?)\b|"
+    r"\bpor\s+pareja\b|\bpara\s+parejas?\b|\bacompa[ñn]antes?\b|\b2\s*x\s*1\b|\bdos\s+por\s+uno\b",
     re.IGNORECASE,
 )
-# Вырезаем до проверки: «terminé con mi novia» (холост), «mi pareja ideal», «futura pareja».
+# Вырезаем до проверки: «terminé (hace años) con mi novia», «me separé de mi esposa»,
+# «mi pareja ideal», «futura pareja» — это про семейное положение, не спутника.
 _COMPANION_EXCLUDE_RE = re.compile(
-    r"\b(?:termin|cort|romp|separ|divorci)\w*\s+(?:con|de)\s+" + _COMPANION_DET + _COMPANION_NOUN
+    r"\b(?:termin|cort|romp|separ|divorci|dej)\w*(?:\s+\S+){0,3}?\s+(?:con|de|a)\s+"
+    + _COMPANION_DET + _COMPANION_NOUN
     + r"|\b(?:futura|nueva)\s+pareja\b|\bpareja\s+ideal\b",
     re.IGNORECASE,
 )
@@ -367,7 +384,10 @@ def decide(lead: dict, is_whitelisted: bool, user_text: str, phone: str = "",
     # ничего. Opt-out важнее («no me escribas, voy con mi amigo» — это отказ). На паузе
     # (кроме тестовых номеров) и в ручном режиме не срабатывает: бот и так молчит, Аня видит
     # такие сообщения в сводке паузы или сама ведёт чат.
+    # Escort и агрессия важнее (там блок навсегда), уже отклонённым лидам — не алертим.
     if (is_companion_question(text) and not is_optout(text)
+            and not is_escort_mention(text) and not is_aggression(text)
+            and lead.get("funnel_stage") not in ("lost", "rejected")
             and not (bot_paused and not is_bypass) and not _manual_active(lead)):
         return Decision("companion_question", "лид спрашивает про спутника (друг/пара/группа)",
                         alert_manager=True)
