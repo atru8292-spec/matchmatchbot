@@ -749,10 +749,10 @@ _EVENT_CONTENT_MARKER_RE = re.compile(
 )
 # Encontrado 2026-09-13 (feedback de la dueña, en test real): esta versión anterior
 # solo daba precio+link, sin decir qué es el evento ni mencionar a las mujeres —
-# sonaba "flojo" comparado con el pitch normal (Slavic Latino Night, mujeres eslavas
+# sonaba "flojo" comparado con el pitch normal (Slavic-Latino Connect Night, mujeres eslavas
 # solteras). Enriquecido para que el override no pierda ese gancho.
 _EVENT_GATE_OVERRIDE_BUBBLE = (
-    "Se llama Slavic Latino Night: es una noche especial en CDMX para conocer en "
+    "Se llama Slavic-Latino Connect Night: es una noche especial en CDMX para conocer en "
     "persona a mujeres eslavas solteras que buscan una relación seria, en un "
     "ambiente relajado y seguro. El precio es de [event_price_nonmember] MXN"
     "[event_promo] e incluye bebida de bienvenida y entrantes. Aquí está el enlace "
@@ -1403,8 +1403,8 @@ _COURSE_ESCALATION_BUBBLE = (
     f"sobre cómo conocer y conectar con mujeres eslavas: {_COURSE_LINK_PLACEHOLDER} 🤍"
 )
 _EVENT_OFFER_ON_SERVICE_OBJECTION_BUBBLE = (
-    "Oye, antes de que lo dejemos — también tengo nuestro evento Slavic Latino "
-    "Night, una opción mucho más accesible ([event_price_nonmember] MXN) para conocer en persona a "
+    "Oye, antes de que lo dejemos — también tengo nuestro evento Slavic-Latino "
+    "Connect Night, una opción mucho más accesible ([event_price_nonmember] MXN) para conocer en persona a "
     "mujeres eslavas solteras que buscan algo serio, sin el compromiso del servicio "
     "personalizado. ¿Te late más esa opción?"
 )
@@ -1906,7 +1906,7 @@ async def _generate_reply_legacy(lead: dict, history: list[dict], user_text: str
             top = scenarios[0] if scenarios else None
 
     # Кодовая фраза объявления ("novia rusa") — лид, который её пишет, ОДНОЗНАЧНО имеет
-    # в виду ивент (реклама конкретно про Slavic Latino Night, не про сервис вообще).
+    # в виду ивент (реклама конкретно про Slavic-Latino Connect Night, не про сервис вообще).
     # Пробовала заменить на augment-кандидата (score=0.5, не форсить top) — регресс найден
     # 2026-09-01 живым тестом: натуральный RAG-топ для голой фразы "novia rusa" иногда
     # оказывался #3 (общий питч агентства) с более высоким score, чем инжектированный #2,

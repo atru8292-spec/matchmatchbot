@@ -4,8 +4,7 @@
   №2, №15 — название «Slavic-Latino Connect Night» (как на сайте);
   №2, №15, №51 — «entrantes» → «botanas»; без зачёркнутой «было» ([event_promo] убрать:
          8000 на сайте — будущая ступень цены, а не старая);
-  №40 — один эмодзи вместо двух — ТОЛЬКО с флагом --with-40 (в этапе 1 решено «текст №40
-         не менять», в этапе 2 — «один эмодзи»; ждёт подтверждения владелицы).
+  №40 не меняется (решение владелицы 2026-10-21: ни текст, ни эмодзи).
 
 ⛔ НЕ запускать до «деплой ок». Перед записью — бэкап затронутых строк в docs/backups/.
 Замена — точной подстрокой (ровно одно вхождение), иначе ничего не пишем. Одна транзакция.
@@ -13,7 +12,6 @@
 
 venv/bin/python -m scripts.patch_rag_scenarios_2026_10                      # сухой прогон
 venv/bin/python -m scripts.patch_rag_scenarios_2026_10 --force              # запись
-venv/bin/python -m scripts.patch_rag_scenarios_2026_10 --force --with-40    # + №40
 """
 from __future__ import annotations
 
@@ -43,8 +41,6 @@ PATCHES = [
     (51, "[event_price_nonmember] MXN[event_promo] e incluye bebida de bienvenida, entrantes",
      "[event_price_nonmember] MXN e incluye bebida de bienvenida, botanas"),
 ]
-PATCH_40 = (40, "soy Anna, la fundadora 🤍 checa mi Instagram @rusaencdmx si quieres ✨",
-            "soy Anna, la fundadora 🤍 checa mi Instagram @rusaencdmx si quieres")
 
 
 def plan(rows: dict[int, str], patches: list[tuple]) -> tuple[dict[int, str], list[str]]:
@@ -67,9 +63,8 @@ def plan(rows: dict[int, str], patches: list[tuple]) -> tuple[dict[int, str], li
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true")
-    ap.add_argument("--with-40", action="store_true")
     args = ap.parse_args()
-    patches = PATCHES + ([PATCH_40] if args.with_40 else [])
+    patches = PATCHES
     ids = sorted({p[0] for p in patches})
 
     await db.init_pool()

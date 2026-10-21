@@ -13,19 +13,22 @@ BAD = [
     "¡Gracias por tu interés, Carlos! El evento cuesta 6000 MXN.",
     "¡Excelente pregunta! Incluye bebida.",
     "¡Perfecto! El evento es ideal para ti.",
-    "¡Claro! Te cuento.",
+    "¡Perfecto! Te cuento.",
     "Con mucho gusto te cuento del evento.",
     "Qué bueno que preguntes: incluye botanas.",
     "Incluye botanas, te va a encantar.",
     "Así te confirmo si el evento es para ti.",
     "Cualquier duda, aquí estoy 🤍",
     "Va, checa el link porfa",
-    "Jajaja para nada",
+    "Mira, el evento es en Polanco.",
+    "Eres un hombre muy interesante.",
+    "Somos la mejor agencia de México.",
+    "¡Wow, un médico! Me encanta, seguro eres un gran hombre.",
     "Ahorita te contesto",
     "Muchos me dicen que vale cada peso.",
     "Quedan pocos lugares, aprovecha.",
     "Es una inversión en algo tan importante como encontrar a tu pareja.",
-    "Hola Carlos.\n\n¡Claro! Cuesta 6000 MXN.",   # зачин во втором пузыре тоже ловится
+    "Hola Carlos.\n\n¡Perfecto! Cuesta 6000 MXN.",   # зачин во втором пузыре тоже ловится
 ]
 GOOD = [
     "Van 30 mujeres y 30 hombres, todos solteros.",
@@ -35,8 +38,21 @@ GOOD = [
     "¿Cómo te llamas y estás soltero?",
     "Tómate tu tiempo, sin presión.",
     "Hola, soy Anna, fundadora de Match Match Agency 🤍",
-    "Claramente es una noche tranquila.",   # «claro» внутри слова — не зачин
+    "Claramente es una noche tranquila.",
+    # живые реакции на слова лида (решение владелицы 2026-10-21)
+    "¡Claro! Te cuento.",
+    "¡Qué bien! ¿Y a qué te dedicas?",
+    "¡Me encanta! Es temática de Halloween.",
+    "Qué gusto, Carlos. Es en Polanco, CDMX.",
+    "Jaja, ¡ojalá alguien llegue de vampiro!",
 ]
+
+
+@pytest.mark.parametrize("text,norm", [
+    ("¡Qué bien! Es en Polanco.", "que bien"), ("Jajaja, sí.", "jaja"), ("Claro, te cuento.", "claro"),
+    ("Es en Polanco, CDMX.", None), ("¡Me encanta! Ok.", "me encanta")])
+def test_reaction_start(text, norm):
+    assert cr.reaction_start(text) == norm
 
 
 @pytest.mark.parametrize("text", BAD)

@@ -71,9 +71,12 @@ def test_never_5500(r):
 
 
 @pytest.mark.parametrize("r", RECORDS, ids=lambda r: r["id"])
-def test_one_emoji_max(r):
+def test_emoji_limits(r):
+    """До 2 эмодзи на ответ и не больше 1 в пузыре (решение владелицы 2026-10-21)."""
     for t in _lead_facing(r):
-        assert len(EMOJI_RE.findall(t)) <= 1, f"{r['id']}: {t}"
+        assert len(EMOJI_RE.findall(t)) <= 2, f"{r['id']}: {t}"
+        for bubble in t.split("\n\n"):
+            assert len(EMOJI_RE.findall(bubble)) <= 1, f"{r['id']}: {bubble}"
 
 
 @pytest.mark.parametrize("r", RECORDS, ids=lambda r: r["id"])
@@ -124,7 +127,8 @@ def test_hola_script_is_owner_text_without_binary_question():
     t = r["contenido_es"]
     assert "Soy Anna, fundadora de Match Match Agency" in t
     assert "Cuéntame qué estás buscando" in t
-    assert t.endswith("La idea no es que conozcas a muchas mujeres, sino que conozcas a las correctas.")
+    assert t.endswith("La idea no es que conozcas a muchas mujeres, sino que conozcas a las correctas. ❤️")
+    assert "🤍" in t.split("\n\n")[0]       # эмодзи Ани, как в оригинале №1
     assert not re.search(r"dos\s+(caminos|opciones)|¿servicio o evento", t, re.IGNORECASE)
     assert "soltero" not in t and "llamas" not in t   # имя и «холост ли» — следующим ответом
     assert r["situacion"]["presentacion_hecha"] is False
@@ -215,3 +219,18 @@ def test_review_doc_is_current():
     doc = (Path(__file__).resolve().parent.parent / "docs" / "proposals" / "knowledge_review_ru.md")
     assert doc.read_text(encoding="utf-8") == knowledge_review.render(SEED), \
         "перегенерируй: venv/bin/python -m scripts.knowledge_review"
+
+
+def test_owner_emojis_in_base_scripts():
+    by_id = {r["id"]: r for r in RECORDS}
+    assert "✨" in by_id["greeting_service"]["contenido_es"]
+    assert by_id["agency_trust"]["contenido_es"].endswith("😊")
+
+
+def test_lively_tone_and_laugh_pair():
+    by_id = {r["id"]: r for r in RECORDS}
+    tone = by_id["style_tone"]["contenido_es"]
+    assert "jaja" in tone and "¡Qué bien!" in tone and "Hasta 2 emojis" in by_id["style_tone"]["como_responder"]
+    assert by_id["pair_laugh"]["bueno"].startswith("Jaja")
+    assert conversation_rules.violations(by_id["pair_laugh"]["bueno"]) == []
+    assert conversation_rules.violations(by_id["pair_reaction"]["malo"])   # похвала лида — плохо

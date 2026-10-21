@@ -160,8 +160,13 @@ _OFFER_LINK_RE = re.compile(r"(?:te\s+paso|quieres|te\s+mando|te\s+comparto)\s+(
 _AFFIRM_RE = re.compile(r"^\W*(?:s[ií]|claro|ok|okay|dale|por\s+favor|me\s+interesa|sale|"
                         r"de\s+acuerdo)\b", re.IGNORECASE)
 # Решения владелицы: скидки, наличные, перевод, возврат — молча Ане (не полагаемся на модель).
+# «promo» — только вопрос о скидке («¿hay promo?», «¿tienen alguna promoción?», «¿y la promo?»),
+# не «vi la promo en Instagram» / «vi su promoción» (решение владелицы 2026-10-21).
 _SILENT_TOPIC_RE = re.compile(
-    r"\bdescuento|\bpromo(?:ci[oó]n)?\b|\bcup[oó]n|\brebaja|m[aá]s\s+barato|"
+    r"\bdescuento|\bcup[oó]n|\bc[oó]digo\b(?!\s+postal)|"
+    r"\b(?:hay|tienen|tienes|manejan|aplica|aplican|existe|dan|alg[uú]n|alguna)\s+"
+    r"(?:alguna?\s+|una\s+)?promo(?:ci[oó]n|ciones)?\b|\bpromo(?:ci[oó]n)?\s*\?|"
+    r"\brebaja|m[aá]s\s+barato|"
     r"precio\s+especial|\befectivo\b|\boxxo\b|\bwalmart\b|transferencia|dep[oó]sito|"
     r"depositar|reembolso|devoluci[oó]n|regr[eé]s\w*\s+(?:mi|el)\s+dinero|"
     r"cancelar\s+(?:mi\s+)?boleto", re.IGNORECASE)
@@ -291,18 +296,43 @@ def _drop_sentences(text: str, pred) -> str:
     return " ".join(p for p in parts if not pred(p)).strip()
 
 
-def keep_one_emoji(bubbles: list[str]) -> list[str]:
-    seen = False
+MAX_EMOJI_TOTAL = 2       # на весь ответ (решение владелицы 2026-10-21)
+MAX_EMOJI_PER_BUBBLE = 1
+
+
+def keep_emojis(bubbles: list[str], total: int = MAX_EMOJI_TOTAL,
+                per_bubble: int = MAX_EMOJI_PER_BUBBLE) -> list[str]:
+    """Не больше total эмодзи на ответ и per_bubble в одном пузыре; лишние вырезаем."""
+    used = 0
     out = []
     for b in bubbles:
+        in_bubble = 0
+
         def repl(m):
-            nonlocal seen
-            if seen:
+            nonlocal used, in_bubble
+            if used >= total or in_bubble >= per_bubble:
                 return ""
-            seen = True
+            used += 1
+            in_bubble += 1
             return m.group(0)
         out.append(re.sub(r"[ \t]{2,}", " ", _EMOJI_RE.sub(repl, b)).strip())
     return out
+
+
+def emoji_count(texts: list[str]) -> int:
+    return sum(len(_EMOJI_RE.findall(t or "")) for t in texts)
+
+
+def drop_repeated_reaction(bubbles: list[str], recent: list[str]) -> list[str]:
+    """Одинаковая реакция в начале («¡Qué bien!», «Jaja», «Claro,») — не чаще раза за
+    последние 3 ответа бота: при повторе её срезаем, ответ остаётся."""
+    if not bubbles:
+        return bubbles
+    r = conversation_rules.reaction_start(bubbles[0])
+    if not r or r not in set(recent or []):
+        return bubbles
+    rest = conversation_rules.REACTION_START_RE.sub("", bubbles[0], count=1)
+    return ([_capitalize(rest)] if rest.strip() else []) + bubbles[1:]
 
 
 def keep_last_question(bubbles: list[str]) -> list[str]:
@@ -404,7 +434,8 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
     if styled != bubbles:
         notes.append("убрала зачин/фразу/сленг")
         bubbles = styled
-    bubbles = keep_last_question(keep_one_emoji(bubbles))
+    bubbles = drop_repeated_reaction(bubbles, mem.get("inicios_recientes") or [])
+    bubbles = keep_last_question(keep_emojis(bubbles))
     bubbles = [_capitalize(b) for b in (b.strip() for b in bubbles) if b]
     if len(bubbles) > MAX_BUBBLES:
         bubbles = bubbles[:MAX_BUBBLES]
@@ -509,6 +540,13 @@ def _result(messages: list[str], action: str = "respond", **extra) -> dict:
             "proposed_videocall_at": None}
     base.update(extra)
     return base
+
+
+def _caption_within_budget(caption: str, bubbles: list[str]) -> str:
+    """Подпись, которую добавляет код, тоже в лимите эмодзи на ответ."""
+    if emoji_count(bubbles) + emoji_count([caption]) <= MAX_EMOJI_TOTAL:
+        return caption
+    return re.sub(r"\s{2,}", " ", _EMOJI_RE.sub("", caption)).strip()
 
 
 def _silent(reason: str, **extra) -> dict:
@@ -749,12 +787,12 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         result["send_event_video"] = True
         await ai._maybe_announce_event_video(result, None, lead)
         if result.get("video_caption"):
-            result["video_caption"] = VIDEO_CAPTION
+            result["video_caption"] = _caption_within_budget(VIDEO_CAPTION, bubbles)
     if out["send_event_photo"] and not mem["ya_hecho"].get("foto_enviada"):
         result["send_event_photo"] = True
         await ai._maybe_announce_event_photo(result, None, lead)
         if result.get("photo_caption"):
-            result["photo_caption"] = PHOTO_CAPTION
+            result["photo_caption"] = _caption_within_budget(PHOTO_CAPTION, bubbles)
     # Запись на звонок — только в этапе venta, с именем, почтой и показанной ценой услуги.
     if out["proposed_videocall_at"]:
         result["proposed_videocall_at"] = out["proposed_videocall_at"]

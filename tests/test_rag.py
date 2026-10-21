@@ -269,11 +269,31 @@ class TestCheckReply:
                             user_text="¿cómo compro?", ya_hecho=ya, calificacion=cal)
         assert b == ["¿Cómo te llamas y estás soltero?"]
 
-    def test_one_emoji_one_question(self):
-        b, _, _ = check(["Ahora cuesta 6000 MXN 🤍 ¿Te sirve?", "¿Cómo te llamas? 😊 ¿Estás soltero?"])
+    def test_emoji_limit_and_one_question(self):
+        b, _, _ = check(["Ahora cuesta 6000 MXN 🤍✨ ¿Te sirve?", "¿Cómo te llamas? 😊 ¿Estás soltero? 🎃"])
         text = " ".join(b)
-        assert text.count("?") == 1 and text.endswith("¿Estás soltero?")
-        assert sum(1 for ch in text if ch in "🤍😊") == 1
+        assert text.count("?") == 1 and "¿Estás soltero?" in text
+        assert rag.emoji_count(b) == 2                     # до 2 на ответ
+        assert all(rag.emoji_count([x]) <= 1 for x in b)   # не больше 1 в пузыре
+
+    def test_three_bubbles_three_emojis_cut_to_two(self):
+        b = rag.keep_emojis(["Uno 🤍", "Dos 😊", "Tres ✨"])
+        assert b == ["Uno 🤍", "Dos 😊", "Tres"]
+
+    def test_repeated_reaction_dropped(self):
+        b, _, _ = check(["¡Qué bien! Es en Polanco, CDMX."], inicios_recientes=["que bien", None])
+        assert b == ["Es en Polanco, CDMX."]
+        b, _, _ = check(["¡Qué bien! Es en Polanco, CDMX."], inicios_recientes=["jaja"])
+        assert b == ["¡Qué bien! Es en Polanco, CDMX."]
+
+    def test_laugh_allowed(self):
+        b, reason, _ = check(["Jaja, ¡ojalá alguien llegue de vampiro! Si no tienes disfraz, te dan una máscara."],
+                             user_text="jaja voy a ir de vampiro")
+        assert reason is None and b[0].startswith("Jaja")
+
+    def test_caption_within_budget(self):
+        assert rag._caption_within_budget("Video 🎬", ["A 🤍", "B 😊"]) == "Video"
+        assert rag._caption_within_budget("Video 🎬", ["A 🤍"]) == "Video 🎬"
 
     def test_banned_opener_stripped(self):
         b, _, _ = check(["¡Gracias por tu interés! Ahora cuesta 6000 MXN."])
@@ -601,7 +621,8 @@ class TestPatchScript:
         from scripts import patch_rag_scenarios_2026_10 as p
         for _, old, new in p.PATCHES:
             assert "5,500" not in new and "[event_promo]" not in new and "entrantes" not in new
-        assert p.PATCH_40 not in p.PATCHES     # №40 только с флагом --with-40
+        assert all(sid != 40 for sid, _, _ in p.PATCHES)   # №40 не меняем (решение владелицы)
+        assert not hasattr(p, "PATCH_40")
 
 
 class TestImportKnowledge:
@@ -698,16 +719,22 @@ class TestReviewFixes:
         _, reason, _ = check(["Van 30 mujeres."], user_text="¿cuántas van?", lead_texts=["tengo 30"])
         assert reason
 
-    def test_opener_claro_que_si(self):
-        b, _, _ = check(["Claro que sí, el evento es en Polanco, CDMX."])
+    def test_opener_cut_whole_clause(self):
+        b, _, _ = check(["Con mucho gusto te cuento: el evento es en Polanco, CDMX."])
         assert b == ["El evento es en Polanco, CDMX."]
+
+    def test_claro_reaction_allowed(self):
+        """«¡Claro!» как реакция на слова лида разрешено (решение владелицы 2026-10-21)."""
+        b, _, _ = check(["¡Claro! Es en Polanco, CDMX."])
+        assert b == ["¡Claro! Es en Polanco, CDMX."]
 
     def test_multiline_bubble_preserved(self):
         b, _, _ = check(["Ahora cuesta 6000 MXN.\nIncluye bebida de bienvenida y botanas."])
         assert "\n" in b[0]
 
     def test_variation_selector_removed(self):
-        assert rag.keep_one_emoji(["Hola 🤍", "Listo ❤️ ya"]) == ["Hola 🤍", "Listo ya"]
+        assert rag.keep_emojis(["Hola 🤍", "Listo ❤️ ya", "Y ✨"]) == ["Hola 🤍", "Listo ❤️ ya", "Y"]
+        assert rag.keep_emojis(["Hola 🤍❤️ ya"]) == ["Hola 🤍 ya"]
 
     def test_inbound_bracket_is_lead_and_in_burst(self):
         msgs = [msg("lead", "[voice message]", 2), msg("lead", "hola", 1)]
@@ -725,3 +752,17 @@ class TestReviewFixes:
         recs = await knowledge.records()
         assert len(recs) == len(SEED)
         knowledge.reset_cache()
+
+
+class TestPromoTrigger:
+    @pytest.mark.parametrize("text", ["¿hay promo?", "¿tienen alguna promoción?", "¿y la promo?",
+                                      "¿hay descuento?", "¿tienen cupón?", "¿tienes algún código?",
+                                      "¿manejan promociones?"])
+    def test_discount_questions_silent(self, text):
+        assert rag._SILENT_TOPIC_RE.search(text), text
+
+    @pytest.mark.parametrize("text", ["vi la promo en Instagram", "vi su promoción",
+                                      "vi el anuncio", "hola, vi la promo del evento",
+                                      "mi código postal es 11560"])
+    def test_ad_mentions_not_silent(self, text):
+        assert not rag._SILENT_TOPIC_RE.search(text), text

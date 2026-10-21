@@ -19,6 +19,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import conversation_rules
 import db
 
 logger = logging.getLogger(__name__)
@@ -333,7 +334,16 @@ async def build(lead: dict, user_text: str, now: datetime | None = None) -> dict
                      if autor(m) in ("anna_bot", "anya_manual")
                      and not (desde and isinstance(m.get("created_at"), datetime)
                               and _aware(m["created_at"]) < _aware(desde))][-5:]
+    # Реакции в начале последних 3 ответов бота (повтор «¡Qué bien!» подряд — шаблон).
+    inicios, prev_out = [], False
+    for m in prior:
+        is_bot = autor(m) == "anna_bot"
+        if is_bot and not prev_out:
+            r = conversation_rules.reaction_start(m.get("text") or "")
+            inicios.append(r)
+        prev_out = autor(m) in ("anna_bot", "sistema") and (is_bot or prev_out)
     return {
+        "inicios_recientes": [r for r in inicios[-3:] if r],
         "anna_reciente": anna_reciente,
         "settings": settings,
         "historial": historial(prior),
