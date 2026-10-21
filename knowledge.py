@@ -68,14 +68,36 @@ async def records() -> list[dict]:
     recs, source = None, "db"
     try:
         recs = await _load_from_db()
-    except Exception:
-        logger.exception("knowledge: не прочитала таблицу → seed.json")
+    except Exception as e:
+        # Сбой чтения (не «таблицы нет»): последние записи из БД лучше seed.json — в seed
+        # могут быть записи, которые владелица в БД выключила (code-review 2026-10-22).
+        logger.exception("knowledge: не прочитала таблицу")
+        await _alert_fallback(repr(e))
+        if _cache["records"] is not None and _cache["source"] == "db":
+            _cache["at"] = time.monotonic()
+            return _cache["records"]
     if not recs:   # нет таблицы или она пустая (импорт ещё не делали) → seed
         recs, source = [r for r in load_seed() if r.get("activo", True)], "seed"
     if source != _cache["source"]:
         logger.info("knowledge: источник %s, записей %d", source, len(recs))
     _cache.update(at=time.monotonic(), records=recs, source=source)
     return recs
+
+
+_last_alert = {"at": 0.0}
+ALERT_EVERY_SEC = 600
+
+
+async def _alert_fallback(error: str) -> None:
+    """Техалерт о сбое чтения базы знаний, не чаще раза в 10 минут; его сбой не роняет ответ."""
+    if time.monotonic() - _last_alert["at"] < ALERT_EVERY_SEC and _last_alert["at"]:
+        return
+    _last_alert["at"] = time.monotonic()
+    try:
+        import escalation
+        await escalation.notify_error("knowledge.records", f"база знаний не читается: {error}", None)
+    except Exception:
+        logger.exception("knowledge: техалерт не ушёл")
 
 
 def reset_cache() -> None:

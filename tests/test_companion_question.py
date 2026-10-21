@@ -232,3 +232,20 @@ class TestAlertText:
         text = sent.await_args.args[0]
         assert "спутника" in text and "¿puedo ir con un amigo?" in text
         assert "ручном режиме" in text
+
+
+@pytest.mark.parametrize("text", [
+    "quiero llegar a casarme con alguien serio",
+    "me gustaría llegar a formar una familia con mi pareja ideal",
+    "quiero llegar a conocer con calma a alguien",
+    "busco con quien llegar a compartir mi vida con alguien especial",
+])
+def test_life_phrases_not_companion_review2(text):
+    """code-review 2026-10-22: «llegar a casarme con alguien» — не вопрос про спутника."""
+    assert not filters.is_companion_question(text)
+
+
+@pytest.mark.parametrize("text", ["¿puedo llegar con mi amigo?", "¿y si voy con otra persona?",
+                                  "¿puedo llevar a alguien?", "voy a ir con mi novia, ¿se puede?"])
+def test_companion_still_detected_review2(text):
+    assert filters.is_companion_question(text)

@@ -202,9 +202,16 @@ _COMPANION_WHO = rf"(?:{_COMPANION_DET}{_COMPANION_NOUN}|alguien|otra\s+persona|
 # Глаголы «пойти / прийти / попасть на ивент».
 _GO = (r"(?:ir|voy|vamos|ir[ií]a|ir[ií]amos|venir|vengo|vendr[ií]a|vendr[ií]amos|asistir|"
        r"asisto|llegar|llego|entrar|entro|acudir)")
+# После «ir/llegar …» не считаем «пойти» глаголы о жизни: «quiero llegar a casarme con alguien
+# serio», «llegar a formar una familia con mi pareja» (code-review 2026-10-22, ложное срабатывание).
+_LIFE_VERB = r"(?:casar|vivir|compartir|formar|tener|estar|salir|conocer|hacer|pasar|envejecer)\w*"
+# «con alguien / una persona» — только в ветке llevar/traer/invitar, не после «ir/llegar».
+_GO_WHO = rf"(?:{_COMPANION_DET}{_COMPANION_NOUN}|otra\s+persona|otras\s+personas)"
 _COMPANION_RE = re.compile(
     # «voy / puedo ir … con mi amigo», «y si voy con otra persona»
-    rf"\b{_GO}\b(?:\s+\S+){{0,3}}?\s+con\s+{_COMPANION_WHO}\b|"
+    rf"\b{_GO}\b(?:\s+(?!{_LIFE_VERB})\S+){{0,3}}?\s+con\s+{_GO_WHO}\b|"
+    # «¿puedo ir con alguien?» — «alguien» только сразу после глагола
+    rf"\b{_GO}\s+con\s+(?:alguien|una\s+persona)\b|"
     # короткий уточняющий вопрос: «¿y con mi novia?», «y si es con mi esposa?»
     rf"^\W*(?:y\s+)?(?:si\s+(?:es|voy|vamos)\s+)?con\s+{_COMPANION_DET}{_COMPANION_NOUN}\b|"
     # «llevar / traer / invitar a mi amigo / a alguien»

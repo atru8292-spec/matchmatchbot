@@ -1,7 +1,8 @@
 """Смоук режимов ответа: legacy и rag рядом на одних и тех же сообщениях (этап 4).
 
 Реальный OpenAI (тратит деньги!), всё остальное изолировано:
-  - пул БД только на чтение (default_transaction_read_only=on): запись в прод невозможна;
+  - БД только на чтение: каждый запрос проверяется в Python (ReadOnlyPool), запись или
+    транзакция останавливают прогон (server_settings пулер Supabase игнорирует);
   - настройки ивента — в памяти (event_active=1, 6000 → 7000, event_price_old пусто);
   - история и заметки лида — в памяти скрипта, со сдвинутыми датами;
   - Wazzup и Telegram — заглушки, наружу ничего не уходит;
@@ -369,6 +370,52 @@ def install_db(leads_by_phone: dict) -> None:
     escalation._send_telegram = no_write
 
 
+class WriteBlocked(BaseException):
+    """Попытка записи в прод-БД из смоука. BaseException: не глотается try/except в коде бота."""
+
+
+_READ_SQL = re.compile(r"^\s*(?:--[^\n]*\n\s*)*(?:select|with|show)\b", re.IGNORECASE)
+_WRITE_SQL = re.compile(r"\b(?:insert|update|delete|alter|create|drop|truncate|grant|merge)\b",
+                        re.IGNORECASE)
+
+
+class ReadOnlyPool:
+    """Защита записи на уровне Python. Supabase pooler (транзакционный режим) игнорирует
+    server_settings, поэтому default_transaction_read_only=on сам по себе НЕ работает
+    (проверено 2026-10-22: SHOW default_transaction_read_only → off)."""
+
+    def __init__(self, pool):
+        self._pool = pool
+        self.reads = 0
+
+    def _check(self, sql: str) -> None:
+        if not _READ_SQL.match(sql or "") or _WRITE_SQL.search(sql or ""):
+            raise WriteBlocked(f"смоук: запрос на запись заблокирован: {(sql or '')[:120]!r}")
+        self.reads += 1
+
+    async def fetch(self, sql, *a, **k):
+        self._check(sql)
+        return await self._pool.fetch(sql, *a, **k)
+
+    async def fetchrow(self, sql, *a, **k):
+        self._check(sql)
+        return await self._pool.fetchrow(sql, *a, **k)
+
+    async def fetchval(self, sql, *a, **k):
+        self._check(sql)
+        return await self._pool.fetchval(sql, *a, **k)
+
+    async def execute(self, sql, *a, **k):
+        self._check(sql)
+        return await self._pool.execute(sql, *a, **k)
+
+    def acquire(self, *a, **k):
+        raise WriteBlocked("смоук: pool.acquire (транзакции) заблокирован")
+
+    async def close(self):
+        await self._pool.close()
+
+
 async def amain(args) -> None:
     orig = asyncpg.create_pool
 
@@ -385,6 +432,7 @@ async def amain(args) -> None:
     leads: dict[str, Lead] = {}
     install_db(leads)
     await db.init_pool()
+    db._pool = ReadOnlyPool(db._pool)
     lines = [f"# Смоук reply_mode ({'DRY' if args.dry else 'OpenAI'}) {NOW:%Y-%m-%d %H:%M} UTC", ""]
     rows = []
     modes = ("legacy", "rag") if args.modes == "both" else ("rag",)

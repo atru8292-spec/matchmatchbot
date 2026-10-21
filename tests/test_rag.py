@@ -1191,3 +1191,148 @@ async def test_every_silent_has_reason(monkeypatch, case):
     r = await _silent_case(monkeypatch, case)
     assert r["action"] == "silent", case
     assert r["messages"] == [] and r.get("silent_reason"), case
+
+
+class TestVerifierReview2:
+    """Находки независимого ревью 2026-10-22: сверка по предложениям, fail-open сверщика."""
+
+    RECS = knowledge.usable(SEED, SETTINGS, "2026-10-21")
+
+    async def _run(self, monkeypatch, items, bubbles, recs=None):
+        async def chat(model, system, user, cost, **kw):
+            return {"afirmaciones": items}
+        monkeypatch.setattr(rag, "_chat", chat)
+        return await rag.verify_claims(bubbles, recs or self.RECS, memory.evento_actual(SETTINGS),
+                                       [], rag.Cost(), SETTINGS)
+
+    def test_negation_compared_per_sentence(self):
+        src = rag.fact_sources([{"contenido_es": "Incluye bebida y botanas. No necesitas disfraz."}],
+                               None, SETTINGS)
+        assert not rag.claim_supported("No incluye botanas", src)
+        assert rag.claim_supported("Incluye bebida y botanas", src)
+
+    def test_number_must_be_in_same_sentence(self):
+        src = rag.fact_sources([{"contenido_es": "Cuesta [event_price_nonmember] MXN. Van 3000 personas."}],
+                               None, SETTINGS)
+        assert not rag.claim_supported("Cuesta 3000 MXN", src)
+
+    @pytest.mark.parametrize("texto", ["Gracias, Luis. Puedes pagar en efectivo en OXXO.",
+                                       "Incluye cena para 30 personas, ¿te late?"])
+    async def test_thanks_or_question_tail_does_not_hide_claim(self, monkeypatch, texto):
+        claims = await self._run(monkeypatch, [{"texto": texto, "respaldo": None}], [texto])
+        assert claims
+
+    @pytest.mark.parametrize("bubble", ["Puedes pagar en efectivo en OXXO.", "No incluye botanas.",
+                                        "Hay valet parking.", "Van 30 mujeres y 30 hombres.",
+                                        "La entrada es gratis.", "Incluye cena."])
+    async def test_backstop_when_model_lists_nothing(self, monkeypatch, bubble):
+        assert await self._run(monkeypatch, [], [bubble]) == [bubble]
+
+    @pytest.mark.parametrize("bubble", ["Incluye bebida de bienvenida y botanas.",
+                                        "Puedes pagar en la página del evento.",
+                                        "El pago se hace en la página y el boleto te llega por correo.",
+                                        "Trabajo con más de 3,000 mujeres eslavas.",
+                                        "Solo trabajamos con hombres solteros.",
+                                        "Ahora cuesta [event_price_nonmember] MXN.",
+                                        "Gracias por tu foto, Carlos."])
+    async def test_backstop_passes_real_facts(self, monkeypatch, bubble):
+        assert await self._run(monkeypatch, [], [bubble]) == []
+
+
+class TestPhotoQuestionReview2:
+    @pytest.mark.parametrize("q", ["¿Me mandas una foto tuya?", "¿Puedes enviarme una foto?",
+                                   "Para seguir, ¿que te mande una foto? No: ¿me mandas tu foto?",
+                                   "¿Me pasas una foto tuya?", "¿Compárteme una foto tuya?",
+                                   "¿Mándame una foto?", "¿Tienes una foto tuya?"])
+    def test_photo_requests_counted(self, q):
+        assert memory.pregunta_slot("photo", q)
+
+    def test_event_photos_offer_not_counted(self):
+        assert not memory.pregunta_slot("photo", "¿Quieres que te mande fotos del evento?")
+
+    def test_photo_asked_before_current_event_not_counted(self):
+        old = NOW - timedelta(days=60)
+        prior = [dict(msg("anna", "¿Me mandas una foto tuya?", 0), created_at=old),
+                 dict(msg("anna", "¿Me mandas una foto tuya?", 0), created_at=old)]
+        ya = memory.ya_hecho(prior, {}, SETTINGS, EVENT_DESDE, NOW)
+        assert ya["preguntas_calificacion"]["photo"] == 0
+        lead = {"interest": "event", "name": "C", "is_single": True}
+        assert not memory.calificacion(lead, ya, "hola", None)["foto_agotada"]
+
+
+class TestNumbersReview2:
+    def test_service_price_not_allowed_in_event_answer(self):
+        _, reason, _ = check(["El servicio cuesta 10,000 USD."], fichas=[BY_ID["event_price"]])
+        assert reason and "числа" in reason
+
+    def test_lead_age_is_not_a_fact_source(self):
+        _, reason, _ = check(["Van 30 mujeres."], fichas=[BY_ID["event_price"]],
+                             lead={"name": "Carlos", "is_single": True, "age": 30, "photo_received": True})
+        assert reason and "числа" in reason
+
+
+class TestSummaryReview2:
+    def _mem80(self):
+        prior = [msg("lead" if i % 2 else "anna", f"t{i}", 1000 - i) for i in range(80)]
+        return {"prior": prior, "resumen": None}
+
+    async def test_write_failure_cached_not_recomputed(self, monkeypatch):
+        rag._summary_cache.clear()
+        calls = []
+
+        async def chat(model, system, user, cost, **kw):
+            calls.append(user)
+            return {"resumen": "- Carlos, 38, médico"}
+        monkeypatch.setattr(rag, "_chat", chat)
+        monkeypatch.setattr(db, "update_memory_summary", AsyncMock(side_effect=RuntimeError("no col")))
+        alert = AsyncMock()
+        monkeypatch.setattr(ai.escalation, "notify_error", alert)
+        for _ in range(3):
+            lead = {"phone": PHONE}                      # из БД сводка не пришла
+            await rag.maybe_refresh_summary(lead, self._mem80(), rag.Cost())
+        assert len(calls) == 1 and alert.await_count == 1
+        rag._summary_cache.clear()
+
+    async def test_incremental_uses_previous_summary(self, monkeypatch):
+        seen = {}
+
+        async def chat(model, system, user, cost, **kw):
+            seen.update(user)
+            return {"resumen": "- nuevo"}
+        monkeypatch.setattr(rag, "_chat", chat)
+        monkeypatch.setattr(db, "update_memory_summary", AsyncMock())
+        lead = {"phone": PHONE, "memoria_resumen": "- Carlos, médico", "memoria_mensajes": 10}
+        await rag.maybe_refresh_summary(lead, self._mem80(), rag.Cost())
+        assert seen["resumen_anterior"] == "- Carlos, médico"
+        assert len(seen["mensajes"]) == 30            # только новые: 40 старых − 10 учтённых
+
+    def test_summary_prompt_excludes_bot_facts(self):
+        assert "anna_bot" in rag.SUMMARY_SYSTEM and "No copies datos" in rag.SUMMARY_SYSTEM
+
+
+class TestKnowledgeFallbackReview2:
+    async def test_db_error_keeps_last_db_records_and_alerts(self, monkeypatch):
+        knowledge.reset_cache()
+        knowledge._last_alert["at"] = 0.0
+        alert = AsyncMock()
+        monkeypatch.setattr(ai.escalation, "notify_error", alert)
+        db_recs = [{"id": "solo_db", "activo": True}]
+        monkeypatch.setattr(knowledge, "_load_from_db", AsyncMock(return_value=db_recs))
+        assert await knowledge.records() == db_recs
+        knowledge._cache["at"] = -1e9                      # TTL истёк
+        monkeypatch.setattr(knowledge, "_load_from_db", AsyncMock(side_effect=RuntimeError("timeout")))
+        assert await knowledge.records() == db_recs        # не seed.json
+        knowledge._cache["at"] = -1e9
+        await knowledge.records()
+        assert alert.await_count == 1                      # не чаще раза в 10 минут
+        knowledge.reset_cache()
+
+    async def test_db_error_without_cache_uses_seed_and_alerts(self, monkeypatch):
+        knowledge.reset_cache()
+        knowledge._last_alert["at"] = 0.0
+        alert = AsyncMock()
+        monkeypatch.setattr(ai.escalation, "notify_error", alert)
+        monkeypatch.setattr(knowledge, "_load_from_db", AsyncMock(side_effect=RuntimeError("timeout")))
+        recs = await knowledge.records()
+        assert len(recs) > 50 and alert.await_count == 1
+        knowledge.reset_cache()

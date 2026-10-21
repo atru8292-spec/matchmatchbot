@@ -1710,3 +1710,15 @@ class TestDailyCounterKeyMexico:
     ])
     def test_key_uses_mexico_date(self, utc, day):
         assert db._daily_counter_key("cold_followups", now=utc) == f"counter:cold_followups:{day}"
+
+
+class TestAddDailyAmountAtomic:
+    async def test_single_upsert_statement(self, pool):
+        """Расход режима rag за сутки — один INSERT … ON CONFLICT (без чтения и записи
+        отдельно: параллельные ответы не теряют приращения, code-review 2026-10-22)."""
+        pool.fetchrow.return_value = {"value": "1.250000"}
+        assert await db.add_daily_amount("rag_cost_usd", 0.25) == 1.25
+        sql, key, amount = pool.fetchrow.call_args.args
+        assert "ON CONFLICT (key) DO UPDATE" in sql and "+ EXCLUDED.value::numeric" in sql
+        assert "rag_cost_usd" in key and amount == "0.250000"
+        pool.execute.assert_not_called()

@@ -56,3 +56,21 @@ def test_new_dialogs_present():
     assert any("выдумками" in t for t in titles) and any("Сбой OpenAI" in t for t in titles)
     assert [d for d in s.DIALOGS if d[0].startswith("15.")][0][4] == {"event_price_next": ""}
     assert any(t.startswith(s.FAIL_MARK) for d in s.DIALOGS for t in d[3])
+
+
+async def test_read_only_pool_blocks_writes():
+    from unittest.mock import AsyncMock
+    import pytest
+    inner = type("P", (), {})()
+    inner.fetch = AsyncMock(return_value=[])
+    inner.execute = AsyncMock()
+    pool = s.ReadOnlyPool(inner)
+    await pool.fetch("SELECT 1")
+    for sql in ("UPDATE leads SET mode='manual'", "INSERT INTO app_settings VALUES (1)",
+                "WITH x AS (DELETE FROM leads RETURNING 1) SELECT 1", "  delete from messages"):
+        with pytest.raises(s.WriteBlocked):
+            await pool.execute(sql)
+    with pytest.raises(s.WriteBlocked):
+        pool.acquire()
+    inner.execute.assert_not_called()
+    assert issubclass(s.WriteBlocked, BaseException) and not issubclass(s.WriteBlocked, Exception)

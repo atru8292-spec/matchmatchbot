@@ -593,6 +593,19 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
             or "Похоже на клиента агентства — бот промолчал", combined)
         return
 
+    # Режим rag думает дольше (2–4 вызова OpenAI): если за это время Аня взяла лида вручную
+    # (эхо её ответа поставило manual), ответ бота поверх её сообщения не шлём (code-review
+    # 2026-10-22). Сбой чтения — шлём как обычно.
+    if result.get("rag_meta") is not None and lead.get("mode") != "manual":
+        try:
+            fresh = await db.get_lead_by_phone(phone)
+        except Exception:
+            logger.exception("rag: не перечитала лида перед отправкой [%s]", phone)
+            fresh = None
+        if fresh and fresh.get("mode") == "manual":
+            logger.info("rag [%s]: пока бот думал, лид ушёл в ручной режим — ответ не шлю", phone)
+            return
+
     # respond / escalate — стадию ставит AI (если вернул валидную).
     if result["funnel_stage"]:
         await db.set_funnel_stage(phone, result["funnel_stage"],

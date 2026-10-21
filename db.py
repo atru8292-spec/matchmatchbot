@@ -515,10 +515,15 @@ async def get_daily_amount(name: str) -> float:
 
 
 async def add_daily_amount(name: str, amount: float) -> float:
-    """Прибавить amount к сегодняшней сумме name. Вернуть новое значение."""
-    new = await get_daily_amount(name) + float(amount)
-    await set_setting(_daily_counter_key(name), f"{new:.6f}")
-    return new
+    """Прибавить amount к сегодняшней сумме name одним запросом (атомарно: параллельные
+    ответы разных лидов не теряют приращения, code-review 2026-10-22). Вернуть новое значение."""
+    row = await _get_pool().fetchrow(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, now()) "
+        "ON CONFLICT (key) DO UPDATE SET value = to_char("
+        "COALESCE(NULLIF(app_settings.value, '')::numeric, 0) + EXCLUDED.value::numeric, "
+        "'FM999999990.000000'), updated_at = now() RETURNING value",
+        _daily_counter_key(name), f"{float(amount):.6f}")
+    return float(row["value"])
 
 
 async def update_memory_summary(phone: str, resumen: str, last_message_id, count: int) -> None:

@@ -297,8 +297,8 @@ def render_tokens(text: str, settings: dict) -> str:
 
 
 def allowed_numbers(fichas: list[dict], settings: dict, lead: dict, lead_texts: list[str]) -> set[str]:
-    """Числа из подтверждённых фичей, карточки ивента и профиля лида (возраст); lead_texts —
-    только для тестов совместимости, в режиме rag передаётся пустым."""
+    """Числа из подтверждённых фичей и карточки ивента. Возраст лида числом-фактом не
+    считается («30 mujeres» у лида 30 лет не пройдёт); lead_texts в режиме rag пустой."""
     nums: set[str] = set()
     for f in fichas:
         nums |= numbers_in(render_tokens(f.get("contenido_es") or "", settings))
@@ -307,9 +307,6 @@ def allowed_numbers(fichas: list[dict], settings: dict, lead: dict, lead_texts: 
         nums |= numbers_in(sender._fmt_date_es(v) if k == "event_date" and v else v)
     for t in lead_texts:
         nums |= numbers_in(t)
-    for k in ("age", "desired_partner_age"):
-        if lead.get(k):
-            nums |= numbers_in(str(lead[k]))
     return nums
 
 
@@ -574,7 +571,18 @@ _NO_DATA_RE = re.compile(
     r"el\s+dato)|s[eé]\s+(?:cu[aá]nt|exactamente))", re.IGNORECASE)
 _THANKS_RE = re.compile(r"^\W*(?:gracias|muchas\s+gracias|mil\s+gracias|hola|jaja)", re.IGNORECASE)
 # Отрицание меняет смысл: «No incluye botanas» не подтверждается фразой «Incluye … botanas».
-_NEG_RE = re.compile(r"\b(?:no|nunca|sin|ning[uú]n[oa]?|tampoco|jam[aá]s)\b", re.IGNORECASE)
+_NEG_RE = re.compile(r"\b(?:no|ni|nunca|sin|ning[uú]n[oa]?|tampoco|jam[aá]s|nada|nadie|"
+                     r"s[oó]lo|[uú]nicamente|salvo|excepto)\b", re.IGNORECASE)
+# Темы, где старый бот и модель выдумывали (оплата, что входит, скидки, время, люди):
+# каждое такое предложение ответа код сверяет сам, даже если модель-сверщик его не назвала
+# (code-review 2026-10-22: сверщик fail-open — пустой список пропускал всё).
+_HARD_FACT_RES = [re.compile(p, re.IGNORECASE) for p in (
+    r"\befectivo\b", r"\boxxo\b", r"\bwalmart\b", r"transferencia", r"dep[oó]sito", r"\btarjeta",
+    r"meses\s+sin\s+intereses", r"\bpag(?:o|ar|as|a)\b", r"\bgratis\b|\bgratuit", r"descuento",
+    r"promoci[oó]n", r"reembolso|devoluci[oó]n", r"\binclu(?:ye|ido|ida|idos|idas|yen)\b",
+    r"\bcena\b", r"barra\s+libre", r"alcohol", r"estacionamiento|\bvalet\b",
+    r"\d[\d,.]*\s+(?:mujeres|hombres|personas|chicas|invitad[oa]s|asistentes)",
+    r"\btermina\b|\bacaba\b|hasta\s+las\b|medianoche", r"garant[ií]a", r"\bcupo\b|\blugares\b")]
 
 
 def _words(text: str) -> set[str]:
@@ -582,62 +590,95 @@ def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-zñ]+", t) if len(w) >= 4}
 
 
+def _stems(text: str) -> set[str]:
+    return {w[:4] for w in _words(text)}
+
+
 def _neg(text: str) -> bool:
     return bool(_NEG_RE.search(text or ""))
 
 
-def _fits(claim: str, src: str, min_overlap: float) -> bool:
-    """Источник подтверждает утверждение: все числа (суммы, даты, время) есть в источнике
-    точно, отрицание совпадает, значимых слов совпало не меньше min_overlap."""
+def _fits(claim: str, sent: str, min_overlap: float) -> bool:
+    """Одно предложение источника подтверждает утверждение: все числа (суммы, даты, время)
+    есть в этом предложении точно, отрицание совпадает, значимых слов ≥ min_overlap."""
     words = _words(claim)
-    if not numbers_in(claim) <= numbers_in(src) or _neg(claim) != _neg(src):
+    if not numbers_in(claim) <= numbers_in(sent) or _neg(claim) != _neg(sent):
         return False
-    return not words or len(words & _words(src)) >= min_overlap * len(words)
+    return not words or len(words & _words(sent)) >= min_overlap * len(words)
 
 
 def claim_supported(claim: str, sources: list[str], respaldo: str | None = None) -> bool:
-    """Код решает, подтверждено ли утверждение, — слову модели не верим (смоук 2026-10-22:
-    gpt-4.1-mini помечала дословные фразы фич и могла «подтвердить» выдумку старого бота).
+    """Код решает, подтверждено ли утверждение; источники — отдельные ПРЕДЛОЖЕНИЯ
+    подтверждённых фич и карточки ивента (не запись целиком: «No …» в одной фразе записи
+    не должно подтверждать отрицание в другой).
 
-    1. Одна фраза источника: числа точно, отрицание совпадает, ≥ 80 % слов.
-    2. Склейка двух фич («más de 3,000 mujeres eslavas que buscan pareja»); если есть числа,
-       одна из двух фраз сама подтверждает числа и половину слов.
-    3. Цитата модели, если она реально есть в источниках: числа и отрицание как в п. 1,
-       слов ≥ 50 % (пересказ: «No es obligatorio ir disfrazado» ← «…si no tienes disfraz…»).
+    1. Одно предложение: числа точно, отрицание совпадает, ≥ 80 % слов.
+    2. Склейка двух предложений («más de 3,000 mujeres eslavas que buscan pareja»): только
+       без отрицания; если есть числа — одно из двух само подтверждает числа и половину слов.
+    3. Цитата модели, если она реально есть в источниках: тем же предложением числа и
+       отрицание как в п. 1, слов ≥ 50 % (пересказ «No es obligatorio ir disfrazado»).
     """
-    if any(_fits(claim, src, 0.8) for src in sources):
+    if any(_fits(claim, sent, 0.8) for sent in sources):
         return True
     words = _words(claim)
-    if words:
-        # склейка: фраза с числами должна сама подтверждать числа и половину слов
-        anchors = [src for src in sources if _fits(claim, src, 0.5)] if numbers_in(claim) else None
-        same = [_words(src) & words for src in sources if _neg(src) == _neg(claim)]
-        same = sorted(same, key=len, reverse=True)[:6]
-        for a in ([_words(x) & words for x in anchors] if anchors is not None else same):
-            if any(len(a | b) >= 0.8 * len(words) for b in same):
-                return True
-    if respaldo:
-        for src in sources:
-            if _words(respaldo) and len(_words(respaldo) & _words(src)) >= 0.8 * len(_words(respaldo)):
-                if _fits(claim, src, 0.5):
+    if words and not _neg(claim):
+        plain = [w & words for w in (_words(x) for x in sources if not _neg(x))]
+        plain = sorted(plain, key=len, reverse=True)[:6]
+        anchors = ([_words(x) & words for x in sources if _fits(claim, x, 0.5)]
+                   if numbers_in(claim) else plain)
+        if any(len(a | b) >= 0.8 * len(words) for a in anchors for b in plain):
+            return True
+    if respaldo and _words(respaldo):
+        for sent in sources:
+            if len(_words(respaldo) & _words(sent)) >= 0.8 * min(len(_words(respaldo)),
+                                                                   len(_words(sent)) or 1):
+                if _fits(claim, sent, 0.5):
                     return True
     return False
 
 
+def hard_fact_supported(sent: str, sources: list[str]) -> bool:
+    """Предложение на «опасную» тему: в одном предложении источника есть те же темы,
+    числа, то же отрицание и хотя бы четверть основ слов («Puedes pagar en la página del
+    evento» ← «El pago se hace en la página…»). Выдумку отсекает тема: «efectivo», «OXXO»,
+    «cena», «valet» в подтверждённой базе нет ни в одном предложении."""
+    topics = [rx for rx in _HARD_FACT_RES if rx.search(sent)]
+    stems = _stems(sent)
+    for src in sources:
+        if all(rx.search(src) for rx in topics) and numbers_in(sent) <= numbers_in(src) \
+                and _neg(sent) == _neg(src) and len(stems & _stems(src)) * 4 >= len(stems):
+            return True
+    return claim_supported(sent, sources)
+
+
 def fact_sources(recs: list[dict], card: dict | None, settings: dict) -> list[str]:
-    """Источники фактов: ТОЛЬКО подтверждённые записи базы (knowledge.usable) и карточка
-    ивента. Прошлые ответы бота и слова лида — никогда: у старых лидов там выдумки legacy
-    («puedes pagar en OXXO», «30 mujeres») — решение владелицы 2026-10-22."""
+    """Источники фактов — предложения ТОЛЬКО подтверждённых записей базы (knowledge.usable)
+    и карточки ивента. Прошлые ответы бота и слова лида — никогда: у старых лидов там выдумки
+    legacy («puedes pagar en OXXO», «30 mujeres») — решение владелицы 2026-10-22."""
     out = []
     for r in recs:
         txt = r.get("contenido_es") or ""
-        if txt:
-            out += [txt, render_tokens(txt, settings)]
+        for variant in (txt, render_tokens(txt, settings)) if txt else ():
+            out += [x for part in variant.split("\n") for x in _sentences(part)]
     if card:
         out += [render_tokens(f"{k}: {v}", settings) for k, v in card.items() if k != "valores"]
         out += [f"{k}: {v}" for k, v in (card.get("valores") or {}).items()]
         if (card.get("valores") or {}).get("event_date"):
             out.append(sender._fmt_date_es(card["valores"]["event_date"]))
+    return out
+
+
+def _fact_sentences(text: str) -> list[str]:
+    """Предложения-утверждения: без вопросов и без вводного «Gracias…/Hola…/Jaja…»."""
+    out = []
+    for part in (text or "").split("\n"):
+        for sent in _sentences(part):
+            sent = _GRACIAS_START_RE.sub("", sent).strip() if _THANKS_RE.match(sent) else sent
+            sent = re.sub(r"^\W*(?:hola|jaja\w*)\b[^.!?]*[.!?,]+\s*", "", sent, flags=re.IGNORECASE)
+            # «Incluye cena para 30 personas, ¿te late?» — утверждение с хвостом-вопросом
+            sent = re.sub(r"[,;:\s]*¿[^?]*\?\s*$", "", sent).strip()
+            if sent and not sent.endswith("?") and _words(sent):
+                out.append(sent)
     return out
 
 
@@ -656,15 +697,18 @@ async def verify_claims(bubbles: list[str], recs: list[dict], card: dict | None,
     if items is None:                       # старый формат ответа
         items = [{"texto": c, "respaldo": None} for c in out.get("sin_fuente") or []]
     sources = fact_sources(recs, card, settings or {})
-    claims = []
+    claims: list[str] = []
     for it in items:
         it = it if isinstance(it, dict) else {"texto": it, "respaldo": None}
-        texto = str(it.get("texto") or "").strip()
-        if not texto or texto.endswith("?") or _THANKS_RE.match(texto):
-            continue                        # вопрос или благодарность — не факт
-        if claim_supported(texto, sources, it.get("respaldo")):
-            continue
-        claims.append(texto)
+        for sent in _fact_sentences(str(it.get("texto") or "")):
+            if not claim_supported(sent, sources, it.get("respaldo")) and sent not in claims:
+                claims.append(sent)
+    # Страховка кодом: «опасные» темы проверяем сами, независимо от списка модели.
+    for b in bubbles:
+        for sent in _fact_sentences(b):
+            if any(rx.search(sent) for rx in _HARD_FACT_RES) and \
+                    not hard_fact_supported(sent, sources) and sent not in claims:
+                claims.append(sent)
     return claims
 
 
@@ -681,35 +725,53 @@ def promesa_de_anya(claims: list[str], historial: list[dict]) -> bool:
 SUMMARY_SYSTEM = (
     "Resume la parte antigua de una conversación de WhatsApp entre un cliente (lead) y Anna "
     "(asesora de una agencia de matchmaking). Escribe en español, máximo 120 palabras, en "
-    "viñetas: qué contó el cliente de sí mismo; qué preguntó; qué le prometieron (el bot o "
-    "Anna a mano); sus objeciones; en qué quedaron. SOLO lo que está en los mensajes, sin "
-    "suposiciones. Cifras solo citadas tal cual. Responde JSON: {\"resumen\": \"...\"}."
+    "viñetas: qué contó el cliente de sí mismo (solo lo que él escribió, autor lead); qué "
+    "preguntó; qué le prometió Anna escribiendo a mano (autor anya_manual); sus objeciones; en "
+    "qué quedaron. No copies datos sobre el evento, precios, pagos o la agencia que dijo el bot "
+    "(autor anna_bot): pueden tener errores. Si hay resumen_anterior, intégralo con los mensajes "
+    "nuevos sin perder lo que contó el cliente. SOLO lo que está en los mensajes, sin "
+    "suposiciones. Responde JSON: {\"resumen\": \"...\"}."
 )
 SUMMARY_LAG = 20
+# Сводка, которую не удалось записать в БД (008 не применена, сбой): держим в памяти процесса,
+# чтобы не пересчитывать её на каждом ответе (code-review 2026-10-22).
+_summary_cache: dict[str, tuple[str, int]] = {}
 
 
 async def maybe_refresh_summary(lead: dict, mem: dict, cost: Cost, force: bool = False) -> None:
-    """Сводка всего, что старше окна в 40 сообщений, если её нет или она отстала на 20+."""
+    """Сводка всего, что старше окна в 40 сообщений, если её нет или она отстала на 20+.
+    Накопительная: прошлая сводка + новые сообщения, ранние факты о лиде не теряются."""
     prior = mem["prior"]
     older = prior[:-memory.WINDOW]
-    if not older or not lead.get("phone"):
+    phone = lead.get("phone")
+    if not older or not phone:
         return
+    cached = _summary_cache.get(phone)
+    if cached and cached[1] > int(lead.get("memoria_mensajes") or 0):
+        lead["memoria_resumen"], lead["memoria_mensajes"] = cached
+        mem["resumen"] = cached[0]
     covered = int(lead.get("memoria_mensajes") or 0)
     if not force and lead.get("memoria_resumen") and len(older) - covered < SUMMARY_LAG:
         return
+    previo = lead.get("memoria_resumen") if 0 < covered <= len(older) else None
+    nuevos = older[covered:] if previo else older
     lines = [{"fecha": memory.fecha(m["created_at"]) if isinstance(m.get("created_at"), datetime)
               else None, "autor": memory.autor(m), "texto": m.get("text") or ""}
-             for m in older[-400:]]
-    out = await _chat(SUMMARY_MODEL, SUMMARY_SYSTEM, {"mensajes": lines}, cost,
-                      max_tokens=400, temperature=0)
+             for m in nuevos[-400:]]
+    payload = {"resumen_anterior": previo, "mensajes": lines}
+    out = await _chat(SUMMARY_MODEL, SUMMARY_SYSTEM, payload, cost, max_tokens=400, temperature=0)
     resumen = (out.get("resumen") or "").strip()
     if not resumen:
         return
     last_id = older[-1].get("id")
     try:
-        await db.update_memory_summary(lead["phone"], resumen, last_id, len(older))
-    except Exception:
-        logger.exception("rag: не сохранила сводку памяти [%s]", lead.get("phone"))
+        await db.update_memory_summary(phone, resumen, last_id, len(older))
+        _summary_cache.pop(phone, None)
+    except Exception as e:
+        logger.exception("rag: не сохранила сводку памяти [%s]", phone)
+        if phone not in _summary_cache:
+            await _tech_alert(f"сводка памяти не записалась (миграция 008?): {e!r}", phone)
+        _summary_cache[phone] = (resumen, len(older))
     lead["memoria_resumen"] = resumen
     lead["memoria_mensajes"] = len(older)
     mem["resumen"] = resumen
@@ -966,7 +1028,8 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     card = memory.evento_actual(settings)
     if card and name_rec:
         card["nombre"] = name_rec["contenido_es"]
-    context = build_context(lead, mem, fichas, always, user_text, card, datos_vivos(recs, mem))
+    vivos = datos_vivos(recs, mem)
+    context = build_context(lead, mem, fichas, always, user_text, card, vivos)
     meta["memoria_tokens"] = len(json.dumps(
         {k: context[k] for k in ("memoria", "historial", "calificacion")},
         ensure_ascii=False, default=str)) // 4
@@ -1026,7 +1089,10 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
         return reply
 
-    bubbles, reason, notes = check_reply(out["bubbles"], mem=mem, fichas=recs, lead=merged,
+    # Числа — из фич, которые модель видела (найденные + живые факты), и карточки ивента:
+    # «10,000» из тарифа услуги в ответе про ивент не пройдёт (code-review 2026-10-22).
+    seen_recs = fichas + [by_id[v["id"]] for v in vivos if v["id"] in by_id]
+    bubbles, reason, notes = check_reply(out["bubbles"], mem=mem, fichas=seen_recs, lead=merged,
                                          user_text=user_text,
                                          dio_algo=lead_dio_algo(user_text, out["extracted"]))
     meta["notas"] = notes

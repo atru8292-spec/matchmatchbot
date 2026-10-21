@@ -51,8 +51,10 @@ SLOT_QUESTION_RE = {
     "age": re.compile(r"qu[eé]\s+edad|cu[aá]ntos\s+a[ñn]os", re.IGNORECASE),
     "profession": re.compile(r"a\s+qu[eé]\s+te\s+dedicas|tu\s+profesi[oó]n|en\s+qu[eé]\s+trabajas",
                              re.IGNORECASE),
-    "photo": re.compile(r"(?:manda|env[ií]a|mandar|enviar)\w*\s+(?:una\s+|unas\s+)?fotos?",
-                        re.IGNORECASE),
+    # «mándame una foto», «que te mande una foto», «¿me pasas una foto tuya?», «compárteme
+    # una foto», «una foto tuya» (code-review 2026-10-22: «mande»/«pásame» не считались).
+    "photo": re.compile(r"(?:m[aá]nd|env[ií]|p[aá]s|compart|comp[aá]rt)\w*\s+(?:\w+\s+){0,3}fotos?\b(?!\s+de(?:l|\s+los)?\s+eventos?)|"
+                        r"fotos?\s+(?:tuyas?|de\s+ti)\b", re.IGNORECASE),
     "email": re.compile(r"correo", re.IGNORECASE),
 }
 _QUESTION_RE = re.compile(r"¿[^?]*\?|[^.!¿?\n]*\?")
@@ -211,7 +213,9 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
         if _SERVICE_PRICE_RE.search(text):
             out["precio_servicio_dado"] = when
         for slot in SLOT_QUESTION_RE:
-            if pregunta_slot(slot, text):
+            # Фото считаем только по текущему ивенту: старого лида, которого дважды просили
+            # фото год назад, не отправляем к Ане с первого сообщения (code-review 2026-10-22).
+            if pregunta_slot(slot, text) and (slot != "photo" or current):
                 out["preguntas_calificacion"][slot] += 1
         if not current:
             if _EVENT_TALK_RE.search(text):
