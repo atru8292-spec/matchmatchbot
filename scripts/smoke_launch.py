@@ -40,6 +40,7 @@ EVENT_SETTINGS = {
     "event_price_member": "",
     "event_price_nonmember": "6000",
     "event_price_old": "8,000",
+    "event_price_next": "7000",
     "event_link": "https://www.rusaencdmx.com/18-11-26-slavic-latino-night-halloween",
     "bot_paused": "0",
 }

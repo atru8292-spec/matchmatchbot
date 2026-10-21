@@ -134,7 +134,9 @@ def _is_link_request(text: str) -> bool:
 # app_settings в пути отправки бота (аналог _fill_event в планировщике для №47).
 _EVENT_VAR_KEYS = ("event_address", "event_date", "event_time",
                    "event_start", "event_end",
-                   "event_price_member", "event_price_nonmember")
+                   "event_price_member", "event_price_nonmember",
+                   # следующая ступень цены (сайт: 6000 → 7000 → 8000), режим rag
+                   "event_price_next")
 
 # Испанские месяцы для человекочитаемой даты в сообщениях лиду.
 _ES_MONTHS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",

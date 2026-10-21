@@ -217,10 +217,11 @@ _COMPANION_RE = re.compile(
     # «mi amigo y yo», «yo y mi novia», «nosotros dos»
     rf"\b{_COMPANION_DET}{_COMPANION_NOUN}\s+y\s+yo\b|\byo\s+y\s+{_COMPANION_DET}{_COMPANION_NOUN}\b|"
     r"\bnosotros\s+(?:dos|tres)\b|"
-    # количество: «para dos?», «dos boletos», «boletos para 2», «por persona», «somos tres»
+    # количество: «para dos?», «dos boletos», «boletos para 2», «somos tres». «¿cuánto por
+    # persona?» — НЕ спутник: обычный вопрос о цене от того, кто идёт один (владелица 2026-10-21).
     r"\bpara\s+(?:dos|tres|2|3)(?:\s+personas)?\s*(?:[?¿!.,]|$)|"
     r"\b(?:boletos?|entradas?|lugares|tickets?)\s+para\s+(?:dos|tres|2|3)\b|"
-    r"\b(?:dos|tres|2|3)\s+(?:boletos|entradas|lugares|tickets)\b|\bpor\s+persona\b|"
+    r"\b(?:dos|tres|2|3)\s+(?:boletos|entradas|lugares|tickets)\b|"
     r"\b(?:somos|vamos|ser[ií]amos|ir[ií]amos)\s+(?:dos|tres|cuatro|varios|2|3|4)\b|"
     # «ir en grupo / en pareja / acompañado», «precio por pareja», «es para parejas», 2x1
     rf"\b{_GO}\s+(?:en\s+grupo|en\s+pareja|acompa[ñn]ad[oa]s?)\b|"

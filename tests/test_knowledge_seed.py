@@ -1,8 +1,9 @@
 """Проверка knowledge/seed.json (база знаний режима rag): структура и правила владелицы.
 
 Тексты, которые может увидеть лид или модель (contenido_es, bueno, frases_ejemplo,
-como_responder), не содержат 5,500, сленга, запрещённых зачинов, длинного тире и больше
-одного эмодзи. Поля malo (только для тестов) и ru (только для ревью) не проверяются на это.
+como_responder), не содержат 5,500, сленга, запрещённых зачинов и фраз (conversation_rules),
+длинного тире и больше одного эмодзи. Поля malo (только для тестов) и ru (только для ревью)
+не проверяются на это. Факты ивента сверены с сайтом 21.10.2026.
 """
 from __future__ import annotations
 
@@ -11,6 +12,8 @@ import re
 from pathlib import Path
 
 import pytest
+
+import conversation_rules
 
 SEED = json.loads((Path(__file__).resolve().parent.parent / "knowledge" / "seed.json")
                   .read_text(encoding="utf-8"))
@@ -23,15 +26,10 @@ FIELDS = ["id", "tipo", "titulo", "contenido_es", "cuando_usar", "como_responder
 TIPOS = {"event", "service", "tariff", "faq", "objection", "policy", "style", "style_pair",
          "base_script"}
 TOKENS = {"[event_date]", "[event_start]", "[event_address]", "[event_price_nonmember]",
-          "[event_promo]", "[event_link]", "[course_link]", "[horario_llamada]"}
+          "[event_price_next]", "[event_link]", "[course_link]", "[horario_llamada]"}
+# Любая ссылка: токен билета, http(s), www., домен .com/.mx (code-review: www.… проходил мимо).
+LINK_RE = re.compile(r"\[event_link\]|https?://|\bwww\.|\b[\w-]+\.(?:com|mx)\b", re.IGNORECASE)
 EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
-SLANG_RE = re.compile(r"\b(porfa|ahorita|checa|checar|jaja\w*|chance|te\s+late|padre|[óo]rale|"
-                      r"oye|s[úu]per|guapo|perfil|embone)\b|¡va!|\bbase\s+de\b", re.IGNORECASE)
-BANNED_START_RE = re.compile(r"^\W*(gracias\s+por\s+tu\s+inter[eé]s|excelente\s+pregunta|"
-                             r"muy\s+buena\s+pregunta|qu[eé]\s+bueno\s+que|perfecto|claro|"
-                             r"con\s+mucho\s+gusto)", re.IGNORECASE)
-
-
 def _lead_facing(r: dict) -> list[str]:
     """Тексты, которые могут уйти лиду как есть. Записи tipo=style — инструкции модели со
     списками запрещённого (сами запрещённые слова там по назначению), их не считаем."""
@@ -44,6 +42,15 @@ def _lead_facing(r: dict) -> list[str]:
 def _model_facing(r: dict) -> list[str]:
     return _lead_facing(r) + [r["como_responder"] or "", r["notas_tono"] or "",
                               r["cuando_usar"] or ""]
+
+
+def _instructions(r: dict) -> list[str]:
+    """Инструкции модели (не слова лида): здесь не должно быть списков запрещённого."""
+    out = [r["titulo"] or "", r["como_responder"] or "", r["notas_tono"] or "",
+           r["por_que"] or ""]
+    if r["tipo"] == "style":
+        out.append(r["contenido_es"] or "")
+    return [t for t in out if t]
 
 
 def test_structure():
@@ -70,17 +77,26 @@ def test_one_emoji_max(r):
 
 
 @pytest.mark.parametrize("r", RECORDS, ids=lambda r: r["id"])
-def test_no_slang_no_em_dash(r):
+def test_lead_texts_clean(r):
+    """Зачины, фразы, сленг (conversation_rules) и длинное тире — нигде в текстах для лида."""
     for t in _lead_facing(r):
-        assert not SLANG_RE.search(t), f"{r['id']}: {SLANG_RE.search(t).group(0)!r} в {t}"
+        assert conversation_rules.violations(t) == [], f"{r['id']}: {t}"
         assert "—" not in t, f"{r['id']}: длинное тире"
 
 
 @pytest.mark.parametrize("r", RECORDS, ids=lambda r: r["id"])
-def test_no_banned_openers(r):
-    for t in _lead_facing(r):
-        for bubble in t.split("\n\n"):
-            assert not BANNED_START_RE.search(bubble), f"{r['id']}: {bubble}"
+def test_no_banned_lists_for_model(r):
+    """Решение владелицы: списки запрещённого не идут модели (она копирует из них слова)."""
+    for t in _instructions(r):
+        for rx in (conversation_rules.BANNED_PHRASE_RE, conversation_rules.SLANG_RE):
+            m = rx.search(t)
+            assert not m, f"{r['id']}: {m.group(0)!r} в инструкции: {t}"
+        for q in re.findall(r"«([^»]+)»", t):
+            assert not conversation_rules.violations(q), f"{r['id']}: цитата запрещённого «{q}»"
+
+
+def test_no_style_banned_openers_record():
+    assert not any(r["id"] == "style_banned_openers" for r in RECORDS)
 
 
 @pytest.mark.parametrize("r", RECORDS, ids=lambda r: r["id"])
@@ -88,11 +104,12 @@ def test_only_known_tokens(r):
     for t in _model_facing(r):
         for tok in re.findall(r"\[[a-z_]+\]", t):
             assert tok in TOKENS, f"{r['id']}: неизвестный токен {tok}"
+        assert "[event_promo]" not in t, f"{r['id']}: зачёркнутая «было» запрещена"
 
 
 def test_link_only_in_purchase_records():
     """Ссылка на билет — только в записи «как купить» (и в паре-образце про покупку)."""
-    with_link = {r["id"] for r in RECORDS if any("[event_link]" in t for t in _lead_facing(r))}
+    with_link = {r["id"] for r in RECORDS if any(LINK_RE.search(t) for t in _lead_facing(r))}
     assert with_link == {"event_how_to_buy", "pair_opener_perfecto", "pair_slang"}
 
 
@@ -138,13 +155,49 @@ def test_event_records_expire_with_event():
 
 def test_unconfirmed_numbers_not_served():
     unconfirmed = {r["id"] for r in RECORDS if not r["confirmado"]}
-    assert unconfirmed == {"service_women_3000", "service_women_ages", "service_women_location",
-                           "service_duration", "agency_events_28", "agency_clients_countries",
-                           "agency_social_followers"}
+    assert unconfirmed == {"event_attendees", "event_end_time", "event_unique",
+                           "service_women_ages", "service_women_location", "service_duration",
+                           "agency_clients_countries", "agency_social_followers",
+                           "pair_attendees", "pair_end_time"}
     for r in RECORDS:
         if r["confirmado"]:
-            for t in _lead_facing(r):
-                assert not re.search(r"3,?000|28 eventos|seguidores|24 y 40", t), r["id"]
+            for t in _lead_facing(r) + [r["como_responder"] or ""]:
+                assert not re.search(r"30\s+(?:mujeres|hombres)|30\s+y\s+30|[uú]nico\s+en\s+Am[eé]rica|"
+                                     r"medianoche|24\s+y\s+40|seguidores|6\s+meses|28\s+eventos",
+                                     t), f"{r['id']}: {t}"
+
+
+def test_site_facts_2026_10_21():
+    """Сверено с сайтом rusaencdmx.com/18-11-26-slavic-latino-night-halloween."""
+    by_id = {r["id"]: r for r in RECORDS}
+    assert by_id["event_name"]["contenido_es"] == "El evento se llama Slavic-Latino Connect Night."
+    assert "Slavic-Latino Connect Night" in by_id["greeting_event"]["contenido_es"]
+    assert "30" not in by_id["greeting_event"]["contenido_es"]
+    assert by_id["event_single_confirmation"]["contenido_es"] == \
+        "Al comprar el boleto confirmas que estás soltero."
+    assert by_id["event_number_30"]["contenido_es"] == "Este es nuestro evento número 30."
+    assert by_id["event_couples_found"]["contenido_es"] == \
+        "Docenas de personas ya han encontrado a su pareja en nuestros eventos."
+    assert by_id["service_women_3000"]["confirmado"] is True
+    assert "[event_price_next]" in by_id["event_price_steps"]["contenido_es"]
+    for r in RECORDS:
+        for t in _model_facing(r):
+            assert "Slavic Latino Night" not in t and "entrantes" not in t, r["id"]
+    for rid in ("event_price", "event_includes", "obj_event_price"):
+        assert "botanas" in by_id[rid]["contenido_es"], rid
+
+
+def test_objections_without_praise():
+    by_id = {r["id"]: r for r in RECORDS}
+    assert by_id["obj_service_price"]["contenido_es"] == \
+        "Cada mujer la elijo a mano pensando en ti, y te acompaño en todo el proceso."
+    assert "vale la pena" not in by_id["obj_price_increase"]["contenido_es"]
+    assert by_id["obj_event_price"]["contenido_es"].startswith("Te entiendo, no es poco.")
+
+
+def test_greeting_service_asks_directly():
+    t = next(r for r in RECORDS if r["id"] == "greeting_service")["contenido_es"]
+    assert t.split("\n\n")[-1] == "¿Cómo te llamas y estás soltero?"
 
 
 def test_end_time_only_approximate():

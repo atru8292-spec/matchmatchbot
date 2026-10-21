@@ -48,7 +48,6 @@ COMPANION = [
     "¿podemos ir yo y mi novia?",
     "nosotros dos queremos boletos",
     "¿puedo llevar a alguien?",
-    "¿cuánto por persona?",
     "voy con mi compa",
     "¿puedo ir con mi chava?",
     "¿y con mi novia?",
@@ -71,6 +70,8 @@ NOT_COMPANION = [
     "me separé de mi esposa",
     "quiero formar una familia con mi pareja ideal",
     "¿cuántas personas van?",
+    "¿cuánto por persona?",         # обычный вопрос о цене, идёт один
+    "¿cuál es el precio por persona?",
     "¿cuánto cuesta?",
     "quiero conocer a una mujer eslava",
     "en dos semanas te aviso",
