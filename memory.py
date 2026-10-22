@@ -177,7 +177,7 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
         "objeciones": [], "preguntas_sin_respuesta": [],
         "boleto_comprado": lead.get("funnel_stage") == "event_attended",
         "llamada_agendada": None, "ana_escribio_a_mano": None, "pasado": [],
-        "datos_vivos_dados": [],
+        "hechos_dichos": [],
     }
     link = (settings.get("event_link") or "").strip()
     price = settings.get("event_price_nonmember") or ""
@@ -230,9 +230,9 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
             out["direccion_dada"] = when
         if "halloween" in text.lower():
             out["halloween_mencionado"] = when
-        for rid, rx in DATOS_VIVOS.items():
-            if rx.search(text) and rid not in out["datos_vivos_dados"]:
-                out["datos_vivos_dados"].append(rid)
+        for tema in hechos_en(text, settings):
+            if tema not in out["hechos_dichos"]:
+                out["hechos_dichos"].append(tema)
 
     out["objeciones"] = out["objeciones"][-5:]
     out["preguntas_sin_respuesta"] = out["preguntas_sin_respuesta"][-3:]
@@ -245,17 +245,32 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
     return out
 
 
-# Живые факты для мягкой продажи (решение владелицы 2026-10-22): после ответа на вопрос лида
-# бот добавляет либо вопрос по слоту, либо один такой факт, не повторяя уже сказанные.
-DATOS_VIVOS = {
-    "event_halloween": re.compile(r"halloween", re.IGNORECASE),
-    "event_number_30": re.compile(r"n[uú]mero\s+30|evento\s+30\b|30\s*[º°]", re.IGNORECASE),
-    "event_couples_found": re.compile(r"encontrado\s+(?:a\s+)?(?:su\s+)?pareja|encontraron\s+pareja",
-                                      re.IGNORECASE),
-    "event_includes": re.compile(r"botanas", re.IGNORECASE),
-    "event_networking": re.compile(r"networking|contactos\s+de\s+negocio|hacen\s+amigos",
-                                   re.IGNORECASE),
+# Темы фактов про ивент в ответе Анны (решение владелицы 2026-10-22: факт — только на вопрос
+# лида и без повтора). ya_hecho.hechos_dichos — какие темы уже звучали по текущему ивенту.
+_MONTHS = r"enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre"
+HECHOS = {
+    "halloween": re.compile(r"halloween|disfra|m[aá]scara|tem[aá]tic", re.IGNORECASE),
+    "evento_30": re.compile(r"n[uú]mero\s+30|evento\s+30\b|30\s*[º°]", re.IGNORECASE),
+    "parejas": re.compile(r"(?:encontrado|encontraron|encuentran)\s+(?:a\s+)?(?:su\s+)?pareja",
+                          re.IGNORECASE),
+    "incluye": re.compile(r"botanas|bebida\s+de\s+bienvenida", re.IGNORECASE),
+    "ambiente": re.compile(r"networking|contactos\s+de\s+negocio|hacen\s+amigos|conocer\s+gente",
+                           re.IGNORECASE),
+    "fecha": re.compile(rf"\[event_date\]|\b\d{{1,2}}\s+de\s+(?:{_MONTHS})", re.IGNORECASE),
+    "hora": re.compile(r"\[event_start\]|\b\d{1,2}:\d{2}|\b\d{1,2}\s*(?:pm|am|p\.\s*m\.)",
+                       re.IGNORECASE),
+    "lugar": re.compile(r"\[event_address\]", re.IGNORECASE),
+    "precio": re.compile(r"\[event_price_(?:nonmember|next)\]|\bMXN\b", re.IGNORECASE),
 }
+
+
+def hechos_en(text: str, settings: dict) -> set[str]:
+    """Темы фактов про ивент в тексте (место — по первой части адреса из настроек)."""
+    out = {tema for tema, rx in HECHOS.items() if rx.search(text or "")}
+    place = (settings.get("event_address") or "").split(",")[0].strip().lower()
+    if place and place in (text or "").lower():
+        out.add("lugar")
+    return out
 
 
 def ultima_respuesta(prior: list[dict]) -> str | None:

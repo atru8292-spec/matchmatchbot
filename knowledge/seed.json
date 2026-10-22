@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-21",
+  "version": "2026-10-22",
   "evento_actual": "2026-11-18-slavic-latino-night",
   "nota": "Fuente de la base de conocimiento del modo rag. Campo 'ru' es solo para revisión (nunca va al modelo). Campo 'malo' de style_pair va solo a pruebas, nunca al prompt. Tokens [event_*], [course_link], [horario_llamada] los sustituye el sistema.",
   "records": [
@@ -9,7 +9,7 @@
       "titulo": "Qué es el evento",
       "contenido_es": "Es una noche para conocer en persona a mujeres eslavas solteras que buscan una relación seria.",
       "cuando_usar": "¿de qué se trata el evento?, ¿qué es el evento?, ¿cómo es el evento?, cuéntame del evento, info del evento",
-      "como_responder": "Responde con esta frase. Puedes sumar UN dato (Halloween) si no está en ya_hecho. Sin precio ni enlace si no los pidió.",
+      "como_responder": "Responde con esta frase. Sin sumar otros datos del evento, precio ni enlace si no los pidió.",
       "notas_tono": null,
       "frases_ejemplo": [],
       "malo": null,
@@ -234,7 +234,7 @@
       "titulo": "Temática Halloween",
       "contenido_es": "Es temática de Halloween: puedes venir disfrazado y, si no tienes disfraz, los organizadores te dan una máscara.",
       "cuando_usar": "¿hay que ir disfrazado?, ¿cómo me visto?, vestimenta, dress code, ¿es de Halloween?, disfraz, máscara",
-      "como_responder": "Menciónalo una sola vez en la conversación (ver ya_hecho). Si pregunta cómo vestirse fuera del disfraz, no inventes un código de vestimenta: falta_dato.",
+      "como_responder": "Solo si pregunta por el disfraz, la temática o cómo vestirse; no lo repitas si ya se dijo, salvo que pregunte otra vez. Si pregunta cómo vestirse fuera del disfraz, no inventes un código de vestimenta: falta_dato.",
       "notas_tono": null,
       "frases_ejemplo": [],
       "malo": null,
@@ -275,7 +275,7 @@
       "valid_from": "2026-10-21",
       "valid_to": "2026-11-18",
       "activo": true,
-      "fuente": "следует из №2 и промпта: без костюма организаторы дают маску (проверить у владелицы)",
+      "fuente": "подтверждено владелицей 2026-10-22; сайт: «Puedes venir disfrazado o, si lo prefieres, nosotros te proporcionaremos una máscara»",
       "ru": "Костюм не обязателен."
     },
     {
@@ -359,7 +359,7 @@
       "titulo": "Ambiente y networking",
       "contenido_es": "También es un buen espacio para conocer gente: además de pareja, muchos hacen amigos y contactos de negocio.",
       "cuando_usar": "¿qué tipo de gente va?, ¿vale la pena?, ¿cómo es el ambiente?",
-      "como_responder": "Úsalo solo como dato de apoyo, una vez, sin convertirlo en testimonios.",
+      "como_responder": "Solo si el lead pregunta por esto; si ya se dijo (ya_hecho.hechos_dichos), no lo repitas salvo que pregunte otra vez. Sin convertirlo en testimonios.",
       "notas_tono": null,
       "frases_ejemplo": [],
       "malo": null,
@@ -384,7 +384,7 @@
       "titulo": "Evento único",
       "contenido_es": "Es un evento único en América Latina.",
       "cuando_usar": "¿hay otros eventos así?, ¿qué tiene de especial?",
-      "como_responder": "Dato de apoyo, no lo repitas.",
+      "como_responder": "Solo si el lead pregunta por esto; si ya se dijo (ya_hecho.hechos_dichos), no lo repitas salvo que pregunte otra vez.",
       "notas_tono": null,
       "frases_ejemplo": [],
       "malo": null,
@@ -525,7 +525,7 @@
       "valid_from": "2026-10-21",
       "valid_to": "2026-11-18",
       "activo": true,
-      "fuente": "решение владелицы 2026-10-21/22 (ответ до фото)",
+      "fuente": "решение и подтверждение владелицы 2026-10-22 (ответ до фото)",
       "ru": "Билет покупается онлайн, на странице ивента."
     },
     {
@@ -959,7 +959,7 @@
       "titulo": "Evento número 30",
       "contenido_es": "Este es nuestro evento número 30.",
       "cuando_usar": "¿cuántos eventos han hecho?, ¿es seguro?, ¿tienen experiencia?, ¿es el primero?",
-      "como_responder": "Dato de apoyo, una vez.",
+      "como_responder": "Solo si el lead pregunta por esto; si ya se dijo (ya_hecho.hechos_dichos), no lo repitas salvo que pregunte otra vez.",
       "notas_tono": null,
       "frases_ejemplo": [],
       "malo": null,
@@ -984,7 +984,7 @@
       "titulo": "Parejas en los eventos",
       "contenido_es": "Docenas de personas ya han encontrado a su pareja en nuestros eventos.",
       "cuando_usar": "¿funciona el evento?, ¿alguien ha encontrado pareja?, ¿vale la pena ir?",
-      "como_responder": "Dato de apoyo, una vez, sin convertirlo en testimonios ni inventar historias.",
+      "como_responder": "Solo si el lead pregunta por esto; si ya se dijo (ya_hecho.hechos_dichos), no lo repitas salvo que pregunte otra vez. Sin testimonios ni historias inventadas.",
       "notas_tono": null,
       "frases_ejemplo": [],
       "malo": null,

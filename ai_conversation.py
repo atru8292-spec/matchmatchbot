@@ -417,11 +417,17 @@ _COMPLIMENT_RE = re.compile(
     re.IGNORECASE)
 
 
-def lead_dio_algo(user_text: str, extracted: dict) -> bool:
-    """Лид что-то дал: данные о себе, фото или комплимент — тогда «Gracias» уместно."""
-    datos = {k: v for k, v in (extracted or {}).items() if k != "interest" and v not in (None, "")}
+_LEAD_THANKS_RE = re.compile(r"\bgracias\b|\bte\s+agradezco\b|\bmuy\s+amable\b", re.IGNORECASE)
+
+
+def lead_dio_algo(user_text: str, extracted: dict, lead: dict | None = None) -> bool:
+    """Лид что-то дал: новые данные о себе, фото, благодарность или комплимент — тогда
+    «Gracias» уместно. Данные, которые уже были в профиле, новыми не считаются."""
+    lead = lead or {}
+    datos = {k: v for k, v in (extracted or {}).items()
+             if k != "interest" and v not in (None, "") and lead.get(k) != v}
     return bool(datos) or "[фото одобрено" in (user_text or "") or \
-        bool(_COMPLIMENT_RE.search(user_text or ""))
+        bool(_COMPLIMENT_RE.search(user_text or "")) or bool(_LEAD_THANKS_RE.search(user_text or ""))
 
 
 def drop_repeated_slot_question(bubbles: list[str], last_reply: str | None,
@@ -516,9 +522,106 @@ def purchase_before_photo(bubbles: list[str], mem: dict, user_text: str) -> list
     return out or bubbles
 
 
+# Темы, о которых лид спросил (факт по теме в ответе уместен). Ключи — как memory.HECHOS.
+_ASK_TEMA = {
+    "halloween": re.compile(r"disfra|halloween|m[aá]scara|tem[aá]tic|vest|ropa|dress|c[oó]digo",
+                            re.IGNORECASE),
+    "evento_30": re.compile(r"cu[aá]ntos\s+eventos|experiencia|primer|segur|confiable|\breal\b|"
+                            r"estafa|cu[aá]nto\s+tiempo\s+llevan", re.IGNORECASE),
+    "parejas": re.compile(r"funciona|resultad|pareja|vale\s+la\s+pena|[eé]xito|\bsirve", re.IGNORECASE),
+    "incluye": re.compile(r"inclu|botana|bebida|comida|cena|trago|alcohol|barra", re.IGNORECASE),
+    "ambiente": re.compile(r"gente|ambiente|amig|negocio|networking|qui[eé]n(?:es)?\s+va|tipo\s+de",
+                           re.IGNORECASE),
+    "fecha": re.compile(r"cu[aá]ndo|fecha|\bd[ií]a\b", re.IGNORECASE),
+    "hora": re.compile(r"\bhora|cu[aá]ndo|empieza|inicia|termina|acaba", re.IGNORECASE),
+    "lugar": re.compile(r"d[oó]nde|lugar|direcci|ubicaci|\bzona|\bsede|c[oó]mo\s+llego", re.IGNORECASE),
+    "precio": re.compile(r"cu[aá]nto|precio|cuesta|costo|cobran|\bcar[oa]\b|\bpag|compr|boleto",
+                         re.IGNORECASE),
+}
+# Общий вопрос про ивент или услугу («¿de qué se trata?») — можно рассказать, но без повтора.
+_BROAD_ASK_RE = re.compile(r"de\s+qu[eé]\s+(?:se\s+trata|va|es)|c[oó]mo\s+(?:es|funciona|ser[aá])|"
+                           r"cu[eé]ntame|m[aá]s\s+(?:info|detalles)|\binfo\b|informaci[oó]n|detalles|"
+                           r"qu[eé]\s+es\s+(?:el|eso|esto)", re.IGNORECASE)
+
+
+def temas_preguntados(user_text: str) -> set[str]:
+    return {tema for tema, rx in _ASK_TEMA.items() if rx.search(user_text or "")}
+
+
+def drop_unasked_facts(bubbles: list[str], user_text: str, mem: dict) -> list[str]:
+    """Факт про ивент — только на вопрос лида (решение владелицы 2026-10-22).
+    Убираем предложения с фактом, о котором лид не спрашивал: «Por cierto, el evento… es el 18
+    de noviembre» после разговора о футболе, «Este es nuestro evento número 30.» после имени.
+    На общий вопрос («¿de qué se trata?», возражение по цене) факт можно, но не уже сказанный
+    (ya_hecho.hechos_dichos). Не трогаем: ход с одобренным фото (рассказ, ссылка, видео),
+    ответ со ссылкой (покупка), вопросы и пересказ «la última vez platicamos…» после долгой паузы."""
+    if "[фото одобрено" in (user_text or ""):
+        return bubbles
+    settings = mem["settings"]
+    link = (settings.get("event_link") or "").strip()
+    if any("[event_link]" in b or (link and link in b) for b in bubbles):
+        return bubbles
+    asked = temas_preguntados(user_text)
+    broad = bool(_BROAD_ASK_RE.search(user_text or "") or memory._PRICE_OBJECTION_RE.search(user_text or ""))
+    said = set(mem["ya_hecho"].get("hechos_dichos") or [])
+
+    def unasked(sent):
+        if "?" in sent or (mem.get("regreso") == "largo" and _RECAP_RE.match(sent)):
+            return False
+        temas = memory.hechos_en(sent, settings)
+        if not temas or temas & asked:
+            return False
+        return not broad or bool(temas & said)
+    out = [_drop_sentences(b, unasked) for b in bubbles]
+    return [b for b in out if b.strip() and _words(b)]
+
+
+_SLOT_QUESTIONS = {
+    ("name", "is_single"): "¿Cómo te llamas y estás soltero?", ("name",): "¿Cómo te llamas?",
+    ("is_single",): "¿Estás soltero?",
+    ("age", "profession"): "¿Cuántos años tienes y a qué te dedicas?", ("age",): "¿Cuántos años tienes?",
+    ("profession",): "¿A qué te dedicas?", ("photo",): PHOTO_REQUEST,
+}
+
+
+def slot_question(cal: dict) -> str | None:
+    """Готовый вопрос по следующему слоту (имя и «холост ли» вместе, возраст и профессия
+    вместе), если его сейчас можно задать. None — спрашивать нечего или не время."""
+    nxt = cal.get("siguiente")
+    if not nxt or not cal.get("puede_preguntar"):
+        return None
+    pair = {"name": ("name", "is_single"), "is_single": ("name", "is_single"),
+            "age": ("age", "profession"), "profession": ("age", "profession")}.get(nxt, (nxt,))
+    tenemos = cal.get("tenemos") or {}
+    missing = tuple(s for s in pair if not (tenemos.get(s) is True if s == "is_single" else tenemos.get(s)))
+    return _SLOT_QUESTIONS.get(missing or (nxt,))
+
+
+def paso_extra_ok(paso: dict, cal: dict) -> str | None:
+    """Дополнительный шаг модели — только вопрос по слоту, который сейчас можно задать.
+    Факт или другой вопрос «вдогонку» не берём."""
+    texto = (paso or {}).get("texto") or ""
+    if (paso or {}).get("tipo") != "pregunta" or "?" not in texto or not cal.get("puede_preguntar"):
+        return None
+    return texto if any(memory.pregunta_slot(s, texto) for s in memory.SLOT_QUESTION_RE) else None
+
+
+def add_slot_question(bubbles: list[str], question: str | None, user_text: str,
+                      answered: set[str] | frozenset) -> list[str]:
+    """Лид ответил на вопрос по слоту (или просто написал, ничего не спросив) — следующий
+    ход сразу следующий вопрос по слоту: «me llamo Javier, sí soltero» → «¡Gracias, Javier! 😊
+    ¿Cuántos años tienes y a qué te dedicas?». Если лид сам спросил — вопрос не обязателен."""
+    if not question or any("?" in b for b in bubbles):
+        return bubbles
+    if "?" in (user_text or "") and not answered:
+        return bubbles
+    return bubbles + [question]
+
+
 def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict,
                 user_text: str, dio_algo: bool = True,
-                answered: set[str] | frozenset = frozenset()) -> tuple[list[str], str | None, list[str]]:
+                answered: set[str] | frozenset = frozenset(),
+                pregunta_siguiente: str | None = None) -> tuple[list[str], str | None, list[str]]:
     """Проверки кодом. Возвращает (пузыри, причина silent или None, список правок)."""
     notes: list[str] = []
     settings, ya, cal = mem["settings"], mem["ya_hecho"], mem["calificacion"]
@@ -570,6 +673,18 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         if new != bubbles:
             notes.append("убрала повторную презентацию")
             bubbles = new
+    # Факт без вопроса лида убираем; на его место — следующий вопрос по слоту, если он нужен.
+    # Если от ответа ничего не остаётся — оставляем как есть: ложное молчание хуже.
+    trimmed = drop_unasked_facts(bubbles, user_text, mem)
+    new = add_slot_question(trimmed, pregunta_siguiente, user_text, answered)
+    if not new:
+        notes.append("факт без вопроса лида оставлен: без него ответ пустой")
+    else:
+        if trimmed != bubbles:
+            notes.append("убрала факт без вопроса лида")
+        if new != trimmed:
+            notes.append("добавила вопрос по следующему слоту")
+        bubbles = new
     new = drop_repeated_slot_question(bubbles, mem.get("ultimo_mensaje_anna"), answered)
     if new != bubbles:
         notes.append("убрала повтор вопроса по слоту")
@@ -958,8 +1073,11 @@ def _parse_model(raw: dict) -> dict:
     raw_ex = raw.get("extracted") or {}
     extracted = {k: raw_ex.get(k) for k in ai._EXTRACTED_KEYS if raw_ex.get(k) is not None}
     stage = raw.get("funnel_stage")
+    paso = raw.get("paso_extra") if isinstance(raw.get("paso_extra"), dict) else {}
     return {
         "bubbles": [str(b).strip() for b in bubbles if str(b).strip()],
+        "paso_extra": {"tipo": paso.get("tipo") if paso.get("tipo") == "pregunta" else None,
+                       "texto": str(paso.get("texto") or "").strip()},
         "accion": "silent" if raw.get("accion") == "silent" else "respond",
         "fuentes": [str(f) for f in (raw.get("fuentes") or [])],
         "falta_dato": bool(raw.get("falta_dato")),
@@ -974,34 +1092,10 @@ def _parse_model(raw: dict) -> dict:
     }
 
 
-def datos_vivos(recs: list[dict], mem: dict) -> list[dict]:
-    """Живые факты для мягкой продажи, ещё не сказанные лиду (только ивент)."""
-    if mem["calificacion"]["ruta"] == "servicio":
-        return []
-    dados = set(mem["ya_hecho"].get("datos_vivos_dados") or [])
-    by_id = {r["id"]: r for r in recs}
-    return [{"id": rid, "texto": by_id[rid]["contenido_es"]} for rid in memory.DATOS_VIVOS
-            if rid in by_id and rid not in dados and by_id[rid].get("contenido_es")]
-
-
-def extra_toca(mem: dict) -> str:
-    """Что добавить после ответа: «pregunta» (вопрос по слоту) или «dato» (живой факт).
-    Чередуем: если в прошлом ответе уже был вопрос по слоту — теперь факт."""
-    cal = mem["calificacion"]
-    last = mem.get("ultimo_mensaje_anna")
-    if mem.get("compra_pendiente") and cal.get("siguiente") in ("name", "is_single", "photo") \
-            and not memory.pregunta_slot(cal["siguiente"], last):
-        return "pregunta"          # хочет купить: следующий шаг — то, чего не хватает для ссылки
-    if any(memory.pregunta_slot(s, last) for s in memory.SLOT_QUESTION_RE):
-        return "dato"
-    return "pregunta" if cal.get("puede_preguntar") else "dato"
-
-
 def build_context(lead: dict, mem: dict, fichas: list[dict], always: dict, user_text: str,
-                  card: dict | None, vivos: list[dict] | None = None) -> dict:
+                  card: dict | None) -> dict:
     cal = {k: v for k, v in mem["calificacion"].items()}
     cal["compra_pendiente"] = bool(mem.get("compra_pendiente"))
-    cal["extra_toca"] = extra_toca(mem)
     return {
         "ahora_cdmx": ai._ahora_cdmx(),
         "evento_actual": card,
@@ -1017,12 +1111,37 @@ def build_context(lead: dict, mem: dict, fichas: list[dict], always: dict, user_
         "regreso": mem["regreso"],
         "historial": mem["historial"],
         "fichas": [knowledge.ficha_for_model(f) for f in fichas],
-        "datos_vivos": vivos or [],
         "estilo": always["estilo"],
         "ejemplos_buenos": always["ejemplos_buenos"],
         "lead": {"nombre": lead.get("name") or ai._plausible_name(lead.get("whatsapp_name"))},
         "lead_message": user_text,
     }
+
+
+def revisar(out: dict, mem: dict, lead: dict, merged: dict, user_text: str,
+            fichas: list[dict]) -> tuple[list[str], str | None, list[str]]:
+    """Ответ модели → пузыри для лида: основной ответ плюс не больше одного шага (вопрос по
+    слоту из paso_extra или следующий вопрос по слоту кодом), затем все проверки check_reply.
+    lead — профиль до этого сообщения, merged — с данными из него."""
+    answered = {k for k, v in out["extracted"].items() if v not in (None, "")}
+    # Слоты с учётом данных из этого сообщения. Лид ответил на вопрос — прошлый вопрос не
+    # «проигнорирован», оставшееся можно спросить сразу.
+    cal_next = memory.calificacion(merged, mem["ya_hecho"], user_text,
+                                   None if answered else mem["ultimo_mensaje_anna"],
+                                   compra=bool(mem.get("compra_pendiente")))
+    bubbles = list(out["bubbles"])
+    paso = paso_extra_ok(out.get("paso_extra") or {}, cal_next)
+    if paso:
+        bubbles.append(paso)
+    # Числа — из фич, которые модель видела, и карточки ивента: «10,000» из тарифа услуги
+    # в ответе про ивент не пройдёт (code-review 2026-10-22).
+    bubbles, reason, notes = check_reply(bubbles, mem=mem, fichas=fichas, lead=merged,
+                                         user_text=user_text,
+                                         dio_algo=lead_dio_algo(user_text, out["extracted"], lead),
+                                         answered=answered, pregunta_siguiente=slot_question(cal_next))
+    if (out.get("paso_extra") or {}).get("texto") and not paso:
+        notes.append("paso_extra не вопрос по слоту — убран")
+    return bubbles, reason, notes
 
 
 async def _verbatim_scenario(vec: list[float]) -> dict | None:
@@ -1138,8 +1257,7 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     card = memory.evento_actual(settings)
     if card and name_rec:
         card["nombre"] = name_rec["contenido_es"]
-    vivos = datos_vivos(recs, mem)
-    context = build_context(lead, mem, fichas, always, user_text, card, vivos)
+    context = build_context(lead, mem, fichas, always, user_text, card)
     meta["memoria_tokens"] = len(json.dumps(
         {k: context[k] for k in ("memoria", "historial", "calificacion")},
         ensure_ascii=False, default=str)) // 4
@@ -1199,14 +1317,7 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
         return reply
 
-    # Числа — из фич, которые модель видела (найденные + живые факты), и карточки ивента:
-    # «10,000» из тарифа услуги в ответе про ивент не пройдёт (code-review 2026-10-22).
-    seen_recs = fichas + [by_id[v["id"]] for v in vivos if v["id"] in by_id]
-    bubbles, reason, notes = check_reply(out["bubbles"], mem=mem, fichas=seen_recs, lead=merged,
-                                         user_text=user_text,
-                                         dio_algo=lead_dio_algo(user_text, out["extracted"]),
-                                         answered={k for k, v in out["extracted"].items()
-                                                   if v not in (None, "")})
+    bubbles, reason, notes = revisar(out, mem, lead, merged, user_text, fichas)
     meta["notas"] = notes
     if reason:
         return _silent(reason, **extra)

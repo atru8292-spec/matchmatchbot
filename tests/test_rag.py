@@ -311,9 +311,9 @@ class TestCheckReply:
         assert b == ["Uno 🤍", "Dos 😊", "Tres"]
 
     def test_repeated_reaction_dropped(self):
-        b, _, _ = check(["¡Qué bien! Es en Polanco, CDMX."], inicios_recientes=["que bien", None])
+        b, _, _ = check(["¡Qué bien! Es en Polanco, CDMX."], user_text="¿dónde es?", inicios_recientes=["que bien", None])
         assert b == ["Es en Polanco, CDMX."]
-        b, _, _ = check(["¡Qué bien! Es en Polanco, CDMX."], inicios_recientes=["jaja"])
+        b, _, _ = check(["¡Qué bien! Es en Polanco, CDMX."], user_text="¿dónde es?", inicios_recientes=["jaja"])
         assert b == ["¡Qué bien! Es en Polanco, CDMX."]
 
     def test_laugh_allowed(self):
@@ -326,9 +326,9 @@ class TestCheckReply:
         assert rag._caption_within_budget("Video 🎬", ["A 🤍"]) == "Video 🎬"
 
     def test_banned_opener_stripped(self):
-        b, _, _ = check(["¡Gracias por tu interés! Es en Polanco, CDMX."])
+        b, _, _ = check(["¡Gracias por tu interés! Es en Polanco, CDMX."], user_text="¿dónde es?")
         assert b == ["Es en Polanco, CDMX."]
-        b, _, _ = check(["¡Perfecto! Es en Polanco, CDMX. Te va a encantar."])
+        b, _, _ = check(["¡Perfecto! Es en Polanco, CDMX. Te va a encantar."], user_text="¿dónde es?")
         assert b == ["Es en Polanco, CDMX."]
 
     def test_name_at_start_stripped(self):
@@ -342,7 +342,7 @@ class TestCheckReply:
         assert b == ["Es en Polanco, CDMX."]
 
     def test_slang_sentence_removed(self):
-        b, _, _ = check(["Es en Polanco, CDMX. Checa el link porfa."])
+        b, _, _ = check(["Es en Polanco, CDMX. Checa el link porfa."], user_text="¿dónde es?")
         assert b == ["Es en Polanco, CDMX."]
 
     def test_service_price_blocked_in_calificacion(self):
@@ -759,11 +759,12 @@ class TestReviewFixes:
 
     def test_claro_reaction_allowed(self):
         """«¡Claro!» как реакция на слова лида разрешено (решение владелицы 2026-10-21)."""
-        b, _, _ = check(["¡Claro! Es en Polanco, CDMX."])
+        b, _, _ = check(["¡Claro! Es en Polanco, CDMX."], user_text="¿dónde es?")
         assert b == ["¡Claro! Es en Polanco, CDMX."]
 
     def test_multiline_bubble_preserved(self):
-        b, _, _ = check(["Ahora cuesta 6000 MXN.\nIncluye bebida de bienvenida y botanas."])
+        b, _, _ = check(["Ahora cuesta 6000 MXN.\nIncluye bebida de bienvenida y botanas."],
+                        user_text="¿cuánto cuesta y qué incluye?")
         assert "\n" in b[0]
 
     def test_variation_selector_removed(self):
@@ -1061,12 +1062,12 @@ class TestToneAndSale:
         assert by["event_price"]["contenido_es"] == "Ahora cuesta [event_price_nonmember] MXN."
         assert "event_price_steps" not in by
 
-    def test_live_facts_not_repeated_and_alternate(self):
-        ya = memory.ya_hecho([msg("anna", "Es temática de Halloween.", 5)], {}, SETTINGS, EVENT_DESDE, NOW)
-        mem = _mem(ya_hecho=ya, ultimo_mensaje_anna="Es temática de Halloween.")
-        ids = [d["id"] for d in rag.datos_vivos(knowledge.usable(SEED, SETTINGS, "2026-10-21"), mem)]
-        assert "event_halloween" not in ids and "event_number_30" in ids
-        assert rag.extra_toca(_mem(ultimo_mensaje_anna="¿Cuántos años tienes?")) == "dato"
+    def test_facts_said_are_tracked(self):
+        ya = memory.ya_hecho([msg("anna", "Es temática de Halloween.", 5),
+                              msg("anna", "Es en Polanco, CDMX, el 18 de noviembre.", 4)],
+                             {}, SETTINGS, EVENT_DESDE, NOW)
+        assert {"halloween", "lugar", "fecha"} <= set(ya["hechos_dichos"])
+        assert "evento_30" not in ya["hechos_dichos"]
 
 
 OLD_LIES = [msg("lead", "¿cuántas van?", 60),
@@ -1448,7 +1449,6 @@ class TestLiveRun2Fixes:
                                         mem, "ok, ¿cómo compro el boleto?")
         assert out == ["El pago se hace en la página y el boleto te llega por correo.",
                        rag.PHOTO_REQUEST]
-        assert rag.extra_toca({**mem, "compra_pendiente": True}) == "pregunta"
 
     def test_orphan_me_la_fixed(self):
         mem, _ = self._mem_buy()
@@ -1462,3 +1462,194 @@ class TestLiveRun2Fixes:
         out = rag.purchase_before_photo(["Solo me falta una foto tuya para continuar, ¿me la puedes mandar?"],
                                         mem, "¿y cómo se paga el boleto?")
         assert "continuar" not in " ".join(out) and "foto" in " ".join(out)
+
+
+# ───────── логика разговора (решение владелицы 2026-10-22, тексты живого прогона 2) ─────────
+
+GREETING_EVENT = BY_ID["greeting_event"]["contenido_es"].split("\n\n")
+RUN2_BASE = ([msg("lead", "hola, vi el evento", 30)] + [msg("anna", b, 29) for b in GREETING_EVENT]
+             + [msg("lead", "Me llamo Carlos y sí, estoy soltero", 25),
+                msg("anna", "¡Qué bien, Carlos! ¿Tienes alguna duda sobre el evento?", 24)])
+CARLOS = {"name": "Carlos", "is_single": True, "interest": "event", "funnel_stage": "qualifying"}
+
+
+def revisar(bubbles, user_text, lead, prior, extracted=None, paso=None, desde=EVENT_DESDE):
+    """Как _generate: память из переписки, потом rag.revisar (paso_extra, вопрос по слоту, проверки)."""
+    ya = memory.ya_hecho(prior, lead, SETTINGS, desde, NOW)
+    last = memory.ultima_respuesta(prior)
+    mem = {"settings": SETTINGS, "ya_hecho": ya, "regreso": memory.regreso(prior, NOW),
+           "calificacion": memory.calificacion(lead, ya, user_text, last),
+           "ultimo_mensaje_anna": last, "lead_texts": [user_text], "historial": [], "resumen": None,
+           "compra_pendiente": False}
+    out = {"bubbles": bubbles, "extracted": extracted or {},
+           "paso_extra": paso or {"tipo": None, "texto": ""}}
+    merged = {**lead, **(extracted or {})}
+    return rag.revisar(out, mem, lead, merged, user_text, list(BY_ID.values()))
+
+
+class TestConversationLogic:
+    def test_d1_slot_answer_then_next_slot_not_fact(self):
+        """«me llamo Javier, sí soltero» → «¡Gracias, Javier! 😊 ¿Cuántos años…?», не «evento número 30»."""
+        prior = [msg("lead", "hola, vi el evento", 5)] + [msg("anna", b, 4) for b in GREETING_EVENT]
+        b, reason, notes = revisar(["¡Gracias, Javier! 😊", "Este es nuestro evento número 30."],
+                                   "me llamo Javier, sí soltero", {"interest": "event"}, prior,
+                                   extracted={"name": "Javier", "is_single": True})
+        assert reason is None
+        assert b == ["¡Gracias, Javier! 😊", "¿Cuántos años tienes y a qué te dedicas?"]
+
+    def test_d3_off_topic_fact_removed(self):
+        b, reason, _ = revisar(
+            ["Jajaja, no lo vi, Carlos, pero seguro estuvo emocionante.",
+             "Por cierto, el evento Slavic-Latino Connect Night es el 18 de noviembre en Polanco. "
+             "¿Cuántos años tienes y a qué te dedicas?"],
+            "¿viste el partido del América ayer?", CARLOS, RUN2_BASE)
+        assert reason is None
+        assert b == ["Jajaja, no lo vi, Carlos, pero seguro estuvo emocionante.",
+                     "¿Cuántos años tienes y a qué te dedicas?"]
+        assert not any("Por cierto" in x for x in b)
+
+    def test_d3_second_off_topic_networking_removed(self):
+        prior = RUN2_BASE + [msg("lead", "¿viste el partido del América ayer?", 10),
+                             msg("anna", "Jajaja, no lo vi, Carlos, pero seguro estuvo emocionante.", 9),
+                             msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 9)]
+        b, reason, _ = revisar(
+            ["La verdad no le voy a ningún equipo, pero siempre disfruto el ambiente cuando hay partido.",
+             "Por cierto, en el evento también suele haber muy buen ambiente y hasta se hacen amigos "
+             "y contactos de negocio."],
+            "jaja sí, estuvo buenísimo, ¿tú le vas a alguien?", CARLOS, prior)
+        assert reason is None
+        assert b == ["La verdad no le voy a ningún equipo, pero siempre disfruto el ambiente cuando hay partido."]
+
+    def test_d7_diego_gave_data_keeps_thanks_drops_fact(self):
+        """Диего через 3 дня назвал имя и «soltero» — это новые данные: «Gracias» уместно;
+        рассказ про ивент без вопроса убран, следующий — вопрос по слоту."""
+        prior = [msg("lead", "hola, vi el evento", 3 * 1440 + 40)] + \
+            [msg("anna", b, 3 * 1440 + 39) for b in GREETING_EVENT]
+        b, reason, _ = revisar(
+            ["¡Gracias, Diego! Qué gusto tenerte por aquí.",
+             "El evento Slavic-Latino Connect Night es el 18 de noviembre en Polanco, CDMX. Es temática "
+             "de Halloween: puedes venir disfrazado y, si no tienes disfraz, los organizadores te dan una máscara."],
+            "hola, perdón, me llamo Diego y sí estoy soltero", {"interest": "event"}, prior,
+            extracted={"name": "Diego", "is_single": True}, desde=None)
+        assert reason is None
+        assert b == ["¡Gracias, Diego! Qué gusto tenerte por aquí.",
+                     "¿Cuántos años tienes y a qué te dedicas?"]
+
+    def test_d7_diego_returns_without_new_data_no_thanks(self):
+        """Тот же Диего, но имя и «soltero» уже в профиле, а он просто вернулся — без «Gracias»."""
+        lead = {"interest": "event", "name": "Diego", "is_single": True}
+        prior = [msg("lead", "hola, vi el evento", 3 * 1440 + 40)] + \
+            [msg("anna", b, 3 * 1440 + 39) for b in GREETING_EVENT]
+        b, reason, notes = revisar(["¡Gracias, Diego! Qué gusto tenerte por aquí."],
+                                   "hola, perdón, me llamo Diego y sí estoy soltero", lead, prior,
+                                   extracted={"name": "Diego", "is_single": True}, desde=None)
+        assert reason is None
+        assert b[0] == "Qué gusto tenerte por aquí." and "убрала «Gracias» без повода" in notes
+        assert not any("Gracias" in x for x in b)
+
+    def test_name_without_thanks_is_fine(self):
+        b, _, _ = revisar(["Diego, qué gusto tenerte por aquí."], "hola, ya volví",
+                          {"interest": "event", "name": "Diego", "is_single": True}, RUN2_BASE)
+        assert not any("Gracias" in x for x in b)
+
+    def test_lead_thanks_allows_thanks(self):
+        assert rag.lead_dio_algo("ok, muchas gracias", {})
+        assert not rag.lead_dio_algo("hola", {"name": "Diego"}, {"name": "Diego"})
+        assert rag.lead_dio_algo("soy Diego", {"name": "Diego"}, {"name": None})
+
+    def test_d16_unasked_networking_removed(self):
+        prior = RUN2_BASE + [msg("anna", "Es en Polanco, CDMX.", 10),
+                             msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 10)]
+        b, reason, _ = revisar(
+            ["Incluye bebida de bienvenida y botanas.",
+             "También es un buen espacio para conocer gente: además de pareja, muchos hacen amigos y "
+             "contactos de negocio."], "¿qué incluye?", CARLOS, prior)
+        assert reason is None and b == ["Incluye bebida de bienvenida y botanas."]
+
+    @pytest.mark.parametrize("user_text,bubbles", [
+        ("hola, ¿cuándo es el evento?",
+         ["Ese evento ya pasó. El próximo es el [event_date], empieza a las [event_start] en [event_address]."]),
+        ("¿hay que ir disfrazado?",
+         ["No es obligatorio, Carlos. Puedes venir disfrazado si quieres, y si no tienes disfraz, "
+          "los organizadores te dan una máscara."]),
+        ("¿a qué hora empieza?", ["Empieza a las [event_start] el [event_date], en [event_address]."]),
+        ("¿dónde es exactamente?", ["Es en [event_address]."]),
+    ])
+    def test_asked_fact_kept(self, user_text, bubbles):
+        b, reason, _ = revisar(bubbles, user_text, CARLOS, RUN2_BASE)
+        assert reason is None and b[0].startswith(bubbles[0][:12])
+        assert memory.hechos_en(b[0], SETTINGS)
+
+    def test_said_fact_not_repeated_on_broad_question(self):
+        """«¿de qué se trata?» — рассказать можно, но Хеллоуин уже звучал в приветствии."""
+        b, reason, _ = revisar(
+            ["Es una noche para conocer en persona a mujeres eslavas solteras que buscan una relación "
+             "seria. Esta vez es temática de Halloween."], "¿de qué se trata el evento?", CARLOS, RUN2_BASE)
+        assert reason is None
+        assert b == ["Es una noche para conocer en persona a mujeres eslavas solteras que buscan una "
+                     "relación seria."]
+
+    def test_said_fact_repeated_when_asked_again(self):
+        b, _, _ = revisar(["Es temática de Halloween: puedes venir disfrazado."],
+                          "¿otra vez, es de Halloween?", CARLOS, RUN2_BASE)
+        assert "Halloween" in b[0]
+
+    def test_paso_extra_fact_ignored(self):
+        b, _, notes = revisar(["Incluye bebida de bienvenida y botanas."], "¿qué incluye?", CARLOS,
+                              RUN2_BASE, paso={"tipo": None, "texto": "Este es nuestro evento número 30."})
+        assert b == ["Incluye bebida de bienvenida y botanas."]
+        assert "paso_extra не вопрос по слоту — убран" in notes
+
+    def test_paso_extra_non_slot_question_ignored(self):
+        b, _, _ = revisar(["Incluye bebida de bienvenida y botanas."], "¿qué incluye?", CARLOS,
+                          RUN2_BASE, paso={"tipo": "pregunta", "texto": "¿Te gustaría ir?"})
+        assert b == ["Incluye bebida de bienvenida y botanas."]
+
+    def test_paso_extra_slot_question_added(self):
+        b, _, _ = revisar(["Incluye bebida de bienvenida y botanas."], "¿qué incluye?", CARLOS,
+                          RUN2_BASE, paso={"tipo": "pregunta",
+                                           "texto": "¿Cuántos años tienes y a qué te dedicas?"})
+        assert b == ["Incluye bebida de bienvenida y botanas.", "¿Cuántos años tienes y a qué te dedicas?"]
+
+    def test_paso_extra_not_after_ignored_question(self):
+        prior = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 10)]
+        b, _, _ = revisar(["Incluye bebida de bienvenida y botanas."], "¿qué incluye?", CARLOS,
+                          prior, paso={"tipo": "pregunta",
+                                       "texto": "¿Cuántos años tienes y a qué te dedicas?"})
+        assert b == ["Incluye bebida de bienvenida y botanas."]
+
+    def test_no_forced_question_when_lead_asked(self):
+        b, _, _ = revisar(["Incluye bebida de bienvenida y botanas."], "¿qué incluye?", CARLOS, RUN2_BASE)
+        assert b == ["Incluye bebida de bienvenida y botanas."]
+
+    def test_no_forced_question_on_hesitation(self):
+        b, _, _ = revisar(["Tómate tu tiempo, sin presión."], "lo voy a pensar", CARLOS, RUN2_BASE)
+        assert b == ["Tómate tu tiempo, sin presión."]
+
+    def test_partial_answer_asks_rest(self):
+        prior = [msg("lead", "hola, quiero conocer mujeres rusas", 5),
+                 msg("anna", "¿Cómo te llamas y estás soltero?", 4)]
+        b, _, _ = revisar(["¡Gracias, Luis! 😊"], "Luis", {"interest": "agency"}, prior,
+                          extracted={"name": "Luis"})
+        assert b == ["¡Gracias, Luis! 😊", "¿Estás soltero?"]
+
+    def test_after_age_photo_request(self):
+        prior = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 10)]
+        b, _, _ = revisar(["Gracias por contarme."], "tengo 41, soy abogado", CARLOS, prior,
+                          extracted={"age": 41, "profession": "abogado"})
+        assert b == ["Gracias por contarme.", rag.PHOTO_REQUEST]
+
+    def test_one_extra_step_only(self):
+        """Факт и вопрос вдогонку: факт уходит, остаётся один вопрос."""
+        b, _, _ = revisar(["¡Gracias, Carlos!", "Este es nuestro evento número 30.",
+                           "¿Cuántos años tienes y a qué te dedicas?"],
+                          "sí, estoy soltero", {"interest": "event", "name": "Carlos"}, RUN2_BASE[:4],
+                          extracted={"is_single": True})
+        assert b == ["¡Gracias, Carlos!", "¿Cuántos años tienes y a qué te dedicas?"]
+        assert sum(x.count("?") for x in b) == 1
+
+    def test_only_fact_kept_rather_than_silence(self):
+        """Модель ответила только фактом не по теме вопроса — не молчим (ложное молчание хуже)."""
+        b, reason, notes = revisar(["Es en [event_address]."], "¿cuánto cuesta?", CARLOS, RUN2_BASE)
+        assert reason is None and b == ["Es en [event_address]."]
+        assert "факт без вопроса лида оставлен: без него ответ пустой" in notes

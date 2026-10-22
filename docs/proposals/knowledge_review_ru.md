@@ -1,6 +1,6 @@
 # База знаний режима rag: ревью
 
-Источник: `knowledge/seed.json`, версия 2026-10-21. Записей: 97, ждут Аню: 11.
+Источник: `knowledge/seed.json`, версия 2026-10-22. Записей: 97, ждут Аню: 11.
 Документ собран скриптом `scripts/knowledge_review.py`, руками не править.
 
 - Записи с `confirmado=false` в ответы не подаются, пока Аня не подтвердит.
@@ -33,7 +33,7 @@
 **Перевод:** Это вечер, чтобы вживую познакомиться с одинокими славянками, которые ищут серьёзных отношений.
 
 - **Когда:** ¿de qué se trata el evento?, ¿qué es el evento?, ¿cómo es el evento?, cuéntame del evento, info del evento
-- **Как отвечать (для модели):** Responde con esta frase. Puedes sumar UN dato (Halloween) si no está en ya_hecho. Sin precio ni enlace si no los pidió.
+- **Как отвечать (для модели):** Responde con esta frase. Sin sumar otros datos del evento, precio ni enlace si no los pidió.
 - **Флаги:** действие: ответить; действует до 2026-11-18
 - **Источник:** №2, №51, промпт
 
@@ -149,7 +149,7 @@
 **Перевод:** Тема Хеллоуин: можно прийти в костюме, а если костюма нет, организаторы дадут маску.
 
 - **Когда:** ¿hay que ir disfrazado?, ¿cómo me visto?, vestimenta, dress code, ¿es de Halloween?, disfraz, máscara
-- **Как отвечать (для модели):** Menciónalo una sola vez en la conversación (ver ya_hecho). Si pregunta cómo vestirse fuera del disfraz, no inventes un código de vestimenta: falta_dato.
+- **Как отвечать (для модели):** Solo si pregunta por el disfraz, la temática o cómo vestirse; no lo repitas si ya se dijo, salvo que pregunte otra vez. Si pregunta cómo vestirse fuera del disfraz, no inventes un código de vestimenta: falta_dato.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
 - **Источник:** №2, промпт
 
@@ -164,7 +164,7 @@
 - **Когда:** ¿es obligatorio ir disfrazado?, ¿tengo que ir disfrazado?, no tengo disfraz
 - **Как отвечать (для модели):** Junto con event_halloween si pregunta por el disfraz.
 - **Флаги:** действие: ответить; действует до 2026-11-18
-- **Источник:** следует из №2 и промпта: без костюма организаторы дают маску (проверить у владелицы)
+- **Источник:** подтверждено владелицей 2026-10-22; сайт: «Puedes venir disfrazado o, si lo prefieres, nosotros te proporcionaremos una máscara»
 
 ### `event_single_confirmation` · Al comprar confirma que está soltero · ✅ подтверждено
 
@@ -212,7 +212,7 @@
 **Перевод:** Это ещё и хорошее место для знакомств: кроме пары, многие находят друзей и деловые контакты.
 
 - **Когда:** ¿qué tipo de gente va?, ¿vale la pena?, ¿cómo es el ambiente?
-- **Как отвечать (для модели):** Úsalo solo como dato de apoyo, una vez, sin convertirlo en testimonios.
+- **Как отвечать (для модели):** Solo si el lead pregunta por esto; si ya se dijo (ya_hecho.hechos_dichos), no lo repitas salvo que pregunte otra vez. Sin convertirlo en testimonios.
 - **Флаги:** действие: ответить
 - **Источник:** №51
 
@@ -225,7 +225,7 @@
 **Перевод:** Это уникальный ивент в Латинской Америке. (Нет на сайте, подтверждает Аня.)
 
 - **Когда:** ¿hay otros eventos así?, ¿qué tiene de especial?
-- **Как отвечать (для модели):** Dato de apoyo, no lo repitas.
+- **Как отвечать (для модели):** Solo si el lead pregunta por esto; si ya se dijo (ya_hecho.hechos_dichos), no lo repitas salvo que pregunte otra vez.
 - **Флаги:** действие: ответить
 - **Источник:** №51
 
@@ -255,7 +255,7 @@
 - **Когда:** ¿cómo compro?, ¿dónde se compra?, ¿se compra en línea?, ¿cómo se paga? (antes de poder dar el enlace)
 - **Как отвечать (для модели):** Úsalo cuando el lead pregunta cómo comprar y todavía no toca el enlace (falta nombre, estado civil o foto); junto con la pregunta pendiente.
 - **Флаги:** действие: ответить; действует до 2026-11-18
-- **Источник:** решение владелицы 2026-10-21/22 (ответ до фото)
+- **Источник:** решение и подтверждение владелицы 2026-10-22 (ответ до фото)
 
 ### `event_number_30` · Evento número 30 · ✅ подтверждено
 
@@ -266,7 +266,7 @@
 **Перевод:** Это наш 30-й ивент.
 
 - **Когда:** ¿cuántos eventos han hecho?, ¿es seguro?, ¿tienen experiencia?, ¿es el primero?
-- **Как отвечать (для модели):** Dato de apoyo, una vez.
+- **Как отвечать (для модели):** Solo si el lead pregunta por esto; si ya se dijo (ya_hecho.hechos_dichos), no lo repitas salvo que pregunte otra vez.
 - **Флаги:** действие: ответить; действует до 2026-11-18
 - **Источник:** сайт rusaencdmx.com
 
@@ -279,7 +279,7 @@
 **Перевод:** Десятки людей уже нашли пару на наших ивентах.
 
 - **Когда:** ¿funciona el evento?, ¿alguien ha encontrado pareja?, ¿vale la pena ir?
-- **Как отвечать (для модели):** Dato de apoyo, una vez, sin convertirlo en testimonios ni inventar historias.
+- **Как отвечать (для модели):** Solo si el lead pregunta por esto; si ya se dijo (ya_hecho.hechos_dichos), no lo repitas salvo que pregunte otra vez. Sin testimonios ni historias inventadas.
 - **Флаги:** действие: ответить
 - **Источник:** сайт rusaencdmx.com
 

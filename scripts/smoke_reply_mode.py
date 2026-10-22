@@ -234,7 +234,8 @@ _PURCHASE = re.compile(r"compr|reserv|apart|quiero ir|link|enlace|\bpag(?:o|ar)\
 
 
 def judge(bubbles: list[str], lead_text: str, presented_before: bool,
-          buying: bool | None = None, photo: bool = True, prev_reply: str | None = None) -> list[str]:
+          buying: bool | None = None, photo: bool = True, prev_reply: str | None = None,
+          dio_algo: bool = True) -> list[str]:
     """buying — лид спрашивал, как купить (сейчас или раньше, а ссылку ещё не получил);
     photo — фото лида одобрено (без него ссылки на ивент нет)."""
     out = []
@@ -268,6 +269,17 @@ def judge(bubbles: list[str], lead_text: str, presented_before: bool,
         out.append("следующая цена обрывком")
     if re.search(r"\[[a-z_]+\]", text):
         out.append("неподставленный токен")
+    # Факт про ивент без вопроса лида (кроме приветствия, хода с фото и ответа со ссылкой).
+    if presented_before and lead_text != PHOTO_OK and LINK not in text \
+            and not rag._BROAD_ASK_RE.search(lead_text):
+        asked = rag.temas_preguntados(lead_text)
+        for b in bubbles:
+            for sent in rag._sentences(b):
+                temas = memory.hechos_en(sent, ev())
+                if "?" not in sent and temas and not temas & asked:
+                    out.append(f"факт без вопроса: {sorted(temas)}")
+    if bubbles and re.match(r"^\W*(?:muchas\s+)?gracias\b", bubbles[0], re.I) and not dio_algo:
+        out.append("«Gracias» без повода")
     return out
 
 
@@ -300,6 +312,7 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
             L.history.append(M("lead", text, 0))
             return {"decision": d.action, "bubbles": [], "violations": [], "usd": 0.0}
     L.history.append(M("lead", text, 0))
+    lead_before = dict(L.lead)
     before = spend.usd
     if mode == "legacy":
         r = await ai._generate_reply_legacy(L.lead, L.history[-21:-1], text)
@@ -322,7 +335,8 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
             "meta": r.get("rag_meta"), "media": [k for k in ("send_event_photo", "send_event_video")
                                                    if r.get(k)],
             "violations": judge(bubbles, text, presented, buying,
-                                bool(L.lead.get("photo_received")), prev_reply),
+                                bool(L.lead.get("photo_received")), prev_reply,
+                                rag.lead_dio_algo(text, r.get("extracted") or {}, lead_before)),
             "usd": spend.usd - before}
 
 

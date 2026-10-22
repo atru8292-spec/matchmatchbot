@@ -74,3 +74,12 @@ async def test_read_only_pool_blocks_writes():
         pool.acquire()
     inner.execute.assert_not_called()
     assert issubclass(s.WriteBlocked, BaseException) and not issubclass(s.WriteBlocked, Exception)
+
+
+def test_judge_unasked_fact_and_thanks():
+    assert "факт без вопроса: ['evento_30']" in s.judge(
+        ["¡Gracias, Javier! 😊", "Este es nuestro evento número 30."], "me llamo Javier, sí soltero", True)
+    assert s.judge(["Es en Polanco, CDMX."], "¿dónde es?", True) == []
+    assert s.judge(["Es temática de Halloween."], "hola, vi el evento", False) == []   # приветствие
+    assert "«Gracias» без повода" in s.judge(["¡Gracias, Diego!"], "hola", True, dio_algo=False)
+    assert "«Gracias» без повода" not in s.judge(["¡Gracias, Diego!"], "soy Diego", True)
