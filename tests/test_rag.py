@@ -2241,3 +2241,65 @@ def test_word_numbers_and_alcohol():
     assert any(rx.search("Hay alcohól") for rx in rag._HARD_FACT_RES)
     _, reason, _ = check(["Van unas cuarenta mujeres."], user_text="¿cuántas van?")
     assert reason and "числа" in reason
+
+
+# ───────── ревью 2026-10-22: вопрос да/нет, фильтр тем сверщика ─────────
+
+class TestYesNoAndDomain:
+    @pytest.mark.parametrize("q", ["¿Aceptan tarjeta?", "¿Puedo pagar en la entrada?",
+                                   "¿se paga en la puerta?", "¿tienen meses sin intereses?"])
+    def test_new_silent_topics(self, q):
+        assert rag._SILENT_TOPIC_RE.search(q), q
+
+    def test_yes_no_claim_built(self):
+        assert rag.yes_no_claim("¿Aceptan tarjeta?", ["¡Sí!"]) == "Aceptan tarjeta"
+        assert rag.yes_no_claim("¿Hay estacionamiento?", ["Sí, hay."]) == "Hay estacionamiento"
+        assert rag.yes_no_claim("¿Puedo pagar en la entrada?", ["Sí."]) == "Puedo pagar en la entrada"
+        assert rag.yes_no_claim("¿Hay cena?", ["No."]) == "No Hay cena"
+        assert rag.yes_no_claim("¿Cuánto cuesta?", ["Sí."]) is None          # не да/нет
+        assert rag.yes_no_claim("¿Puedo ir solo?", ["¡Claro!"]) is None       # не тема фактов
+        assert rag.yes_no_claim("¿Hay estacionamiento?",
+                                ["Sí, hay estacionamiento gratuito en el lugar del evento."]) is None
+
+    @pytest.mark.asyncio
+    async def test_pipeline_short_yes_on_parking_silent(self, monkeypatch):
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
+        p.chat_replies = [reply(["Sí, hay."])]
+        p.verify = {"afirmaciones": []}
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "¿Hay estacionamiento?")
+        assert r["action"] == "silent" and "вопрос да/нет" in r["silent_reason"]
+
+    @pytest.mark.asyncio
+    async def test_pipeline_card_in_tarjeta_question_silent_before_model(self, monkeypatch):
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "¿Aceptan tarjeta?")
+        assert r["action"] == "silent" and p.model_calls() == []
+
+    @pytest.mark.asyncio
+    async def test_pipeline_confirmed_yes_passes(self, monkeypatch):
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
+        p.chat_replies = [reply(["Sí."])]
+        p.verify = {"afirmaciones": []}
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "¿Es en Roma Norte?")
+        assert r["action"] == "respond"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("texto", ["No hay código de vestimenta, puedes ir como quieras.",
+                                       "Sí, puedes ir en jeans."])
+    async def test_dress_code_inventions_checked(self, monkeypatch, texto):
+        async def chat(model, system, user, cost, **kw):
+            return {"afirmaciones": [{"texto": texto, "respaldo": None}]}
+        monkeypatch.setattr(rag, "_chat", chat)
+        claims = await rag.verify_claims([texto], knowledge.usable(SEED, SETTINGS, "2026-10-22"),
+                                         memory.evento_actual(SETTINGS), [], rag.Cost(), SETTINGS)
+        assert claims
+
+    @pytest.mark.asyncio
+    async def test_personal_small_talk_still_skipped(self, monkeypatch):
+        for texto in ("La verdad no le voy a ningún equipo, pero disfruto ver los partidos importantes.",
+                      "Jaja, no lo vi, pero seguro estuvo emocionante."):
+            async def chat(model, system, user, cost, **kw):
+                return {"afirmaciones": [{"texto": texto, "respaldo": None}]}
+            monkeypatch.setattr(rag, "_chat", chat)
+            assert await rag.verify_claims([texto], knowledge.usable(SEED, SETTINGS, "2026-10-22"),
+                                           memory.evento_actual(SETTINGS), [], rag.Cost(), SETTINGS) == []

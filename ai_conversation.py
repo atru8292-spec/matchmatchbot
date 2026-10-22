@@ -176,7 +176,11 @@ _SILENT_TOPIC_RE = re.compile(
     r"\brebaja|m[aá]s\s+barato|"
     r"precio\s+especial|\befectivo\b|\boxxo\b|\bwalmart\b|transferencia|dep[oó]sito|"
     r"depositar|reembolso|devoluci[oó]n|regr[eé]s\w*\s+(?:mi|el)\s+dinero|"
-    r"cancelar\s+(?:mi\s+)?boleto", re.IGNORECASE)
+    r"cancelar\s+(?:mi\s+)?boleto|"
+    # ревью 2026-10-22: карта, рассрочка, оплата на входе — тоже Аня
+    r"\btarjeta|meses\s+sin\s+intereses|\bmsi\b|"
+    r"pag(?:ar|o|a|as)\s+(?:all[aá]\s+|ah[ií]\s+)?(?:en|a)\s+(?:la\s+)?(?:entrada|puerta)|"
+    r"en\s+la\s+(?:entrada|puerta)\s+(?:se\s+)?pag", re.IGNORECASE)
 
 
 def wants_to_buy(user_text: str, last_anna: str | None,
@@ -876,7 +880,12 @@ _DOMAIN_RE = re.compile(
     r"\bhora|fecha|inclu|bebida|botana|comida|cena|disfra|m[aá]scara|halloween|video|foto|llamada|"
     r"garant|segur|selecci|contrato|reembolso|regist|p[aá]gina|correo|organiz|asist|invitad|"
     r"slavic|eslav|rusa|ucrania|bielorrus|nosotr|aqu[ií]\s+nos|entrada|parking|valet|estaciona|"
-    r"descuent|promoci|gratis|cupo|reserv|apart", re.IGNORECASE)
+    r"descuent|promoci|gratis|cupo|reserv|apart|vestimenta|\bropa\b|c[oó]digo|\btraje|jeans|"
+    r"\btarde\b|llegar", re.IGNORECASE)
+# Личная реплика Анны («no le voy a ningún equipo», «me gusta ver los partidos»): из списка
+# сверщика её не проверяем, если в ней нет темы агентства, ивента, цен и людей.
+_PERSONAL_RE = re.compile(r"\b(?:me|mi|yo|disfruto|prefiero|creo|pienso|le\s+voy|vi|veo|s[eé]|"
+                          r"estoy|suelo|jaja\w*|seguro\s+(?:estuvo|fue|est[aá]))\b", re.IGNORECASE)
 
 
 def _words(text: str) -> set[str]:
@@ -1019,6 +1028,8 @@ def _hard_part_supported(sent: str, sources: list[str]) -> bool:
             return True
     if _PEOPLE_COUNT_RE.search(sent):
         return False        # «N mujeres/personas» — только одним предложением, без склейки
+    if not any(all(rx.search(src) for rx in topics) for src in sources):
+        return False        # темы («estacionamiento», «tarjeta») нет ни в одной фразе базы
     return claim_supported(sent, sources)
 
 
@@ -1112,7 +1123,10 @@ async def verify_claims(bubbles: list[str], recs: list[dict], card: dict | None,
     for it in items:
         it = it if isinstance(it, dict) else {"texto": it, "respaldo": None}
         for sent in _fact_sentences(str(it.get("texto") or ""), name):
-            if not (_DOMAIN_RE.search(sent) or any(rx.search(sent) for rx in _HARD_FACT_RES)):
+            # без темы агентства и ивента пропускаем только личную реплику Анны; остальное
+            # (в т.ч. с respaldo=null) сверяем (ревью 2026-10-22)
+            if not (_DOMAIN_RE.search(sent) or any(rx.search(sent) for rx in _HARD_FACT_RES)) \
+                    and _PERSONAL_RE.search(sent):
                 continue
             if not sentence_supported(sent, sources, it.get("respaldo")) and sent not in claims:
                 claims.append(sent)
@@ -1123,6 +1137,32 @@ async def verify_claims(bubbles: list[str], recs: list[dict], card: dict | None,
                     not hard_fact_supported(sent, sources) and sent not in claims:
                 claims.append(sent)
     return claims
+
+
+# Вопрос да/нет лида и короткий ответ «¡Sí!» / «Claro» / «No.» (ревью 2026-10-22): само «Sí»
+# сверке нечего сравнивать, поэтому проверяем утверждение «вопрос лида + ответ».
+_YESNO_START_RE = re.compile(r"^\W*(s[ií]|claro|por\s+supuesto|desde\s+luego|no)\b", re.IGNORECASE)
+_WH_QUESTION_RE = re.compile(r"^\W*(?:y\s+)?(?:qu[eé]|cu[aá]l|cu[aá]nt|c[oó]mo|d[oó]nde|cu[aá]ndo|"
+                             r"qui[eé]n|por\s*qu[eé]|a\s+qu[eé]|de\s+qu[eé]|hasta\s+qu[eé])", re.IGNORECASE)
+
+
+def yes_no_claim(user_text: str, bubbles: list[str]) -> str | None:
+    """Утверждение из вопроса да/нет лида и короткого ответа («¿Hay estacionamiento?» +
+    «Sí, hay.» → «Sí hay estacionamiento»). None — не тот случай."""
+    if not bubbles:
+        return None
+    first = (_sentences(bubbles[0]) or [""])[0]
+    m = _YESNO_START_RE.match(first)
+    if not m or len(_content_stems(first[m.end():])) > 1:
+        return None
+    for q in _QUESTION_SENT_RE.findall(user_text or ""):
+        body = q.strip(" ¿?¡!.,")
+        if not body or _WH_QUESTION_RE.match(body):
+            continue
+        if any(rx.search(body) for rx in _HARD_FACT_RES) or _DOMAIN_RE.search(body):
+            negative = m.group(1).lower() == "no"
+            return ("No " if negative and not _neg(body) else "") + body
+    return None
 
 
 def promesa_de_anya(claims: list[str], historial: list[dict]) -> bool:
@@ -1663,6 +1703,12 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     except Exception:
         logger.exception("rag: проверка второй моделью упала → silent")
         return _silent("проверка утверждений недоступна", **extra)
+    yn = yes_no_claim(user_text, bubbles)
+    if yn:
+        sources = fact_sources(recs, card, settings)
+        hard = any(rx.search(yn) for rx in _HARD_FACT_RES)
+        if not (hard_fact_supported(yn, sources) if hard else sentence_supported(yn, sources)):
+            claims = list(claims) + [f"{yn} (вопрос да/нет: «{bubbles[0][:60]}»)"]
     if claims and promesa_de_anya(claims, mem.get("historial") or []):
         return _silent(f"policy_anya_promise: лид спрашивает о том, что обещала Аня, в базе "
                        f"этого нет — реши сама ({claims})", **extra)
