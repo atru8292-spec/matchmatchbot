@@ -23,6 +23,7 @@ from pathlib import Path
 
 import ai
 import conversation_rules
+import filters
 import db
 import knowledge
 import memory
@@ -58,7 +59,7 @@ VIDEO_CAPTION = "Te dejo también un video con los detalles del evento."
 # Запасной текст, если сценария №9 нет в БД (иначе лид без блока получил бы обычный ответ).
 NOT_SINGLE_FALLBACK = ("Te entiendo, pero trabajamos solo con hombres solteros: las mujeres "
                        "buscan algo serio. Te deseo lo mejor 🤍")
-PHOTO_CAPTION = "Así se ven nuestros eventos."
+PHOTO_CAPTION = "Así fue el evento pasado."
 
 _prompt_cache: str | None = None
 
@@ -1060,6 +1061,21 @@ def _result(messages: list[str], action: str = "respond", **extra) -> dict:
     return base
 
 
+async def _attach_media_captions(result: dict, lead: dict) -> None:
+    """Подписи к видео и фото ивента (только если медиа реально уйдёт), в общем лимите
+    эмодзи на ход вместе с текстом."""
+    text = result["messages"] + (result.get("after_media") or [])
+    if result.get("send_event_video"):
+        await ai._maybe_announce_event_video(result, None, lead)
+        if result.get("video_caption"):
+            result["video_caption"] = _caption_within_budget(VIDEO_CAPTION, text)
+    if result.get("send_event_photo"):
+        await ai._maybe_announce_event_photo(result, None, lead)
+        if result.get("photo_caption"):
+            result["photo_caption"] = _caption_within_budget(
+                PHOTO_CAPTION, text + [result.get("video_caption") or ""])
+
+
 def _caption_within_budget(caption: str, bubbles: list[str]) -> str:
     """Подпись, которую добавляет код, тоже в лимите эмодзи на ответ."""
     if emoji_count(bubbles) + emoji_count([caption]) <= MAX_EMOJI_TOTAL:
@@ -1144,6 +1160,69 @@ def build_context(lead: dict, mem: dict, fichas: list[dict], always: dict, user_
         "lead": {"nombre": lead.get("name") or ai._plausible_name(lead.get("whatsapp_name"))},
         "lead_message": user_text,
     }
+
+
+# Ход после одобренного фото для ивента (решение владелицы 2026-10-22): имя, «холост ли» и
+# фото есть — сразу к покупке. Пузыри по порядку: благодарность, рассказ (без уже сказанного),
+# призыв со ссылкой; потом видео и фото прошлых ивентов; последним — вопрос о возрасте и
+# профессии (если нужен). Текст собирает код из подтверждённых записей, без модели.
+PHOTO_THANKS = "¡Gracias por tu foto, {name}! 😊"
+PHOTO_THANKS_NO_NAME = "¡Gracias por tu foto! 😊"
+CTA_LINK = "Aquí puedes apartar tu lugar: [event_link]"
+START_SENTENCE = "Empieza a las [event_start]."
+_ANGER_RE = re.compile(r"molest|enoj|harto|hart[ao]|fastidi|spam|deja\s+de|no\s+me\s+escrib|"
+                       r"no\s+me\s+interesa", re.IGNORECASE)
+
+
+def _story_after_photo(by_id: dict, said: set[str]) -> str:
+    """Рассказ про ивент из записей базы: дата, время и место, Хеллоуин, что входит — только
+    то, чего ещё не говорили (ya_hecho.hechos_dichos)."""
+    parts = []
+    when = by_id.get("event_date_time")
+    if when and not {"fecha", "lugar"} & said:
+        parts.append(when["contenido_es"])
+    elif when and "hora" not in said:
+        parts.append(START_SENTENCE)
+    for rid, tema in (("event_halloween", "halloween"), ("event_includes", "incluye")):
+        if by_id.get(rid) and tema not in said:
+            parts.append(by_id[rid]["contenido_es"])
+    return " ".join(parts)
+
+
+def media_fits(mem: dict) -> bool:
+    """Фото прошлых ивентов к месту: лид в последних сообщениях не возражал, не прощался
+    и не злился."""
+    recent = [t for t in (mem.get("lead_texts") or [])[-3:] if t]
+    return not any(memory._PRICE_OBJECTION_RE.search(t) or memory._FAREWELL_RE.search(t)
+                   or _ANGER_RE.search(t) or filters.is_aggression(t) for t in recent)
+
+
+def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict | None:
+    """Ответ на одобренное фото лида ивента, у которого есть имя и «холост ли»: сразу к
+    покупке. None — случай не наш (другая ветка, ссылку уже давали, в сообщении есть вопрос)."""
+    if "[фото одобрено" not in (user_text or ""):
+        return None
+    rest = re.sub(r"\[фото одобрено[^\]]*\]", "", user_text).strip()
+    ya, settings = mem["ya_hecho"], mem["settings"]
+    if "?" in rest or memory.ruta(lead, user_text) != "evento" or ya.get("enlace_enviado") \
+            or ya.get("boleto_comprado") or settings.get("event_active") != "1" \
+            or not (settings.get("event_link") or "").strip():
+        return None
+    if not (lead.get("name") and lead.get("is_single") is True):
+        return None
+    name = lead.get("name") or ai._plausible_name(lead.get("whatsapp_name"))
+    bubbles = [PHOTO_THANKS.format(name=name) if name else PHOTO_THANKS_NO_NAME]
+    story = _story_after_photo(by_id, set(ya.get("hechos_dichos") or []))
+    if story:
+        bubbles.append(story)
+    bubbles.append(CTA_LINK)
+    # Вопрос — только возраст/профессия, если их нет и он не остался без ответа в прошлый раз.
+    cal = memory.calificacion(lead, ya, user_text, mem.get("ultimo_mensaje_anna"))
+    question = slot_question(cal) if cal.get("siguiente") in ("age", "profession") else None
+    return _result(bubbles, funnel_stage="qualified",
+                   send_event_video=not ya.get("video_enviado"),
+                   send_event_photo=not ya.get("foto_enviada") and media_fits(mem),
+                   after_media=[question] if question else [])
 
 
 def revisar(out: dict, mem: dict, lead: dict, merged: dict, user_text: str,
@@ -1276,6 +1355,18 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         return _silent("Лид без фото хочет билет, реши сама (две просьбы прислать фото без ответа)",
                        rag_meta={**meta, "fuentes": ["foto_agotada"]})
 
+    # 2.7. Одобренное фото лида ивента с именем и «холост ли» — сразу к покупке (кодом).
+    venta = venta_tras_foto(lead, mem, by_id, user_text)
+    if venta:
+        problem = await unrendered_tokens(venta["messages"] + venta["after_media"])
+        if problem:
+            await _tech_alert(f"токен не подставился: {problem}", lead.get("phone"))
+            return _silent(f"токен не подставился ({problem}) — ответь сама",
+                           rag_meta={**meta, "fuentes": ["venta_tras_foto"]})
+        venta["rag_meta"] = {**meta, "fuentes": ["venta_tras_foto"]}
+        await _attach_media_captions(venta, lead)
+        return venta
+
     # 3. Поиск по базе знаний и вызов модели.
     async def embed_records(texts):
         return await _embed_batch(texts, cost)
@@ -1379,14 +1470,9 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     if any("[event_link]" in b or (link and link in b) for b in bubbles) and \
             not mem["ya_hecho"].get("video_enviado"):
         result["send_event_video"] = True
-        await ai._maybe_announce_event_video(result, None, lead)
-        if result.get("video_caption"):
-            result["video_caption"] = _caption_within_budget(VIDEO_CAPTION, bubbles)
     if out["send_event_photo"] and not mem["ya_hecho"].get("foto_enviada"):
         result["send_event_photo"] = True
-        await ai._maybe_announce_event_photo(result, None, lead)
-        if result.get("photo_caption"):
-            result["photo_caption"] = _caption_within_budget(PHOTO_CAPTION, bubbles)
+    await _attach_media_captions(result, lead)
     # Запись на звонок — только в этапе venta, с именем, почтой и показанной ценой услуги.
     if out["proposed_videocall_at"]:
         result["proposed_videocall_at"] = out["proposed_videocall_at"]

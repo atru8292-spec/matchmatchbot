@@ -309,6 +309,8 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
         _PURCHASE.search(m["text"] or "") for m in L.history if m["sender"] == "lead"))
     if text == PHOTO_OK:
         L.lead["photo_received"] = True          # main.py ставит флаг до вызова AI
+        # фото одобрено, имя и «холост ли» есть — ход сразу ведёт к покупке (решение 2026-10-22)
+        buying = buying or bool(L.lead.get("name") and L.lead.get("is_single") is True)
     else:
         d = filters.decide(L.lead, False, text, L.phone, frozenset(), bot_paused=False)
         if d.action != "needs_ai":
@@ -324,8 +326,26 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
         r = await ai.generate_reply(L.lead, [], text)
     FAIL_NEXT["n"] = 0
     bubbles = await sender.render_bubbles(r.get("messages") or [], None, True)
+    after = await sender.render_bubbles(r.get("after_media") or [], None, True)
     presented = any(m["sender"] == "anna" for m in L.history[:-1])
     for b in bubbles:
+        L.history.append(M("anna", b, 0))
+    # Порядок, как шлёт main.py: rag — текст, видео, фото, вопрос; legacy — текст, фото, видео.
+    media = []
+    if r.get("send_event_video"):
+        media.append(("video", r.get("video_caption")))
+    if r.get("send_event_photo"):
+        media.append(("image", r.get("photo_caption")))
+    if mode == "legacy":
+        media.reverse()
+    order = [f"💬 {b}" for b in bubbles]
+    for kind, caption in media:
+        if caption:
+            order.append(f"💬 {caption}")
+        order.append("🎬 [видео ивента]" if kind == "video" else "🖼 [фото прошлых ивентов]")
+        L.history.append(M("anna", db.media_marker(kind, ev().get("event_date")), 0))
+    order += [f"💬 {b}" for b in after]
+    for b in after:
         L.history.append(M("anna", b, 0))
     for k, v in (r.get("extracted") or {}).items():
         L.lead[k] = v
@@ -333,14 +353,17 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
         L.lead["rag_estado"] = r["rag_estado"]
     if r.get("funnel_stage"):
         L.lead["funnel_stage"] = r["funnel_stage"]
-    return {"decision": r.get("action"), "bubbles": bubbles,
+    said = bubbles + [c for _, c in media if c] + after
+    viol = judge(said, text, presented, buying, bool(L.lead.get("photo_received")), prev_reply,
+                 rag.lead_dio_algo(text, r.get("extracted") or {}, lead_before))
+    texts = [o for o in order if o.startswith("💬")]
+    if any("?" in t for t in texts[:-1]):
+        viol.append("вопрос не последним сообщением")
+    return {"decision": r.get("action"), "bubbles": bubbles, "order": order,
             "silent_reason": r.get("silent_reason"),
             "meta": r.get("rag_meta"), "media": [k for k in ("send_event_photo", "send_event_video")
                                                    if r.get(k)],
-            "violations": judge(bubbles, text, presented, buying,
-                                bool(L.lead.get("photo_received")), prev_reply,
-                                rag.lead_dio_algo(text, r.get("extracted") or {}, lead_before)),
-            "usd": spend.usd - before}
+            "violations": viol, "usd": spend.usd - before}
 
 
 def install_db(leads_by_phone: dict) -> None:
@@ -469,6 +492,8 @@ async def amain(args) -> None:
         if args.part in ("dialogs", "all"):
             for title, hist, prof, turns, *over in DIALOGS:
                 idx += 1
+                if args.only and title.split(".")[0] not in args.only.split(","):
+                    continue
                 OVERRIDE.clear()
                 OVERRIDE.update(over[0] if over else {})
                 knowledge.reset_cache()
@@ -512,7 +537,7 @@ def _fmt(text: str, res: dict, modes=("legacy", "rag")) -> list[str]:
         if r.get("media"):
             head += f" + {','.join(r['media'])}"
         out.append(head)
-        out += [f"    - {b}" for b in r["bubbles"]]
+        out += [f"    - {b}" for b in (r.get("order") or r["bubbles"])]
         if r.get("meta") and mode == "rag":
             m = r["meta"]
             out.append(f"    - _fuentes={m.get('fuentes')} etapa={m.get('etapa')} slot={m.get('slot')} "
@@ -531,4 +556,6 @@ if __name__ == "__main__":
     ap.add_argument("--out", default="")
     # повторный прогон только нового режима (ответы legacy не меняются) — вдвое дешевле
     ap.add_argument("--modes", choices=["both", "rag"], default="both")
+    # только эти диалоги по номеру: --part dialogs --only 1,3,11
+    ap.add_argument("--only", default="")
     asyncio.run(amain(ap.parse_args()))

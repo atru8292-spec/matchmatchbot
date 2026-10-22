@@ -646,6 +646,11 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
             await actions.maybe_send_invitation(phone)
         except Exception:
             logger.exception("maybe_send_invitation упал [%s] (ответ лиду уже отправлен)", phone)
+    # Режим rag: видео раньше фото, а вопрос (after_media) — последним сообщением после медиа
+    # (решение владелицы 2026-10-22, ход после одобренного фото).
+    if result.get("rag_meta") is not None:
+        await _send_rag_media_and_tail(phone, result)
+        result = {**result, "send_event_photo": False, "send_event_video": False}
     # Медиа прошлых ивентов — два независимых инструмента AI (фото / видео).
     # Отдельными сообщениями ПОСЛЕ текста; пер-типовой дедуп внутри; сбой не роняет ответ.
     if result.get("send_event_photo"):
@@ -683,6 +688,28 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
     else:
         logger.info("AI respond [%s] (scenario=%s, funnel=%s)",
                     phone, result["used_scenario_id"], result["funnel_stage"])
+
+
+async def _send_rag_media_and_tail(phone: str, result: dict) -> None:
+    """Режим rag: видео ивента, фото прошлых ивентов, потом after_media (вопрос последним).
+    Сбой медиа не мешает вопросу; сбой вопроса не роняет уже отправленный ответ."""
+    if result.get("send_event_video"):
+        try:
+            await actions.send_event_video(phone, caption=result.get("video_caption"))
+        except Exception:
+            logger.exception("send_event_video упал [%s] (ответ лиду уже отправлен)", phone)
+    if result.get("send_event_photo"):
+        try:
+            await actions.send_event_photos(phone, caption=result.get("photo_caption"))
+        except Exception:
+            logger.exception("send_event_photos упал [%s] (ответ лиду уже отправлен)", phone)
+    tail = [m for m in (result.get("after_media") or []) if m]
+    if tail:
+        try:
+            await sender.send(phone, tail)
+        except Exception:
+            logger.exception("вопрос после медиа не ушёл [%s]", phone)
+            await escalation.notify_error("main._send_rag_media_and_tail", "вопрос после медиа не ушёл", phone)
 
 
 async def _handle_videocall_booking(phone: str, lead: dict, combined: str,

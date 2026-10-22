@@ -896,13 +896,11 @@ class TestEventPhotoGate:
                    msg("lead", "Carlos, soltero", 20),
                    msg("anna", "Gracias, Carlos. ¿Me mandas una foto tuya?", 19)]
         p = Pipe(monkeypatch, history=history, lead_extra={**self.NO_PHOTO, "photo_received": True})
-        p.chat_replies = [reply(["Gracias por la foto, Carlos.", "Puedes comprar tu boleto aquí: [event_link]"],
-                                fuentes=["event_how_to_buy"])]
         r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
-        ctx = p.model_calls()[0][1]
-        assert ctx["calificacion"]["etapa"] == "venta" and ctx["calificacion"]["compra_pendiente"]
-        assert any("[event_link]" in m for m in r["messages"])
-        assert r["send_event_video"] is True
+        assert p.model_calls() == []          # ход после фото собирает код (решение 2026-10-22)
+        assert r["messages"][-1] == rag.CTA_LINK
+        assert r["send_event_video"] is True and r["send_event_photo"] is True
+        assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
 
 
 class TestPhotoGateReview:
@@ -1673,3 +1671,150 @@ class TestConversationLogic:
             "jaja sí, estuvo buenísimo, ¿tú le vas a alguien?", CARLOS, prior)
         assert reason is None
         assert b == ["La verdad no le voy a ningún equipo, pero sí disfruto ver partidos de vez en cuando."]
+
+
+# ───────── ход после одобренного фото (решение владелицы 2026-10-22, Д1 и Д11 прогона 3) ─────────
+
+D1_HISTORY = ([msg("lead", "hola, vi el evento", 40)] + [msg("anna", b, 39) for b in GREETING_EVENT]
+              + [msg("lead", "me llamo Javier, sí soltero", 35),
+                 msg("anna", "¡Gracias, Javier! 😊", 34),
+                 msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 34),
+                 msg("lead", "¿qué incluye?", 30),
+                 msg("anna", "Incluye bebida de bienvenida y botanas.", 29),
+                 msg("lead", "ok, ¿cómo compro el boleto?", 25),
+                 msg("anna", "El pago se hace en la página y el boleto te llega por correo.", 24),
+                 msg("anna", "¿Podrías mandarme una foto tuya, por favor?", 24)])
+JAVIER = {"name": "Javier", "is_single": True, "interest": "event", "photo_received": True}
+
+
+@pytest.mark.asyncio
+class TestVentaTrasFoto:
+    async def test_d11_photo_goes_straight_to_purchase(self, monkeypatch):
+        """Д11: было «¡Gracias por tu foto, Carlos! 😊 ¿Cuántos años…?», ссылка только после
+        «¿cómo compro?». Теперь сразу: спасибо, рассказ без уже сказанного, ссылка, медиа, вопрос."""
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra={**CARLOS, "photo_received": True})
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "[фото одобрено]")
+        assert p.model_calls() == []
+        assert r["action"] == "respond"
+        # приветствие уже сказало дату, Polanco и Хеллоуин — не повторяем
+        assert r["messages"] == ["¡Gracias por tu foto, Carlos! 😊",
+                                 "Empieza a las [event_start]. Incluye bebida de bienvenida y botanas.",
+                                 "Aquí puedes apartar tu lugar: [event_link]"]
+        assert not any("?" in m for m in r["messages"])
+        assert r["send_event_video"] and r["send_event_photo"]
+        assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
+        assert r["rag_meta"]["fuentes"] == ["venta_tras_foto"]
+
+    async def test_d1_photo_after_purchase_question(self, monkeypatch):
+        p = Pipe(monkeypatch, history=D1_HISTORY, lead_extra=JAVIER)
+        r = await rag.generate_reply(p.lead, D1_HISTORY, "[фото одобрено]")
+        assert p.model_calls() == []
+        # «что входит» уже сказано, дата/место/Хеллоуин — в приветствии
+        assert r["messages"] == ["¡Gracias por tu foto, Javier! 😊", "Empieza a las [event_start].",
+                                 "Aquí puedes apartar tu lugar: [event_link]"]
+        assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
+
+    async def test_full_story_when_nothing_said(self, monkeypatch):
+        history = [msg("lead", "Carlos, soltero", 20), msg("anna", "¿Me mandas una foto tuya?", 19)]
+        p = Pipe(monkeypatch, history=history, lead_extra={**CARLOS, "photo_received": True})
+        r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
+        assert r["messages"][1] == (BY_ID["event_date_time"]["contenido_es"] + " "
+                                    + BY_ID["event_halloween"]["contenido_es"] + " "
+                                    + BY_ID["event_includes"]["contenido_es"])
+        assert "medianoche" not in " ".join(r["messages"])
+
+    async def test_no_question_when_age_known(self, monkeypatch):
+        p = Pipe(monkeypatch, history=RUN2_BASE,
+                 lead_extra={**CARLOS, "photo_received": True, "age": 40, "profession": "médico"})
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "[фото одобрено]")
+        assert r["after_media"] == []
+
+    async def test_no_question_when_ignored_last_time(self, monkeypatch):
+        history = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 5)]
+        p = Pipe(monkeypatch, history=history, lead_extra={**CARLOS, "photo_received": True})
+        r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
+        assert r["after_media"] == []
+
+    async def test_media_not_repeated(self, monkeypatch):
+        history = RUN2_BASE + [msg("sistema", db.media_marker("video", SETTINGS["event_date"]), 5),
+                               msg("sistema", db.media_marker("image", SETTINGS["event_date"]), 5)]
+        history = [dict(m, sender="anna", direction="outbound", meta={"source": "system"})
+                   if m["sender"] == "sistema" else m for m in history]
+        p = Pipe(monkeypatch, history=history, lead_extra={**CARLOS, "photo_received": True})
+        r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
+        assert r["send_event_video"] is False and r["send_event_photo"] is False
+
+    async def test_no_photos_after_objection(self, monkeypatch):
+        history = RUN2_BASE + [msg("lead", "se me hace caro", 6), msg("anna", "Te entiendo.", 5)]
+        p = Pipe(monkeypatch, history=history, lead_extra={**CARLOS, "photo_received": True})
+        r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
+        assert r["send_event_photo"] is False and r["send_event_video"] is True
+
+    async def test_link_already_sent_goes_to_model(self, monkeypatch):
+        history = RUN2_BASE + [msg("anna", f"Puedes comprar tu boleto aquí: {LINK}", 5)]
+        p = Pipe(monkeypatch, history=history, lead_extra={**CARLOS, "photo_received": True})
+        p.chat_replies = [reply(["¡Gracias por tu foto, Carlos! 😊"])]
+        r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
+        assert len(p.model_calls()) == 1
+        assert not any(LINK in m or "[event_link]" in m for m in r["messages"])
+
+    async def test_question_with_photo_goes_to_model(self, monkeypatch):
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra={**CARLOS, "photo_received": True})
+        p.chat_replies = [reply(["Ahora cuesta [event_price_nonmember] MXN."])]
+        await rag.generate_reply(p.lead, RUN2_BASE, "[фото одобрено] ¿cuánto cuesta?")
+        assert len(p.model_calls()) == 1
+
+    async def test_service_lead_not_affected(self, monkeypatch):
+        lead = {"name": "Luis", "is_single": True, "interest": "agency", "photo_received": True}
+        hist = [msg("lead", "Luis, soltero", 20), msg("anna", "¿Me mandas una foto tuya?", 19)]
+        p = Pipe(monkeypatch, history=hist, lead_extra=lead)
+        p.chat_replies = [reply(["¡Gracias por tu foto, Luis! 😊"])]
+        r = await rag.generate_reply(p.lead, hist, "[фото одобрено]")
+        assert len(p.model_calls()) == 1 and not r.get("after_media")
+
+    async def test_without_single_goes_to_model(self, monkeypatch):
+        lead = {"name": "Carlos", "interest": "event", "photo_received": True}
+        hist = [msg("lead", "me llamo Carlos", 20), msg("anna", "¿Me mandas una foto tuya?", 19)]
+        p = Pipe(monkeypatch, history=hist, lead_extra=lead)
+        p.chat_replies = [reply(["¡Gracias por tu foto, Carlos! ¿Estás soltero?"])]
+        await rag.generate_reply(p.lead, hist, "[фото одобрено]")
+        assert len(p.model_calls()) == 1
+
+    async def test_emoji_budget_with_captions(self, monkeypatch):
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra={**CARLOS, "photo_received": True})
+
+        async def video(reply, scenario, lead):
+            reply["video_caption"] = "x 🎥"
+
+        async def photo(reply, scenario, lead):
+            reply["photo_caption"] = "x 📸"
+        monkeypatch.setattr(ai, "_maybe_announce_event_video", video)
+        monkeypatch.setattr(ai, "_maybe_announce_event_photo", photo)
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "[фото одобрено]")
+        assert r["video_caption"] == rag.VIDEO_CAPTION and r["photo_caption"] == "Así fue el evento pasado."
+        total = rag.emoji_count(r["messages"] + r["after_media"] + [r["video_caption"], r["photo_caption"]])
+        assert total <= 2
+
+
+@pytest.mark.asyncio
+async def test_main_sends_video_photos_then_question(monkeypatch):
+    import main
+    order = []
+
+    async def video(phone, caption=None):
+        order.append(("video", caption))
+
+    async def photos(phone, caption=None):
+        order.append(("photos", caption))
+
+    async def send(phone, msgs, **kw):
+        order.append(("text", tuple(msgs)))
+        return len(msgs)
+    monkeypatch.setattr(main.actions, "send_event_video", video)
+    monkeypatch.setattr(main.actions, "send_event_photos", photos)
+    monkeypatch.setattr(main.sender, "send", send)
+    await main._send_rag_media_and_tail(PHONE, {
+        "send_event_video": True, "send_event_photo": True, "video_caption": "v",
+        "photo_caption": "Así fue el evento pasado.", "after_media": ["¿Cuántos años tienes?"]})
+    assert order == [("video", "v"), ("photos", "Así fue el evento pasado."),
+                     ("text", ("¿Cuántos años tienes?",))]

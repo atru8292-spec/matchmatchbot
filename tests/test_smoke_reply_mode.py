@@ -89,3 +89,7 @@ def test_judge_objection_recap_dangling():
     assert s.judge(["Te entiendo. Incluye bebida de bienvenida y botanas."], "se me hace caro", True) == []
     assert s.judge(["La última vez platicamos del evento en Polanco."], "hola", True) == []
     assert "оборванная фраза" in s.judge(["Seguro estuvo emocionante. Volviendo al evento,"], "x", True)
+
+
+def test_only_option_and_question_last():
+    assert s.judge([s.LINK], s.PHOTO_OK, True, buying=True, photo=True) == []
