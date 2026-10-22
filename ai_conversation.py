@@ -781,7 +781,11 @@ def add_slot_question(bubbles: list[str], question: str | None, user_text: str,
 
 # «¿Te gustaría saber algo más sobre el evento?» — предложение рассказать, о чём лид не спрашивал.
 _OFFER_MORE_RE = re.compile(r"¿\s*(?:te\s+gustar[ií]a|quieres|te\s+interesa)\s+(?:saber|conocer)\s+"
-                            r"(?:algo\s+)?m[aá]s\b", re.IGNORECASE)
+                            r"(?:algo\s+)?m[aá]s\b|"
+                            # «¿Tienes alguna duda sobre el evento o necesitas ayuda para comprar tu
+                            # boleto?» — вопрос-предложение, о чём лид не спрашивал (прогон 2026-10-22)
+                            r"¿\s*tienes\s+(?:alguna\s+|otra\s+)?(?:duda|pregunta)|"
+                            r"¿[^?]*\bnecesitas\s+ayuda\s+(?:para|con)\b", re.IGNORECASE)
 _DANGLING_RE = re.compile(r"[,:;—–-]\s*$")
 
 
@@ -790,9 +794,13 @@ _REQUISITO_RE = re.compile(r"\brequisito\b|para\s+(?:tu\s+)?regist|para\s+comple
 
 
 def drop_offer_more(bubbles: list[str]) -> list[str]:
-    out = [_drop_sentences(b, lambda s: bool(_OFFER_MORE_RE.search(s) or _REQUISITO_RE.search(s)))
-           for b in bubbles]
-    return [b for b in out if b.strip()]
+    out = []
+    for b in bubbles:
+        # вопрос-предложение вырезаем от «¿» до «?», не задевая остальное («¡Gracias! 😊 ¿…?»)
+        b = re.sub(r"\s*¿[^?¿]*\?", lambda m: "" if _OFFER_MORE_RE.search(m.group(0)) else m.group(0), b)
+        b = _drop_sentences(b, lambda s: bool(_OFFER_MORE_RE.search(s) or _REQUISITO_RE.search(s)))
+        out.append(b.strip())
+    return [b for b in out if b and _words(b)]
 
 
 def drop_dangling(bubbles: list[str]) -> list[str]:

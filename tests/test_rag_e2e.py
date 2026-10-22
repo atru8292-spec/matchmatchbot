@@ -284,3 +284,32 @@ async def test_f_photo_thanks_from_model_kept(monkeypatch):
     r = await d.say("", photo=True)
     assert r["messages"][0] == "¡Gracias por tu foto, Luis! 😊"
     assert not any("foto tuya" in x for x in all_text(r))
+
+
+@pytest.mark.asyncio
+async def test_live_2026_10_22_no_offer_question_after_data(monkeypatch):
+    """Живой прогон 2026-10-22: на «35, soy abogado» после шага с фото модель дописала
+    «¿Tienes alguna duda sobre el evento o necesitas ayuda para comprar tu boleto?» —
+    вопрос-предложение, о чём лид не спрашивал. Остаётся только благодарность."""
+    d = Dialog(monkeypatch, lead={"name": "Luis", "is_single": True, "interest": "event",
+                                  "photo_received": True})
+    d._add("anna", f"Aquí puedes apartar tu lugar: {LINK}")
+    d._add("anna", "¿Cuántos años tienes y a qué te dedicas?")
+    d.models["35, soy abogado"] = model(
+        ["¡Gracias, Luis! 😊 ¿Tienes alguna duda sobre el evento o necesitas ayuda para comprar tu boleto?"],
+        extracted={"age": 35, "profession": "abogado"})
+    r = await d.say("35, soy abogado")
+    assert all_text(r) == ["¡Gracias, Luis! 😊"]
+
+
+@pytest.mark.parametrize("text", ["¿Tienes alguna duda?", "¿Tienes otra pregunta sobre el evento?",
+                                  "¿Necesitas ayuda para comprar tu boleto?",
+                                  "¿Te gustaría saber algo más del evento?"])
+def test_offer_questions_detected(text):
+    assert rag._OFFER_MORE_RE.search(text)
+
+
+@pytest.mark.parametrize("text", ["¿Cuántos años tienes y a qué te dedicas?", "¿Me mandas una foto tuya?",
+                                  "¿Cómo te llamas y estás soltero?"])
+def test_slot_questions_not_offers(text):
+    assert not rag._OFFER_MORE_RE.search(text)

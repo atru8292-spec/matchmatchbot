@@ -50,6 +50,7 @@ EVENT_SETTINGS = {
     "event_price_member": "", "event_price_nonmember": "6000", "event_price_next": "",
     # автоответ владелицы 2026-10-22: preventa 6,000, зачёркнутая 9,000, без лестницы цен
     "event_price_old": "9,000", "event_link": LINK, "bot_paused": "0",
+    "event_theme_phrase": "Esta vez es temática de Halloween 🎃",
 }
 ANNOUNCED = "2026-10-20T17:45:22+00:00"
 # Настройки конкретного диалога поверх EVENT_SETTINGS (диалог 15: без зачёркнутой цены).
@@ -168,6 +169,12 @@ DIALOGS = [
      [PHOTO_CAPTION + "voy con mi novia"]),
     ("21. Оплата картой", BASE_EVENT, BASE_LEAD, ["¿Aceptan tarjeta?"]),
     ("22. Хочет пойти, но дорого", BASE_EVENT, BASE_LEAD, ["Me gustaría ir pero está muy caro"]),
+    # Сценарий Арины 2026-10-22: весь путь лида с нуля, 15 сообщений.
+    ("23. Сценарий Арины целиком", [], {}, [
+        "Hola", "Me interesa el evento", "Me llamo Luis, soy soltero", PHOTO_OK, "35, soy abogado",
+        "¿cuánto cuesta?", "¿cuántas personas van?", "¿dónde es?", "¿a qué hora termina?",
+        "está muy caro", "¿cómo compro?", "¿eres un bot?", "voy con mi novia", "¿aceptan tarjeta?",
+        "¿viste el partido del América ayer?"]),
 ]
 
 # ───────────────────────── бюджет и заглушки ─────────────────────────

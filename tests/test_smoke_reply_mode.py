@@ -14,7 +14,7 @@ def test_judge_flags():
 
 
 def test_plan_sizes():
-    assert len(s.MESSAGES) == 13 and len(s.DIALOGS) == 22
+    assert len(s.MESSAGES) == 13 and len(s.DIALOGS) == 23
     # автоответ владелицы 2026-10-22: зачёркнутая 9,000, лестницы цен нет, Roma Norte
     assert s.EVENT_SETTINGS["event_price_old"] == "9,000"
     assert s.EVENT_SETTINGS["event_price_next"] == ""
@@ -43,7 +43,7 @@ def test_judge_photo_gate():
 
 def test_photo_dialogs_present():
     texts = [t for _, _, _, turns, *_ in s.DIALOGS for t in turns]
-    assert texts.count(s.PHOTO_OK) == 2
+    assert texts.count(s.PHOTO_OK) == 3
 
 
 def test_judge_owner_rules_2026_10_22():
