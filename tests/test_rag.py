@@ -1092,8 +1092,11 @@ class TestOwnerRisks:
                                                              "interest": "event", "photo_received": True})
         p.chat_replies = [reply(["Puedes pagar en efectivo en OXXO, como te comenté."])]
         p.verify = {"afirmaciones": [{"texto": "Puedes pagar en efectivo en OXXO", "respaldo": None}]}
-        r = await rag.generate_reply(p.lead, OLD_LIES, "¿entonces cómo se paga al final?")
+        r = await rag.generate_reply(p.lead, OLD_LIES, "¿entonces sigue en pie lo que me dijiste?")
         assert r["action"] == "silent" and r["messages"] == []
+        # «cómo se paga» с 2026-10-22 — прямой вопрос о покупке: ссылка, OXXO не подтверждаем
+        r = await rag.generate_reply(p.lead, OLD_LIES, "¿entonces cómo se paga al final?")
+        assert r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
 
     async def test_anya_promise_goes_to_anya(self, monkeypatch):
         hist = [msg("anna", "Te guardo un lugar hasta el viernes si me confirmas hoy.", 30, manual=True)]
@@ -2030,3 +2033,17 @@ class TestCompraDirecta:
         p.chat_replies = [reply(["Incluye bebida de bienvenida y botanas."])]
         r = await rag.generate_reply(p.lead, OLD_LIES, "¿qué incluye?")
         assert not any("[event_link]" in m for m in r["messages"])
+
+
+@pytest.mark.asyncio
+async def test_run9_d12_como_se_paga_is_purchase(monkeypatch):
+    """Прогон 9, Д12: «¿y cómo se paga el boleto, como me dijiste?» — прямой вопрос о покупке:
+    ссылка и оплата на странице, а не «El pago se hace en la página…» без ссылки. OXXO из
+    старой переписки не подтверждаем."""
+    p = Pipe(monkeypatch, history=OLD_LIES, lead_extra={"name": "Carlos", "is_single": True,
+                                                        "interest": "event"})
+    r = await rag.generate_reply(p.lead, OLD_LIES, "¿y cómo se paga el boleto, como me dijiste?")
+    assert p.model_calls() == []
+    assert r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
+    assert "OXXO" not in " ".join(r["messages"])
+    assert rag.wants_to_buy("¿cómo se paga?", None)

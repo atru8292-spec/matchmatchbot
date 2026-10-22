@@ -151,7 +151,7 @@ _AGENCY_INTEREST_RE = re.compile(r"rus[ao]s?|eslav[ao]s?|ucranian|bielorrus|matc
                                  r"servicio|conocer\s+mujeres|busco\s+(?:pareja|esposa|novia)",
                                  re.IGNORECASE)
 _PURCHASE_RE = re.compile(
-    r"\bcompr(?:o|ar|arlo|arla|a)\b|\bpag(?:o|ar|arlo)\b|\blink\b|\benlace\b|"
+    r"\bcompr(?:o|ar|arlo|arla|a)\b|\bpag(?:o|ar|arlo)\b|\bse\s+paga\b|\blink\b|\benlace\b|"
     r"\breserv(?:o|ar)\b|\bapart(?:o|ar)\b|quiero\s+(?:ir|asistir|mi\s+boleto|el\s+boleto|comprar)|"
     r"me\s+gustar[ií]a\s+(?:ir|asistir)|quiero\s+(?:\d+|un|uno|dos)\s+boletos?|"
     r"d[oó]nde\s+(?:consigo|compro|pago|obtengo)|c[oó]mo\s+(?:consigo|obtengo)|"
