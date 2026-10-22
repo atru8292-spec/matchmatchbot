@@ -753,9 +753,9 @@ _EVENT_CONTENT_MARKER_RE = re.compile(
 # solteras). Enriquecido para que el override no pierda ese gancho.
 _EVENT_GATE_OVERRIDE_BUBBLE = (
     "Se llama Slavic-Latino Connect Night: es una noche especial en CDMX para conocer en "
-    "persona a mujeres eslavas solteras que buscan una relación seria, en un "
-    "ambiente relajado y seguro. El precio es de [event_price_nonmember] MXN"
-    "[event_promo] e incluye bebida de bienvenida y entrantes. Aquí está el enlace "
+    "persona a mujeres eslavas solteras que buscan una relación seria. El precio es de "
+    "[event_price_nonmember] MXN[event_promo] e incluye bebida de bienvenida y botanas. "
+    "Aquí está el enlace "
     "para tu boleto, con fotos y videos de eventos pasados: [event_link] 🤍"
 )
 # interest='both' — el override de arriba solo habla del evento, perdiendo la mención

@@ -2789,3 +2789,32 @@ async def test_photo_turn_when_event_interest_only_in_history(monkeypatch):
     assert r["rag_meta"]["fuentes"] == ["venta_tras_foto"]
     assert "Aquí puedes apartar tu lugar: [event_link]" in r["messages"]
     assert not any("foto tuya" in m for m in r["messages"] + r.get("after_media", []))
+
+
+def test_scenario15_exclusividad_patch_on_backup():
+    """Патч №15 по бэкапу: убрана только фраза про эксклюзивность, остальное как было."""
+    import pathlib
+    from scripts import patch_scenario15_exclusividad_2026_10 as p15
+    from scripts import patch_rag_scenarios_2026_10 as p
+    f = pathlib.Path(__file__).resolve().parent.parent / "docs/backups/scenarios_all_before_rag_20261022T040921Z.json"
+    if not f.exists():
+        pytest.skip("нет локального бэкапа сценариев")
+    rows = {r["id"]: r["template_es"] for r in json.loads(f.read_text("utf-8"))}
+    after_rag, _ = p.plan({15: rows[15]}, [x for x in p.PATCHES if x[0] == 15])   # как сейчас в проде
+    cur = after_rag[15]
+    changes, errors = p15.plan({15: cur}, p15.PATCHES)
+    assert not errors
+    new = changes[15]
+    assert "exclusividad" not in new and "agotados" not in new and "cupo limitado" not in new
+    assert cur.replace(", toca ligero la exclusividad (eventos pasados agotados, cupo limitado)", "") == new
+    assert all(sid != 40 for sid, _, _ in p15.PATCHES)
+
+
+def test_legacy_prompt_and_fallback_event_text():
+    import pathlib
+    import ai as legacy
+    v5 = (pathlib.Path(__file__).resolve().parent.parent / "anna_prompt_v5.md").read_text("utf-8")
+    assert "medianoche" not in v5 and "Hora de término del evento**: no la sabes" in v5
+    assert "botanas" in legacy._EVENT_GATE_OVERRIDE_BUBBLE
+    assert "entrantes" not in legacy._EVENT_GATE_OVERRIDE_BUBBLE
+    assert "relajado y seguro" not in legacy._EVENT_GATE_OVERRIDE_BUBBLE
