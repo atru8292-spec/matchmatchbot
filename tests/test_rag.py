@@ -1653,3 +1653,23 @@ class TestConversationLogic:
         b, reason, notes = revisar(["Es en [event_address]."], "¿cuánto cuesta?", CARLOS, RUN2_BASE)
         assert reason is None and b == ["Es en [event_address]."]
         assert "факт без вопроса лида оставлен: без него ответ пустой" in notes
+
+    def test_run3_d3_dangling_lead_in_removed(self):
+        """Прогон 3, Д3: модель оставила «Volviendo al evento,» в bubbles, вопрос — в paso_extra."""
+        b, reason, _ = revisar(["Jaja, no lo vi, pero seguro estuvo emocionante. Volviendo al evento,"],
+                               "¿viste el partido del América ayer?", CARLOS, RUN2_BASE,
+                               paso={"tipo": "pregunta", "texto": "¿Cuántos años tienes y a qué te dedicas?"})
+        assert reason is None
+        assert b == ["Jaja, no lo vi, pero seguro estuvo emocionante.",
+                     "¿Cuántos años tienes y a qué te dedicas?"]
+
+    def test_run3_d3_offer_more_removed(self):
+        prior = RUN2_BASE + [msg("lead", "¿viste el partido del América ayer?", 10),
+                             msg("anna", "Jaja, no lo vi, pero seguro estuvo emocionante.", 9),
+                             msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 9)]
+        b, reason, _ = revisar(
+            ["La verdad no le voy a ningún equipo, pero sí disfruto ver partidos de vez en cuando.",
+             "Volviendo al evento, ¿te gustaría saber algo más sobre la Slavic-Latino Connect Night?"],
+            "jaja sí, estuvo buenísimo, ¿tú le vas a alguien?", CARLOS, prior)
+        assert reason is None
+        assert b == ["La verdad no le voy a ningún equipo, pero sí disfruto ver partidos de vez en cuando."]

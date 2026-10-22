@@ -83,3 +83,9 @@ def test_judge_unasked_fact_and_thanks():
     assert s.judge(["Es temática de Halloween."], "hola, vi el evento", False) == []   # приветствие
     assert "«Gracias» без повода" in s.judge(["¡Gracias, Diego!"], "hola", True, dio_algo=False)
     assert "«Gracias» без повода" not in s.judge(["¡Gracias, Diego!"], "soy Diego", True)
+
+
+def test_judge_objection_recap_dangling():
+    assert s.judge(["Te entiendo. Incluye bebida de bienvenida y botanas."], "se me hace caro", True) == []
+    assert s.judge(["La última vez platicamos del evento en Polanco."], "hola", True) == []
+    assert "оборванная фраза" in s.judge(["Seguro estuvo emocionante. Volviendo al evento,"], "x", True)

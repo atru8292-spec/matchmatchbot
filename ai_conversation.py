@@ -618,6 +618,30 @@ def add_slot_question(bubbles: list[str], question: str | None, user_text: str,
     return bubbles + [question]
 
 
+# «¿Te gustaría saber algo más sobre el evento?» — предложение рассказать, о чём лид не спрашивал.
+_OFFER_MORE_RE = re.compile(r"¿\s*(?:te\s+gustar[ií]a|quieres|te\s+interesa)\s+(?:saber|conocer)\s+"
+                            r"(?:algo\s+)?m[aá]s\b", re.IGNORECASE)
+_DANGLING_RE = re.compile(r"[,:;—–-]\s*$")
+
+
+def drop_offer_more(bubbles: list[str]) -> list[str]:
+    out = [_drop_sentences(b, lambda s: bool(_OFFER_MORE_RE.search(s))) for b in bubbles]
+    return [b for b in out if b.strip()]
+
+
+def drop_dangling(bubbles: list[str]) -> list[str]:
+    """Пузырь оборван на запятой («…emocionante. Volviendo al evento,»: вопрос модель унесла
+    в paso_extra) — хвост после последнего законченного предложения убираем."""
+    out = []
+    for b in bubbles:
+        if _DANGLING_RE.search(b):
+            ends = [m.end() for m in re.finditer(r"[.!?]", b)]
+            b = b[:ends[-1]] if ends else ""
+        if b.strip():
+            out.append(b.strip())
+    return out
+
+
 def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict,
                 user_text: str, dio_algo: bool = True,
                 answered: set[str] | frozenset = frozenset(),
@@ -701,6 +725,10 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
     new = whole_price(bubbles, settings)
     if new != bubbles:
         notes.append("цена целой мыслью")
+        bubbles = new
+    new = drop_dangling(drop_offer_more(bubbles))
+    if new != bubbles and new:
+        notes.append("убрала оборванную фразу или предложение рассказать ещё")
         bubbles = new
     name = lead.get("name") or ai._plausible_name(lead.get("whatsapp_name"))
     bubbles = strip_name_start(bubbles, name)

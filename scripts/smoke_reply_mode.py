@@ -271,13 +271,16 @@ def judge(bubbles: list[str], lead_text: str, presented_before: bool,
         out.append("неподставленный токен")
     # Факт про ивент без вопроса лида (кроме приветствия, хода с фото и ответа со ссылкой).
     if presented_before and lead_text != PHOTO_OK and LINK not in text \
-            and not rag._BROAD_ASK_RE.search(lead_text):
+            and not rag._BROAD_ASK_RE.search(lead_text) \
+            and not memory._PRICE_OBJECTION_RE.search(lead_text):
         asked = rag.temas_preguntados(lead_text)
         for b in bubbles:
             for sent in rag._sentences(b):
                 temas = memory.hechos_en(sent, ev())
-                if "?" not in sent and temas and not temas & asked:
+                if "?" not in sent and temas and not temas & asked and not rag._RECAP_RE.match(sent):
                     out.append(f"факт без вопроса: {sorted(temas)}")
+    if any(re.search(r"[,:;]\s*$", b) for b in bubbles):
+        out.append("оборванная фраза")
     if bubbles and re.match(r"^\W*(?:muchas\s+)?gracias\b", bubbles[0], re.I) and not dio_algo:
         out.append("«Gracias» без повода")
     return out
