@@ -2077,3 +2077,56 @@ class TestQuietOptout:
         monkeypatch.setattr(main.escalation, "notify_optout", AsyncMock())
         await main._apply_decision("wa_1", filters.Decision("optout", "r"), {}, "basta")
         send.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Ревью 2026-10-22 (4.4): подпись к фото — через filters.decide и темы «молча Ане»
+# ---------------------------------------------------------------------------
+
+class TestPhotoCaptionFilters:
+    PHONE = "wa_521000002222"
+    LEAD = {"phone": "wa_521000002222", "whatsapp_name": "Test", "mode": "auto",
+            "name": "Carlos", "is_single": True, "interest": "event"}
+    CONTENT_URI = "https://cdn.wazzup24.com/media/photo.jpg"
+
+    def _setup(self, monkeypatch, caption):
+        msgs = [{"id": "p1", "text": "[photo received]",
+                 "meta": {"content_type": "photo", "content_uri": self.CONTENT_URI, "caption": caption}}]
+        monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(return_value=msgs))
+        monkeypatch.setattr(db, "mark_messages_processed", AsyncMock())
+        monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value=self.LEAD))
+        monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"bot_paused": "0"}))
+        monkeypatch.setattr(db, "bypass_phone_set", AsyncMock(return_value=frozenset()))
+        mocks = {"photo": AsyncMock(), "apply": AsyncMock(), "manual": AsyncMock(),
+                 "escalation": AsyncMock(), "run_ai": AsyncMock()}
+        monkeypatch.setattr(main, "_process_photos", mocks["photo"])
+        monkeypatch.setattr(main, "_apply_decision", mocks["apply"])
+        monkeypatch.setattr(main, "_run_ai", mocks["run_ai"])
+        monkeypatch.setattr(db, "update_lead_fields", mocks["manual"])
+        monkeypatch.setattr(main.escalation, "notify_escalation", mocks["escalation"])
+        return mocks
+
+    @pytest.mark.parametrize("caption,action", [
+        ("voy con mi novia", "companion_question"),
+        ("ya no me escribas", "optout"),
+    ])
+    async def test_caption_decision_before_ai(self, monkeypatch, caption, action):
+        m = self._setup(monkeypatch, caption)
+        await main._process_burst(self.PHONE)
+        m["photo"].assert_not_awaited()
+        m["run_ai"].assert_not_awaited()
+        assert m["apply"].await_args.args[1].action == action
+
+    async def test_caption_payment_question_to_anya(self, monkeypatch):
+        m = self._setup(monkeypatch, "¿aceptan tarjeta?")
+        await main._process_burst(self.PHONE)
+        m["photo"].assert_not_awaited()
+        m["manual"].assert_awaited_once_with(self.PHONE, mode="manual")
+        m["escalation"].assert_awaited_once()
+
+    async def test_plain_caption_goes_to_photo(self, monkeypatch):
+        m = self._setup(monkeypatch, "soy Carlos, 35 años")
+        await main._process_burst(self.PHONE)
+        m["photo"].assert_awaited_once()
+        m["apply"].assert_not_awaited()

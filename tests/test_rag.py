@@ -2303,3 +2303,19 @@ class TestYesNoAndDomain:
             monkeypatch.setattr(rag, "_chat", chat)
             assert await rag.verify_claims([texto], knowledge.usable(SEED, SETTINGS, "2026-10-22"),
                                            memory.evento_actual(SETTINGS), [], rag.Cost(), SETTINGS) == []
+
+
+@pytest.mark.parametrize("caption,ok", [
+    ("", True), ("Carlos", True), ("soy Carlos, 35 años, ingeniero", True),
+    ("¿cuánto cuesta?", False), ("voy con mi novia", False), ("¿cómo compro?", False),
+    ("ya no me escribas", False)])
+def test_photo_caption_only_self_data(caption, ok):
+    assert rag.caption_only_self_data(caption) is ok
+
+
+@pytest.mark.asyncio
+async def test_photo_with_question_caption_goes_to_model(monkeypatch):
+    p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra={**CARLOS, "photo_received": True})
+    p.chat_replies = [reply(["¡Gracias por tu foto, Carlos! 😊", "Incluye bebida de bienvenida y botanas."])]
+    await rag.generate_reply(p.lead, RUN2_BASE, "¿qué incluye?\n\n[фото одобрено]")
+    assert len(p.model_calls()) == 1

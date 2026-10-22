@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 import actions
 import ai
+import ai_conversation
 import booking
 import db
 import escalation
@@ -230,6 +231,26 @@ async def _process_burst_impl(phone: str) -> None:
             else (m.get("text") or "")
             for m in msgs
         ).strip()
+        # Подпись к фото проходит те же детерминированные фильтры, что и текст (спутник,
+        # opt-out, звонок, escort, агрессия), и темы «молча Ане» (оплата, скидка, возврат)
+        # — до Vision и AI, в обоих режимах (ревью 2026-10-22).
+        if accompanying_text:
+            cap = filters.decide(lead, whitelisted, accompanying_text, phone, bypass_phones,
+                                 whitelist_no_alert=wl_no_alert, bot_paused=bot_paused)
+            if cap.action != "needs_ai":
+                logger.info("подпись к фото [%s]: %s — фото не обрабатываю", phone, cap.action)
+                await _apply_decision(phone, cap, lead, accompanying_text)
+                return
+            if ai_conversation._SILENT_TOPIC_RE.search(accompanying_text):
+                logger.info("подпись к фото [%s]: оплата/скидка/возврат — Аня", phone)
+                try:
+                    await db.update_lead_fields(phone, mode="manual")
+                except Exception:
+                    logger.exception("не смог поставить manual (подпись к фото) [%s]", phone)
+                await escalation.notify_escalation(
+                    lead, "Фото с вопросом про оплату, скидку или возврат — ответь сама",
+                    accompanying_text)
+                return
         # Обёртка: сообщения уже processed — сбой фото-обработки не должен быть тихим.
         try:
             await _process_photos(phone, lead, content_uris, accompanying_text or None)

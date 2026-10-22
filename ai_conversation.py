@@ -1434,6 +1434,21 @@ def media_fits(mem: dict) -> bool:
                    or _ANGER_RE.search(t) or filters.is_aggression(t) for t in recent)
 
 
+# Подпись к фото — только имя и данные о себе («soy Carlos, 35 años, ingeniero»). Вопрос,
+# покупка, спутник, звонок, оплата — уже не «только данные»: отвечает модель (ревью 2026-10-22).
+_NOT_SELF_RE = re.compile(r"\?|cu[aá]nt|c[oó]mo|d[oó]nde|cu[aá]ndo|qu[eé]\s|compr|pag|precio|"
+                          r"boleto|novia|amig|espos|pareja|llam|escrib|descuent|tarjeta|efectivo",
+                          re.IGNORECASE)
+
+
+def caption_only_self_data(rest: str) -> bool:
+    """Подписи нет или в ней только имя и данные о себе — тогда ход после фото собирает код."""
+    rest = (rest or "").strip()
+    if not rest:
+        return True
+    return len(rest.split()) <= 12 and not _NOT_SELF_RE.search(rest)
+
+
 def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict | None:
     """Ответ на одобренное фото лида ивента, у которого есть имя и «холост ли»: сразу к
     покупке. None — случай не наш (другая ветка, ссылку уже давали, в сообщении есть вопрос)."""
@@ -1441,7 +1456,9 @@ def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict 
         return None
     rest = re.sub(r"\[фото одобрено[^\]]*\]", "", user_text).strip()
     ya, settings = mem["ya_hecho"], mem["settings"]
-    if "?" in rest or memory.ruta(lead, user_text) != "evento" or ya.get("enlace_enviado") \
+    if not caption_only_self_data(rest):
+        return None             # в подписи вопрос или что-то кроме данных о себе — модель
+    if memory.ruta(lead, user_text) != "evento" or ya.get("enlace_enviado") \
             or ya.get("boleto_comprado") or settings.get("event_active") != "1" \
             or not (settings.get("event_link") or "").strip():
         return None
