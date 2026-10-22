@@ -20,7 +20,7 @@ BAD = [
     "Así te confirmo si el evento es para ti.",
     "Cualquier duda, aquí estoy 🤍",
     "Va, checa el link porfa",
-    "Mira, el evento es en Polanco.",
+    "Mira, el evento es en Roma Norte.",
     "Eres un hombre muy interesante.",
     "Somos la mejor agencia de México.",
     "¡Wow, un médico! Me encanta, seguro eres un gran hombre.",
@@ -33,7 +33,7 @@ BAD = [
 GOOD = [
     "Van 30 mujeres y 30 hombres, todos solteros.",
     "Ahora cuesta 6000 MXN e incluye bebida de bienvenida y botanas.",
-    "Es en Polanco, CDMX.",
+    "Es en Roma Norte, CDMX.",
     "Te entiendo, no es poco. Es una noche pensada para conocer en persona a mujeres eslavas solteras.",
     "¿Cómo te llamas y estás soltero?",
     "Tómate tu tiempo, sin presión.",
@@ -43,14 +43,14 @@ GOOD = [
     "¡Claro! Te cuento.",
     "¡Qué bien! ¿Y a qué te dedicas?",
     "¡Me encanta! Es temática de Halloween.",
-    "Qué gusto, Carlos. Es en Polanco, CDMX.",
+    "Qué gusto, Carlos. Es en Roma Norte, CDMX.",
     "Jaja, ¡ojalá alguien llegue de vampiro!",
 ]
 
 
 @pytest.mark.parametrize("text,norm", [
-    ("¡Qué bien! Es en Polanco.", "que bien"), ("Jajaja, sí.", "jaja"), ("Claro, te cuento.", "claro"),
-    ("Es en Polanco, CDMX.", None), ("¡Me encanta! Ok.", "me encanta")])
+    ("¡Qué bien! Es en Roma Norte.", "que bien"), ("Jajaja, sí.", "jaja"), ("Claro, te cuento.", "claro"),
+    ("Es en Roma Norte, CDMX.", None), ("¡Me encanta! Ok.", "me encanta")])
 def test_reaction_start(text, norm):
     assert cr.reaction_start(text) == norm
 

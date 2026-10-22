@@ -26,7 +26,9 @@ FIELDS = ["id", "tipo", "titulo", "contenido_es", "cuando_usar", "como_responder
 TIPOS = {"event", "service", "tariff", "faq", "objection", "policy", "style", "style_pair",
          "base_script"}
 TOKENS = {"[event_date]", "[event_start]", "[event_address]", "[event_price_nonmember]",
-          "[event_price_next]", "[event_link]", "[course_link]", "[horario_llamada]"}
+          "[event_price_next]", "[event_link]", "[course_link]", "[horario_llamada]",
+          # 2026-10-22: зачёркнутая старая цена, срок предпродажи, день недели ивента
+          "[event_promo]", "[event_presale_until]", "[event_weekday]"}
 # Любая ссылка: токен билета, http(s), www., домен .com/.mx (code-review: www.… проходил мимо).
 LINK_RE = re.compile(r"\[event_link\]|https?://|\bwww\.|\b[\w-]+\.(?:com|mx)\b", re.IGNORECASE)
 EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
@@ -107,7 +109,8 @@ def test_only_known_tokens(r):
     for t in _model_facing(r):
         for tok in re.findall(r"\[[a-z_]+\]", t):
             assert tok in TOKENS, f"{r['id']}: неизвестный токен {tok}"
-        assert "[event_promo]" not in t, f"{r['id']}: зачёркнутая «было» запрещена"
+        # зачёркнутая старая цена — только во фразе о цене (решение владелицы 2026-10-22)
+        assert "[event_promo]" not in t or r["id"] == "event_price", r["id"]
 
 
 def test_link_only_in_purchase_records():
@@ -122,16 +125,19 @@ def test_base_scripts():
         assert len(r["contenido_es"].split("\n\n")) <= 4, r["id"]
 
 
-def test_hola_script_is_owner_text_without_binary_question():
+def test_hola_script_owner_2026_10_22():
+    """Новое приветствие на голое «hola» по образцу автоответа владелицы (2026-10-22)."""
     r = next(r for r in RECORDS if r["id"] == "greeting_hola")
-    t = r["contenido_es"]
-    assert "Soy Anna, fundadora de Match Match Agency" in t
-    assert "Cuéntame qué estás buscando" in t
-    assert t.endswith("La idea no es que conozcas a muchas mujeres, sino que conozcas a las correctas. ❤️")
-    assert "🤍" in t.split("\n\n")[0]       # эмодзи Ани, как в оригинале №1
-    assert not re.search(r"dos\s+(caminos|opciones)|¿servicio o evento", t, re.IGNORECASE)
-    assert "soltero" not in t and "llamas" not in t   # имя и «холост ли» — следующим ответом
-    assert r["situacion"]["presentacion_hecha"] is False
+    assert r["contenido_es"].split("\n\n") == [
+        "¡Hola! Soy Anna, fundadora de Match Match Agency 🤍",
+        "El [event_weekday] [event_date] tenemos Slavic-Latino Connect Night en [event_address]: una "
+        "noche para conocer en persona a mujeres eslavas solteras que viven en CDMX y buscan una "
+        "relación seria. Esta vez es temática de Halloween 🎃",
+        "Y si prefieres algo más personal, también puedo presentarte mujeres que seleccione "
+        "especialmente para ti.",
+        "¿Qué te interesa más, el evento o la búsqueda personalizada?"]
+    assert "soltero" not in r["contenido_es"] and "llamas" not in r["contenido_es"]
+    assert r["situacion"]["presentacion_hecha"] is False and r["situacion"]["auto_saludo"] is False
 
 
 def test_style_pairs():
@@ -159,12 +165,13 @@ def test_event_records_expire_with_event():
 
 def test_unconfirmed_numbers_not_served():
     unconfirmed = {r["id"] for r in RECORDS if not r["confirmado"]}
-    assert unconfirmed == {"event_attendees", "event_end_time", "event_unique",
+    # 30 и 30 подтверждены автоответом владелицы 2026-10-22
+    assert unconfirmed == {"event_end_time", "event_unique",
                            "service_women_ages", "service_women_location", "service_duration",
                            "agency_clients_countries", "agency_social_followers",
-                           "pair_attendees", "pair_end_time"}
+                           "pair_end_time"}
     for r in RECORDS:
-        if r["confirmado"]:
+        if r["confirmado"] and r["id"] not in ("event_attendees", "pair_attendees"):
             for t in _lead_facing(r) + [r["como_responder"] or ""]:
                 assert not re.search(r"30\s+(?:mujeres|hombres)|30\s+y\s+30|[uú]nico\s+en\s+Am[eé]rica|"
                                      r"medianoche|24\s+y\s+40|seguidores|6\s+meses|28\s+eventos",
@@ -183,16 +190,31 @@ def test_site_facts_2026_10_21():
     assert by_id["event_couples_found"]["contenido_es"] == \
         "Docenas de personas ya han encontrado a su pareja en nuestros eventos."
     assert by_id["service_women_3000"]["confirmado"] is True
-    assert "[event_price_next]" in by_id["event_price_steps"]["contenido_es"]
+    assert by_id["event_price_steps"]["activo"] is False      # лестницы цен нет (2026-10-22)
     for r in RECORDS:
         for t in _model_facing(r):
             assert "Slavic Latino Night" not in t and "entrantes" not in t, r["id"]
     for rid in ("event_includes", "obj_event_price"):
         assert "botanas" in by_id[rid]["contenido_es"], rid
-    # цена целой мыслью (решение владелицы 2026-10-22)
-    assert by_id["event_price"]["contenido_es"] == (
-        "Ahora cuesta [event_price_nonmember] MXN. Más adelante el precio sube a [event_price_next] MXN.")
-    assert by_id["event_price_steps"]["contenido_es"] == "Más adelante el precio sube a [event_price_next] MXN."
+    # предпродажа с зачёркнутой старой ценой (автоответ владелицы 2026-10-22)
+    assert by_id["event_price"]["contenido_es"] == \
+        "El precio de preventa es de [event_price_nonmember] MXN[event_promo]."
+
+
+def test_owner_autoreply_facts_2026_10_22():
+    by_id = {r["id"]: r for r in RECORDS}
+    expect = {"event_attendees": "Van 30 mujeres eslavas solteras y 30 hombres solteros.",
+              "event_women_profile": "Las mujeres son eslavas, educadas, viven en CDMX y buscan una relación seria.",
+              "event_women_languages": "Las mujeres hablan español e inglés.",
+              "event_men_profile": "Los hombres que asisten son solteros y respetan a las mujeres.",
+              "event_same_intention": "Todos van con la misma intención: conocer a alguien especial y "
+                                      "construir una relación seria."}
+    for rid, text in expect.items():
+        assert by_id[rid]["contenido_es"] == text and by_id[rid]["confirmado"] is True, rid
+    assert by_id["event_presale_until"]["contenido_es"] == \
+        "El precio de preventa es por tiempo limitado, hasta el [event_presale_until]."
+    assert by_id["event_end_time"]["confirmado"] is False and by_id["event_unique"]["confirmado"] is False
+    assert not any("Polanco" in json.dumps(r, ensure_ascii=False) for r in RECORDS)
 
 
 def test_objections_without_praise():

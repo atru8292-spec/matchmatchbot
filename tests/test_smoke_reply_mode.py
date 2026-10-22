@@ -45,7 +45,7 @@ def test_photo_dialogs_present():
 
 
 def test_judge_owner_rules_2026_10_22():
-    prev = "Es en Polanco.\n\n¿Cuántos años tienes y a qué te dedicas?"
+    prev = "Es en Roma Norte.\n\n¿Cuántos años tienes y a qué te dedicas?"
     assert "вопрос слота подряд: age" in s.judge(["Incluye botanas.", "¿Cuántos años tienes?"],
                                                  "¿qué incluye?", True, prev_reply=prev)
     assert "следующая цена обрывком" in s.judge(["La siguiente es de 7000 MXN."], "¿cuánto?", True)
@@ -81,7 +81,7 @@ async def test_read_only_pool_blocks_writes():
 def test_judge_unasked_fact_and_thanks():
     assert "факт без вопроса: ['evento_30']" in s.judge(
         ["¡Gracias, Javier! 😊", "Este es nuestro evento número 30."], "me llamo Javier, sí soltero", True)
-    assert s.judge(["Es en Polanco, CDMX."], "¿dónde es?", True) == []
+    assert s.judge(["Es en Roma Norte, CDMX."], "¿dónde es?", True) == []
     assert s.judge(["Es temática de Halloween."], "hola, vi el evento", False) == []   # приветствие
     assert "«Gracias» без повода" in s.judge(["¡Gracias, Diego!"], "hola", True, dio_algo=False)
     assert "«Gracias» без повода" not in s.judge(["¡Gracias, Diego!"], "soy Diego", True)
@@ -89,7 +89,7 @@ def test_judge_unasked_fact_and_thanks():
 
 def test_judge_objection_recap_dangling():
     assert s.judge(["Te entiendo. Incluye bebida de bienvenida y botanas."], "se me hace caro", True) == []
-    assert s.judge(["La última vez platicamos del evento en Polanco."], "hola", True) == []
+    assert s.judge(["La última vez platicamos del evento en Roma Norte."], "hola", True) == []
     assert "оборванная фраза" in s.judge(["Seguro estuvo emocionante. Volviendo al evento,"], "x", True)
 
 

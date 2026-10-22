@@ -20,6 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import db
+import sender
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +125,10 @@ def is_usable(rec: dict, settings: dict, today: str) -> bool:
     event_tokens = tokens_of(rec) - _NON_EVENT_TOKENS
     if (event_tokens or rec.get("evento_id")) and settings.get("event_active") != "1":
         return False
-    # Пустая настройка (напр. event_price_next не задана) → запись не подаём, а не «de  MXN».
-    return all((settings.get(t) or "").strip() for t in event_tokens)
+    # Пустая настройка (напр. event_price_next не задана) или прошедший срок предпродажи →
+    # запись не подаём, а не «de  MXN». [event_promo] может быть пустым (нет старой цены).
+    return all(sender.event_token_value(t, settings, date.fromisoformat(today)) is not None
+               for t in event_tokens)
 
 
 # Необязательные токены: если настройка пуста, убираем только фразу с ними, а не всю запись

@@ -1,6 +1,6 @@
 # База знаний режима rag: ревью
 
-Источник: `knowledge/seed.json`, версия 2026-10-22. Записей: 97, ждут Аню: 11.
+Источник: `knowledge/seed.json`, версия 2026-10-22b. Записей: 102, ждут Аню: 9.
 Документ собран скриптом `scripts/knowledge_review.py`, руками не править.
 
 - Записи с `confirmado=false` в ответы не подаются, пока Аня не подтвердит.
@@ -10,7 +10,6 @@
 
 ## Ждут Аню
 
-- `event_attendees`: Asistentes
 - `event_end_time`: Hora de término
 - `event_unique`: Evento único
 - `service_women_ages`: Edades de las mujeres
@@ -19,7 +18,6 @@
 - `agency_clients_countries`: Clientes en otros países
 - `agency_social_followers`: Seguidores en redes
 - `policy_cash_transfer`: Efectivo, OXXO, transferencia, depósito
-- `pair_attendees`: Par: ¿cuántas personas van?
 - `pair_end_time`: Par: ¿a qué hora termina?
 
 ## Ивент 18.11.2026: факты
@@ -66,14 +64,14 @@
 
 **Текст (es):**
 
-> Ahora cuesta [event_price_nonmember] MXN. Más adelante el precio sube a [event_price_next] MXN.
+> El precio de preventa es de [event_price_nonmember] MXN[event_promo].
 
-**Перевод:** Сейчас стоит [цена] MXN. Позже цена поднимется до [следующая цена] MXN.
+**Перевод:** Цена предпродажи [цена] MXN (зачёркнутая старая цена, если задана).
 
 - **Когда:** ¿cuánto cuesta?, ¿cuánto es?, precio del evento, ¿qué precio tiene el boleto?, costo
-- **Как отвечать (для модели):** Siempre las dos frases juntas, tal cual, con los tokens (el sistema pone las cifras). Sin enlace salvo que pregunte cómo comprar. Nunca otra cifra.
+- **Как отвечать (для модели):** Tal cual, con los tokens: el sistema pone la cifra y, si existe, el precio anterior tachado. Sin enlace salvo que pregunte cómo comprar. Sin presión ni urgencia. Nunca otra cifra.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
-- **Источник:** app_settings, сайт (лестница 6000 → 7000 → 8000)
+- **Источник:** автоответ владелицы 2026-10-22 (подтверждено, приоритет над сайтом)
 
 ### `event_price_steps` · El precio sube por etapas · ✅ подтверждено
 
@@ -86,7 +84,7 @@
 - **Когда:** ¿va a subir el precio?, ¿el precio cambia?, ¿cuánto costará después?, (como dato opcional después de dar el precio)
 - **Как отвечать (для модели):** Siempre con esta frase completa, sin decir cuándo sube y sin presionar a comprar.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
-- **Источник:** сайт rusaencdmx.com (MXN 6000 → 7000 → 8000)
+- **Источник:** сайт rusaencdmx.com (MXN 6000 → 7000 → 8000); выключено 2026-10-22: лестницы цен нет
 
 ### `event_includes` · Qué incluye · ✅ подтверждено
 
@@ -101,18 +99,79 @@
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
 - **Источник:** №2, №51, сайт
 
-### `event_attendees` · Asistentes · ⏳ ждёт Аню
+### `event_attendees` · Asistentes · ✅ подтверждено
 
 **Текст (es):**
 
-> Van 30 mujeres y 30 hombres, todos solteros.
+> Van 30 mujeres eslavas solteras y 30 hombres solteros.
 
-**Перевод:** Будут 30 женщин и 30 мужчин, все одинокие. (Нет на сайте, подтверждает Аня.)
+**Перевод:** Будут 30 славянок и 30 мужчин, все холостые.
 
 - **Когда:** ¿cuántas personas van?, ¿cuántas mujeres hay?, ¿cuántos van?, ¿quiénes asisten?, ¿cuántas chicas?
 - **Как отвечать (для модели):** Responde exactamente esto. No agregues precio ni enlace.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
-- **Источник:** №51, промпт
+- **Источник:** автоответ владелицы 2026-10-22 (подтверждено, приоритет над сайтом)
+
+### `event_presale_until` · Hasta cuándo es la preventa · ✅ подтверждено
+
+**Текст (es):**
+
+> El precio de preventa es por tiempo limitado, hasta el [event_presale_until].
+
+**Перевод:** Цена предпродажи действует ограниченное время, до [дата].
+
+- **Когда:** ¿hasta cuándo es la preventa?, ¿hasta cuándo es ese precio?, ¿el precio va a subir?, ¿cuánto dura el descuento?
+- **Как отвечать (для модели):** Solo con la fecha de los tokens; si no hay ficha (sin fecha o ya pasó), no hables del plazo. Sin presión.
+- **Флаги:** действие: ответить; действует до 2026-11-18
+- **Источник:** автоответ владелицы 2026-10-22 (подтверждено, приоритет над сайтом)
+
+### `event_same_intention` · Todos van con la misma intención · ✅ подтверждено
+
+**Текст (es):**
+
+> Todos van con la misma intención: conocer a alguien especial y construir una relación seria.
+
+**Перевод:** Все приходят с одной целью: встретить особенного человека и построить серьёзные отношения.
+
+- **Когда:** ¿a qué va la gente?, ¿es serio?, ¿es para ligar?, ¿qué buscan los asistentes?
+- **Флаги:** действие: ответить; действует до 2026-11-18
+- **Источник:** автоответ владелицы 2026-10-22 (подтверждено, приоритет над сайтом)
+
+### `event_men_profile` · Quiénes son los hombres del evento · ✅ подтверждено
+
+**Текст (es):**
+
+> Los hombres que asisten son solteros y respetan a las mujeres.
+
+**Перевод:** Мужчины на ивенте — холостые и уважают женщин.
+
+- **Когда:** ¿qué hombres van?, ¿quiénes son los hombres?, ¿van otros hombres?
+- **Флаги:** действие: ответить; действует до 2026-11-18
+- **Источник:** автоответ владелицы 2026-10-22 (подтверждено, приоритет над сайтом)
+
+### `event_women_languages` · Idiomas de las mujeres · ✅ подтверждено
+
+**Текст (es):**
+
+> Las mujeres hablan español e inglés.
+
+**Перевод:** Женщины говорят по-испански и по-английски.
+
+- **Когда:** ¿hablan español?, ¿en qué idioma?, no hablo ruso, ¿hablan inglés?
+- **Флаги:** действие: ответить; действует до 2026-11-18
+- **Источник:** автоответ владелицы 2026-10-22 (подтверждено, приоритет над сайтом)
+
+### `event_women_profile` · Quiénes son las mujeres del evento · ✅ подтверждено
+
+**Текст (es):**
+
+> Las mujeres son eslavas, educadas, viven en CDMX y buscan una relación seria.
+
+**Перевод:** Женщины — славянки, образованные, живут в Мехико и ищут серьёзные отношения.
+
+- **Когда:** ¿cómo son las mujeres?, ¿de dónde son?, ¿viven aquí?, ¿qué buscan?, ¿quiénes van?
+- **Флаги:** действие: ответить; действует до 2026-11-18
+- **Источник:** автоответ владелицы 2026-10-22 (подтверждено, приоритет над сайтом)
 
 ### `event_location` · Lugar · ✅ подтверждено
 
@@ -120,7 +179,7 @@
 
 > Es en [event_address].
 
-**Перевод:** Это в [место] (Polanco, CDMX).
+**Перевод:** Это в [место] ([место]).
 
 - **Когда:** ¿dónde es?, ¿dónde es exactamente?, ubicación, ¿en qué lugar?, dirección
 - **Как отвечать (для модели):** Primera vez: responde solo esto. No describas la zona ni digas que la dirección se da después. Si el lead vuelve a pedir la dirección exacta y ya_hecho.direccion_dada es true: policy_exact_address_repeat.
@@ -561,18 +620,20 @@
 
 **Текст (es):**
 
-> ¡Hola! 🤍
+> ¡Hola! Soy Anna, fundadora de Match Match Agency 🤍
 >
-> Soy Anna, fundadora de Match Match Agency. Cuéntame qué estás buscando y yo te digo qué creo que te conviene más. Puedo presentarte personalmente mujeres que seleccione para ti, tomando en cuenta tu personalidad, tu estilo de vida y lo que realmente quieres encontrar. O, si prefieres algo más espontáneo, tenemos nuestro próximo evento en CDMX, donde vas a poder conocer en persona a varias mujeres solteras que también están buscando una relación seria.
+> El [event_weekday] [event_date] tenemos Slavic-Latino Connect Night en [event_address]: una noche para conocer en persona a mujeres eslavas solteras que viven en CDMX y buscan una relación seria. Esta vez es temática de Halloween 🎃
 >
-> La idea no es que conozcas a muchas mujeres, sino que conozcas a las correctas. ❤️
+> Y si prefieres algo más personal, también puedo presentarte mujeres que seleccione especialmente para ti.
+>
+> ¿Qué te interesa más, el evento o la búsqueda personalizada?
 
-**Перевод:** «Привет!» / «Я Анна, основательница Match Match Agency. Расскажи, что ищешь, и я скажу, что тебе подойдёт больше. Могу лично знакомить с женщинами, которых подберу под тебя: твой характер, образ жизни и то, что ты на самом деле хочешь найти. Или, если хочешь чего-то более спонтанного, у нас ближайший ивент в Мехико, где можно вживую познакомиться с несколькими одинокими женщинами, которые тоже ищут серьёзных отношений.» / «Смысл не в том, чтобы познакомиться с множеством женщин, а в том, чтобы познакомиться с подходящими.»
+**Перевод:** Привет! Я Анна… В среду [дата] у нас вечер в [место]… Если хочешь более личное — подберу женщин. Что интереснее: ивент или персональный подбор?
 
 - **Когда:** hola, buenas, buenos días, hola qué tal, información, quiero información, info, ¿qué ofrecen?
-- **Как отвечать (для модели):** Se envía DOSLOVNO, sin modelo, cuando se cumple la situación. En cualquier otro caso es solo referencia de estilo. Nombre y «¿estás soltero?» van en la siguiente respuesta, no en esta.
-- **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["sin_definir"]}`
-- **Источник:** №1, одобрен владелицей 08.09: эмодзи как в оригинале в пределах правила (≤1 в пузыре, ≤2 на ответ) — 🤍 и ❤️; 😉 был бы третьим
+- **Как отвечать (для модели):** Se envía DOSLOVNO, sin modelo, solo si el primer mensaje no tiene pregunta, Anna aún no se presentó y no hubo saludo automático de WhatsApp. Después: evento → «¿Cómo te llamas y estás soltero?» y calificación del evento; búsqueda personalizada → ruta del servicio; respuesta poco clara → una pregunta corta para aclarar.
+- **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["sin_definir"], "auto_saludo": false}`
+- **Источник:** решение владелицы 2026-10-22 (по образцу автоответа)
 
 ### `greeting_event` · Primer mensaje con interés en el evento, sin pregunta concreta · ✅ подтверждено
 
@@ -825,7 +886,7 @@
 
 **Перевод:** Повторный запрос точного адреса: лиду ничего, алерт Ане.
 
-- **Когда:** ¿cuál es la dirección exacta?, mándame la ubicación, ¿en qué calle?, ¿cómo se llama el lugar? (cuando ya se dijo Polanco, CDMX)
+- **Когда:** ¿cuál es la dirección exacta?, mándame la ubicación, ¿en qué calle?, ¿cómo se llama el lugar? (cuando ya se dijo el lugar)
 - **Как отвечать (для модели):** No respondas nada al lead: accion=silent. Anna recibe la alerta y contesta ella.
 - **Флаги:** действие: молчать, ручной режим, алерт Ане; действует до 2026-11-18
 - **Источник:** решение владелицы
@@ -1037,11 +1098,11 @@
 
 ## Пары «плохо / хорошо»
 
-### `pair_attendees` · Par: ¿cuántas personas van? · ⏳ ждёт Аню
+### `pair_attendees` · Par: ¿cuántas personas van? · ✅ подтверждено
 
 - **Лид:** ¿cuántas personas van?
 - **Плохо:** Se llama Slavic-Latino Connect Night: es una noche especial… El precio es de 6000 MXN… Aquí está el enlace…
-- **Хорошо:** Van 30 mujeres y 30 hombres, todos solteros.
+- **Хорошо:** Van 30 mujeres eslavas solteras y 30 hombres solteros.
 - **Почему (для модели):** Responde solo lo que preguntó; el precio y el enlace no los pidió.
 - **Перевод:** «Сколько человек придёт?» Плохо: весь рассказ с ценой и ссылкой. Хорошо: «Будут 30 женщин и 30 мужчин, все одинокие.»
 
@@ -1049,7 +1110,7 @@
 
 - **Лид:** ¿cuánto cuesta?
 - **Плохо:** ¡Gracias por tu interés, Carlos! El evento cuesta…
-- **Хорошо:** Ahora cuesta [event_price_nonmember] MXN e incluye bebida de bienvenida y botanas.
+- **Хорошо:** El precio de preventa es de [event_price_nonmember] MXN e incluye bebida de bienvenida y botanas.
 - **Почему (для модели):** Directo a la cifra.
 - **Перевод:** «Сколько стоит?» Плохо: «Спасибо за интерес, Карлос! Ивент стоит…» Хорошо: «Сейчас стоит [цена] MXN, входят напиток и закуски.»
 
@@ -1075,7 +1136,7 @@
 - **Плохо:** En una zona céntrica y segura, la dirección te la comparto al reservar por seguridad.
 - **Хорошо:** Es en [event_address].
 - **Почему (для модели):** Solo el dato que existe; no inventes zona ni condiciones.
-- **Перевод:** «Где точно?» Плохо: «В центральном безопасном районе, адрес дам после брони.» Хорошо: «Это в Polanco, CDMX.» Повторный запрос: молчать, Аня.
+- **Перевод:** «Где точно?» Плохо: «В центральном безопасном районе, адрес дам после брони.» Хорошо: «Это в [место].» Повторный запрос: молчать, Аня.
 
 ### `pair_expensive` · Par: uf, se me hace caro · ✅ подтверждено
 
@@ -1179,6 +1240,6 @@ El pago se hace en la página y el boleto te llega por correo.
 
 - **Лид:** ¿cuánto cuesta el evento? (el historial habla del evento del 16 de octubre)
 - **Плохо:** El evento del 16 de octubre cuesta 5,000 MXN…
-- **Хорошо:** Ese evento ya pasó. El próximo es el [event_date] y cuesta [event_price_nonmember] MXN.
+- **Хорошо:** Ese evento ya pasó. El próximo es el [event_date] y el precio de preventa es de [event_price_nonmember] MXN.
 - **Почему (для модели):** Los datos de un evento pasado no se usan; solo evento_actual.
 - **Перевод:** Прошедший ивент. Плохо: цена и дата старого ивента из переписки. Хорошо: «Тот ивент уже прошёл. Следующий [дата], стоит [цена].»

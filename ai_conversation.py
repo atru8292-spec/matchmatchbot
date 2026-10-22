@@ -249,6 +249,8 @@ def situacion_ok(sit: dict, mem: dict, user_text: str, lead: dict) -> bool:
                        for s in ("name", "is_single", "age", "profession"))
         elif key == "precio_servicio_dado":
             have = bool(ya["precio_servicio_dado"])
+        elif key == "auto_saludo":
+            have = bool(ya.get("auto_saludo"))     # автоприветствие WhatsApp уже ушло
         else:
             return False          # неизвестное условие — не рискуем дословной отправкой
         if bool(have) != bool(want):
@@ -291,9 +293,8 @@ def numbers_in(text: str) -> set[str]:
 def render_tokens(text: str, settings: dict) -> str:
     """Подставить токены ивента для сверки (как сделает sender)."""
     def val(m):
-        k = m.group(0)[1:-1]
-        v = (settings.get(k) or "").strip()
-        return sender._fmt_date_es(v) if k == "event_date" and v else v
+        v = sender.event_token_value(m.group(0)[1:-1], settings)
+        return "" if v is None else v
     return _TOKEN_RE.sub(val, text or "")
 
 
@@ -303,9 +304,9 @@ def allowed_numbers(fichas: list[dict], settings: dict, lead: dict, lead_texts: 
     nums: set[str] = set()
     for f in fichas:
         nums |= numbers_in(render_tokens(f.get("contenido_es") or "", settings))
-    for k in ("event_date", "event_start", "event_price_nonmember", "event_price_next"):
-        v = settings.get(k) or ""
-        nums |= numbers_in(sender._fmt_date_es(v) if k == "event_date" and v else v)
+    for k in ("event_date", "event_start", "event_price_nonmember", "event_price_old",
+              "event_presale_until"):
+        nums |= numbers_in(sender.event_token_value(k, settings) or "")
     for t in lead_texts:
         nums |= numbers_in(t)
     return nums
@@ -409,8 +410,10 @@ def _capitalize(b: str) -> str:
     return b[:1].upper() + b[1:]
 
 
-NEXT_PRICE_SENTENCE = "Más adelante el precio sube a [event_price_next] MXN."
-CURRENT_PRICE_SENTENCE = "Ahora cuesta [event_price_nonmember] MXN."
+PRICE_SENTENCE = "El precio de preventa es de [event_price_nonmember] MXN[event_promo]."
+# Лестница цен убрана (2026-10-22): «más adelante el precio sube», «la siguiente etapa».
+_LADDER_RE = re.compile(r"m[aá]s\s+adelante\s+(?:el\s+precio\s+)?sube|precio\s+sube|"
+                        r"siguiente\s+(?:etapa|precio|es\s+de)|despu[eé]s\s+(?:sube|costar[aá])", re.IGNORECASE)
 _GRACIAS_START_RE = re.compile(r"^\W*(?:muchas\s+|mil\s+)?gracias\b[^.!?]*[.!?]*\s*", re.IGNORECASE)
 _COMPLIMENT_RE = re.compile(
     r"eres\s+(?:muy\s+)?(?:linda|bonita|hermosa|guapa|amable|lind[ií]sima)|"
@@ -455,35 +458,35 @@ def drop_unearned_thanks(bubbles: list[str]) -> list[str]:
 
 
 def whole_price(bubbles: list[str], settings: dict) -> list[str]:
-    """Цена ивента целой мыслью: «Ahora cuesta X MXN. Más adelante el precio sube a Y MXN.»
-    Обрывки вроде «La siguiente es de 7000 MXN» заменяем; если сказана только текущая цена,
-    а следующая ступень задана, добавляем фразу про неё."""
+    """Цена ивента — предпродажа с зачёркнутой старой ценой (решение владелицы 2026-10-22):
+    «El precio de preventa es de [event_price_nonmember] MXN[event_promo].» Лестницы цен
+    больше нет: фразы про следующую ступень («Más adelante el precio sube a…») убираем.
+    К фразе с текущей ценой без [event_promo] добавляем его (sender подставит «~9,000 MXN~»
+    или ничего, если старой цены в настройках нет)."""
     now = re.sub(r"\D", "", settings.get("event_price_nonmember") or "")
     nxt = re.sub(r"\D", "", settings.get("event_price_next") or "")
 
     def says(sent, token, value):
         return token in sent or bool(value and value in {re.sub(r"\D", "", n) for n in numbers_in(sent)})
-    out, has_next = [], False
+
+    def ladder(sent):
+        return says(sent, "[event_price_next]", nxt) or bool(_LADDER_RE.search(sent))
+    def cut_ladder(sent):
+        # «Ahora cuesta 6000 MXN; la siguiente etapa es de 7000 MXN.» → часть про текущую цену
+        keep = [c.strip() for c in re.split(r"\s*[;,]\s*", sent.rstrip(".!")) if c.strip() and not ladder(c)]
+        return (", ".join(keep) + ".") if keep else ""
+    out = []
     for b in bubbles:
-        for sent in _sentences(b):          # заменяем фразу на месте — переносы строк целы
-            if says(sent, "[event_price_next]", nxt):
-                new = CURRENT_PRICE_SENTENCE + " " if says(sent, "[event_price_nonmember]", now) else ""
-                new += "" if has_next else NEXT_PRICE_SENTENCE
-                # «…sube a 7,000 MXN y se paga en la página.» — хвост после цены сохраняем
-                tail = re.search(r".*(?:\[event_price_next\]|\d[\d,.]*)\s*MXN\s*,?\s*(?:y\s+)?(.+?)[.!]?$",
-                                 sent, re.IGNORECASE)
-                if tail and _words(tail.group(1)):
-                    new += " " + _capitalize(tail.group(1).strip()) + "."
-                b = b.replace(sent, new.strip(), 1)
-                has_next = True
+        for sent in _sentences(b):
+            if ladder(sent):
+                b = b.replace(sent, cut_ladder(sent), 1)
+        if "[event_promo]" not in b and not _SERVICE_PRICE_RE.search(b):
+            m = re.search(r"(\[event_price_nonmember\]|(?<![\d,.])" + (re.escape(now) if now else "@@")
+                          + r"(?![\d,.]))\s*MXN", b)
+            if m:
+                b = b[:m.end()] + "[event_promo]" + b[m.end():]
         out.append(re.sub(r"[ \t]{2,}", " ", b).strip())
-    if nxt and not has_next:
-        for i, b in enumerate(out):
-            for sent in _sentences(b):
-                if says(sent, "[event_price_nonmember]", now) and not _SERVICE_PRICE_RE.search(sent):
-                    out[i] = b.replace(sent, f"{sent} {NEXT_PRICE_SENTENCE}", 1)
-                    return out
-    return out
+    return [b for b in out if b]
 
 
 BUY_ONLINE_SENTENCE = "El boleto se compra en línea, en la página del evento."

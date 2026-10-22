@@ -78,7 +78,7 @@ async def test_legacy_nothing_sent_unchanged(monkeypatch, env):
 
 async def test_rag_reply_dropped_if_anya_took_over(monkeypatch, env):
     """Аня ответила вручную, пока бот генерировал (эхо → manual): ответ бота не уходит."""
-    monkeypatch.setattr(ai, "generate_reply", AsyncMock(return_value=_rag("respond", ["Es en Polanco."])))
+    monkeypatch.setattr(ai, "generate_reply", AsyncMock(return_value=_rag("respond", ["Es en Roma Norte."])))
     monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={**LEAD, "mode": "manual"}))
     await main._run_ai(PHONE, {**LEAD, "mode": "auto"}, "¿dónde es?")
     env["send"].assert_not_awaited()
@@ -86,7 +86,7 @@ async def test_rag_reply_dropped_if_anya_took_over(monkeypatch, env):
 
 async def test_rag_reply_sent_if_still_auto(monkeypatch, env):
     env["send"].return_value = 1
-    monkeypatch.setattr(ai, "generate_reply", AsyncMock(return_value=_rag("respond", ["Es en Polanco."])))
+    monkeypatch.setattr(ai, "generate_reply", AsyncMock(return_value=_rag("respond", ["Es en Roma Norte."])))
     monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={**LEAD, "mode": "auto"}))
     await main._run_ai(PHONE, {**LEAD, "mode": "auto"}, "¿dónde es?")
     env["send"].assert_awaited_once()

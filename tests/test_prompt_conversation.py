@@ -24,7 +24,8 @@ def test_no_banned_words_or_slang():
 def test_never_mentions_5500_or_old_name():
     assert not re.search(r"5[.,]?500", PROMPT)
     assert "Slavic Latino Night" not in PROMPT
-    assert "[event_promo]" not in PROMPT
+    # 2026-10-22: зачёркнутая старая цена вернулась ([event_promo]), лестницы цен нет
+    assert "[event_price_next]" not in PROMPT and "sube a" not in PROMPT
 
 
 def test_size_budget():
@@ -36,7 +37,8 @@ def test_output_contract():
                 "extracted", "send_event_photo", "funnel_stage", "proposed_videocall_at"):
         assert f'"{key}"' in PROMPT, key
     for tok in ("[event_date]", "[event_start]", "[event_address]", "[event_price_nonmember]",
-                "[event_price_next]", "[event_link]", "[course_link]", "[horario_llamada]"):
+                "[event_promo]", "[event_presale_until]", "[event_weekday]", "[event_link]",
+                "[course_link]", "[horario_llamada]"):
         assert tok in PROMPT, tok
 
 

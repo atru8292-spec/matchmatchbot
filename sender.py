@@ -136,7 +136,9 @@ _EVENT_VAR_KEYS = ("event_address", "event_date", "event_time",
                    "event_start", "event_end",
                    "event_price_member", "event_price_nonmember",
                    # следующая ступень цены (сайт: 6000 → 7000 → 8000), режим rag
-                   "event_price_next")
+                   "event_price_next",
+                   # предпродажа до даты, день недели ивента, зачёркнутая цена (2026-10-22)
+                   "event_presale_until", "event_weekday", "event_promo")
 
 # Испанские месяцы для человекочитаемой даты в сообщениях лиду.
 _ES_MONTHS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
@@ -156,45 +158,74 @@ def _fmt_date_es(iso: str) -> str:
     return f"{d.day} de {_ES_MONTHS[d.month - 1]}"
 
 
+_ES_WEEKDAYS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+# Производные токены: значение считается из другой настройки.
+_DERIVED_KEYS = {"event_weekday": "event_date", "event_promo": "event_price_old"}
+
+
+def _iso_date(v: str):
+    try:
+        return datetime.strptime((v or "").strip(), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def event_token_value(key: str, settings: dict, today=None) -> str | None:
+    """Значение токена ивента для лида. None — подставить нечего (баббл не отправляем).
+
+    event_date / event_presale_until — по-испански без года; event_presale_until в прошлом —
+    None (срок предпродажи прошёл). event_weekday — день недели из event_date.
+    event_promo — « ~9,000 MXN~» (зачёркнутая старая цена) или пусто, если event_price_old нет.
+    """
+    if key == "event_promo":
+        old = (settings.get("event_price_old") or "").strip()
+        return f" ~{old} MXN~" if old else ""
+    if key == "event_weekday":
+        d = _iso_date(settings.get("event_date"))
+        return _ES_WEEKDAYS[d.weekday()] if d else None
+    val = (settings.get(key) or "").strip()
+    if not val:
+        return None
+    if key == "event_presale_until":
+        d = _iso_date(val)
+        if d is None:
+            return None
+        if today is None:
+            from zoneinfo import ZoneInfo
+            today = datetime.now(ZoneInfo("America/Mexico_City")).date()
+        return _fmt_date_es(val) if d >= today else None
+    if key == "event_date":
+        return _fmt_date_es(val)
+    return val
+
+
 async def _fill_event_vars(text: str) -> str | None:
     """Подставить переменные события [event_address]/[event_date]/… из app_settings.
 
     Ивент выключен или нужный ключ пуст → None (баббл не отправляется). Запрос в БД —
-    только если в тексте реально есть такой плейсхолдер. event_date форматируется
-    из ISO в испанскую дату (_fmt_date_es).
+    только если в тексте реально есть такой плейсхолдер. Значения — event_token_value.
+    [event_promo] — условный: зачёркнутая старая цена (WhatsApp/Telegram рендерят ~текст~
+    как strikethrough), если задана event_price_old, иначе пустая строка. Без слова «antes»
+    (просьба владелицы 2026-08-31).
     """
     present = [k for k in _EVENT_VAR_KEYS if f"[{k}]" in text]
-    if not present and "[event_promo]" not in text and "[event_link]" not in text:
+    if not present and "[event_link]" not in text:
         return text
+    keys = sorted({_DERIVED_KEYS.get(k, k) for k in present} | {"event_active"})
+    s = await db.get_settings(keys)
     # Ивент выключен (прошёл/не анонсирован) или нужное значение не задано — баббл с
     # датой/ценой/адресом/ссылкой ивента НЕ отправляем (None = дроп), а не шлём «дыру»
     # вида «El precio es de  MXN» или дату прошедшего ивента.
-    s = await db.get_settings(["event_active"] + present)
     if s.get("event_active") != "1":
         logger.info("ивент выключен — баббл с данными ивента не отправляю: %r", text[:120])
         return None
-    if any(not (s.get(k) or "").strip() for k in present):
-        logger.warning("пустое значение ивента %s — баббл не отправляю: %r",
-                       [k for k in present if not (s.get(k) or "").strip()], text[:120])
+    values = {k: event_token_value(k, s) for k in present}
+    missing = [k for k, v in values.items() if v is None]
+    if missing:
+        logger.warning("пустое значение ивента %s — баббл не отправляю: %r", missing, text[:120])
         return None
-    # [event_promo] — условный: зачёркнутая старая цена (WhatsApp/Telegram рендерят
-    # ~текст~ как strikethrough нативно, без разметки/parse_mode), если задана
-    # event_price_old, иначе пустая строка (акция кончилась → Аня очистила поле →
-    # старая цена исчезает сама). Без слова "antes" — просьба владелицы 2026-08-31:
-    # визуально зачёркнуто, а не текстом.
-    promo = "[event_promo]" in text
-    if not present and not promo:
-        return text
-    keys = present + (["event_price_old"] if promo else [])
-    s = await db.get_settings(keys)
-    for k in present:
-        val = (s.get(k) or "").strip()
-        if k == "event_date":
-            val = _fmt_date_es(val)
-        text = text.replace(f"[{k}]", val)
-    if promo:
-        old = (s.get("event_price_old") or "").strip()
-        text = text.replace("[event_promo]", f" ~{old} MXN~" if old else "")
+    for k, v in values.items():
+        text = text.replace(f"[{k}]", v)
     return text
 
 

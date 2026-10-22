@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 import conversation_rules
 import db
+import sender
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,8 @@ REGRESO_LARGO_DAYS = 3
 NOTES_LIMIT = 5
 
 EVENT_KEYS = ["event_active", "event_date", "event_start", "event_address",
-              "event_price_nonmember", "event_price_next", "event_link"]
+              "event_price_nonmember", "event_price_next", "event_link",
+              "event_price_old", "event_presale_until"]
 
 _SYSTEM_TEXT_RE = re.compile(r"^\s*\[[^\]]+\]\s*$")
 _EVENT_TALK_RE = re.compile(r"evento|boleto|mxn|rusaencdmx|slavic", re.IGNORECASE)
@@ -444,12 +446,14 @@ def evento_actual(settings: dict) -> dict | None:
     """Карточка текущего ивента для модели (токены, не цифры: подставит sender)."""
     if settings.get("event_active") != "1":
         return None
-    card = {"nombre": "Slavic-Latino Connect Night", "fecha": "[event_date]",
-            "inicio": "[event_start]", "lugar": "[event_address]",
-            "precio": "[event_price_nonmember] MXN"}
-    if (settings.get("event_price_next") or "").strip():
-        card["siguiente_precio"] = "[event_price_next] MXN"
+    card = {"nombre": "Slavic-Latino Connect Night", "dia": "[event_weekday]",
+            "fecha": "[event_date]", "inicio": "[event_start]", "lugar": "[event_address]",
+            "precio": "[event_price_nonmember] MXN, precio de preventa"}
+    if (settings.get("event_price_old") or "").strip():
+        card["precio_tachado"] = "[event_promo]"       # «~9,000 MXN~» зачёркнутая старая цена
+    if sender.event_token_value("event_presale_until", settings) is not None:
+        card["preventa_hasta"] = "[event_presale_until]"
     card["valores"] = {k: settings.get(k) for k in
                        ("event_date", "event_start", "event_address", "event_price_nonmember",
-                        "event_price_next") if settings.get(k)}
+                        "event_price_old", "event_presale_until") if settings.get(k)}
     return card

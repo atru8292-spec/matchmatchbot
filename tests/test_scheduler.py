@@ -557,7 +557,7 @@ class TestEventRemindersMexicoTime:
     def _spy(self, monkeypatch):
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
             "event_active": "1", "event_date": "2026-11-18",
-            "event_time": "8:30 PM", "event_address": "Polanco, CDMX"}))
+            "event_time": "8:30 PM", "event_address": "Roma Norte, CDMX"}))
         monkeypatch.setattr(db, "get_scenario_template", AsyncMock(return_value="Hola"))
         recips = AsyncMock(return_value=[])
         monkeypatch.setattr(db, "event_recipients", recips)

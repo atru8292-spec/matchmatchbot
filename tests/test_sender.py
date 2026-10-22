@@ -676,7 +676,7 @@ class TestServiceTextGuard:
 
     @pytest.mark.parametrize("text", [
         "Hola Carlos! 🤍 ¿cómo estás?", "El evento cuesta $6,000 MXN ~9,000 MXN~",
-        "https://www.rusaencdmx.com/curso", "Te espero a las 8:30 PM en Polanco, CDMX ✨",
+        "https://www.rusaencdmx.com/curso", "Te espero a las 8:30 PM en Roma Norte, CDMX ✨",
         "Sí, claro (sin problema)", "Mi horario es de 7am a 2pm, hora de Ciudad de México",
         "Error mío, perdón 😅", "Nos vemos el 14 de octubre de 2026", "",
     ])
