@@ -2701,3 +2701,24 @@ async def test_interest_from_message_when_model_misses(monkeypatch):
     p.chat_replies = [reply(["Es una noche para conocer en persona a mujeres eslavas solteras que buscan una relación seria."])]
     r = await rag.generate_reply(p.lead, hist, "Me interesa el evento")
     assert r["extracted"].get("interest") == "event"
+
+
+def test_run_15_22_photo_request_with_explanation_replaced():
+    """Прод 2026-10-22 15:22, «35, soy abogado»: модель написала «Para apartar tu lugar solo
+    falta una foto tuya, puede ser tipo selfie y reciente.» — сверка отбросила, бот промолчал.
+    Теперь — короткий вопрос без объяснения, ответ уходит."""
+    lead = {"interest": "event", "name": "Luis", "is_single": True}
+    prior = [msg("lead", "Luis, sí soy soltero", 10), msg("anna", "¡Gracias, Luis! 😊", 9),
+             msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 9)]
+    b, reason, _ = revisar(["¡Gracias, Luis! 😊",
+                            "Para apartar tu lugar solo falta una foto tuya, puede ser tipo selfie y reciente."],
+                           "35, soy abogado", lead, prior, extracted={"age": 35, "profession": "abogado"})
+    assert reason is None
+    assert b == ["¡Gracias, Luis! 😊", "¿Me mandas una foto tuya?"]
+
+
+def test_event_photos_sentence_not_touched():
+    mem = _mem()
+    out = rag.purchase_before_photo(["El pago se hace en la página y ahí mismo ves fotos de eventos "
+                                     "pasados y todos los detalles."], mem, "ok")
+    assert out == ["El pago se hace en la página y ahí mismo ves fotos de eventos pasados y todos los detalles."]

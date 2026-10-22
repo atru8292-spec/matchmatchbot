@@ -575,11 +575,31 @@ _ORPHAN_LA_RE = re.compile(r"¿?\s*me\s+la\s+(?:puedes\s+)?(?:mandar|enviar|mand
                            r"[^?]*\??", re.IGNORECASE)
 
 
+# Фото самого лида (не «fotos de eventos pasados»).
+_LEAD_PHOTO_RE = re.compile(r"\bfoto\s+tuya|\btu\s+foto\b|\buna\s+foto\b(?!s)(?!\s+de\s+(?:los|la|el|nuestros?)\s+event)"
+                            r"|\bselfie", re.IGNORECASE)
+
+
 def purchase_before_photo(bubbles: list[str], mem: dict, user_text: str) -> list[str]:
     """Лид спросил, как купить, а ссылку давать рано (этап calificacion): ответ по сути
     («se compra en línea…») и просьба фото, без объяснений вслух, зачем (решение 2026-10-22).
     Плюс осиротевшее «¿Me la puedes mandar?» после срезанной фразы про фото."""
     cal = mem["calificacion"]
+    # Просьба о фото лида — утверждением с объяснением («Para apartar tu lugar solo falta una
+    # foto tuya, puede ser tipo selfie y reciente.», прод 2026-10-22): объяснений не даём, а
+    # сверка такую фразу не пропускает — заменяем на короткий вопрос.
+    replaced = False
+    fixed = []
+    for b in bubbles:
+        new = _drop_sentences(b, lambda x: "?" not in x and bool(_LEAD_PHOTO_RE.search(x)))
+        replaced = replaced or new != b
+        fixed.append(new)
+    if replaced:
+        # «¿Me la mandas por aquí?» без фразы про фото — висит, заменяется общим вопросом
+        bubbles = [_ORPHAN_LA_RE.sub("", b).strip() for b in fixed]
+        bubbles = [b for b in bubbles if b and _words(b)]
+        if not any(memory.pregunta_slot("photo", b) for b in bubbles):
+            bubbles.append(PHOTO_REQUEST)
     out = []
     for b in bubbles:
         if memory.pregunta_slot("photo", b) or re.search(r"\bfoto", b, re.IGNORECASE) \
