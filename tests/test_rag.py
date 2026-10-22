@@ -1915,3 +1915,32 @@ class TestDateWithoutYear:
         b, _, _ = check(["Ese evento ya pasó. El próximo es el 18 de noviembre del 2026."],
                         user_text="¿cuándo es el evento?")
         assert b == ["Ese evento ya pasó. El próximo es el 18 de noviembre."]
+
+
+class TestRun6D3:
+    def test_dangling_after_extra_question_removed(self):
+        """Прогон 6, Д3 ход 1: вопрос в bubbles и в paso_extra — после удаления лишнего
+        вопроса осталась подводка «Volviendo al evento,»."""
+        b, reason, _ = revisar(
+            ["Jaja, no lo vi, pero seguro estuvo emocionante. Volviendo al evento, "
+             "¿cuántos años tienes y a qué te dedicas?"],
+            "¿viste el partido del América ayer?", CARLOS, RUN2_BASE,
+            paso={"tipo": "pregunta", "texto": "¿Cuántos años tienes y a qué te dedicas?"})
+        assert reason is None
+        assert b == ["Jaja, no lo vi, pero seguro estuvo emocionante.",
+                     "¿Cuántos años tienes y a qué te dedicas?"]
+
+    def test_requisito_explanation_removed(self):
+        prior = RUN2_BASE + [msg("lead", "¿viste el partido del América ayer?", 10),
+                             msg("anna", "Jaja, no lo vi, pero seguro estuvo emocionante.", 9),
+                             msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 9)]
+        b, reason, _ = revisar(
+            ["La verdad no le voy a ningún equipo, pero me gusta ver los partidos.",
+             "¿Me mandas una foto tuya? Es requisito para registrarte al evento."],
+            "jaja sí, estuvo buenísimo, ¿tú le vas a alguien?", CARLOS, prior)
+        assert reason is None
+        assert b == ["La verdad no le voy a ningún equipo, pero me gusta ver los partidos."]
+
+    def test_costume_fact_not_touched(self):
+        b, _, _ = check(["Ir disfrazado no es obligatorio."], user_text="¿hay que ir disfrazado?")
+        assert b == ["Ir disfrazado no es obligatorio."]

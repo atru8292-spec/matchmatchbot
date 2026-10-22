@@ -649,8 +649,13 @@ _OFFER_MORE_RE = re.compile(r"¿\s*(?:te\s+gustar[ií]a|quieres|te\s+interesa)\s
 _DANGLING_RE = re.compile(r"[,:;—–-]\s*$")
 
 
+# «Es requisito para registrarte al evento.» — объяснение, зачем фото или данные (владелица: без него).
+_REQUISITO_RE = re.compile(r"\brequisito\b|para\s+(?:tu\s+)?regist|para\s+completar\s+tu", re.IGNORECASE)
+
+
 def drop_offer_more(bubbles: list[str]) -> list[str]:
-    out = [_drop_sentences(b, lambda s: bool(_OFFER_MORE_RE.search(s))) for b in bubbles]
+    out = [_drop_sentences(b, lambda s: bool(_OFFER_MORE_RE.search(s) or _REQUISITO_RE.search(s)))
+           for b in bubbles]
     return [b for b in out if b.strip()]
 
 
@@ -778,6 +783,11 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         bubbles = styled
     bubbles = drop_repeated_reaction(bubbles, mem.get("inicios_recientes") or [])
     bubbles = keep_last_question(keep_emojis(bubbles))
+    # после удаления лишних вопросов могла остаться подводка «Volviendo al evento,» (прогон 6)
+    new = drop_dangling(bubbles)
+    if new and new != bubbles:
+        notes.append("убрала оборванную фразу")
+        bubbles = new
     bubbles = [_capitalize(b) for b in (b.strip() for b in bubbles) if b]
     if len(bubbles) > MAX_BUBBLES:
         bubbles = bubbles[:MAX_BUBBLES]
