@@ -2748,3 +2748,36 @@ def test_photo_explanations_detected(text):
 @pytest.mark.parametrize("text", ["La revisión del boleto es en la entrada.", "Lo veremos en el evento."])
 def test_other_sentences_not_photo_explanations(text):
     assert not rag._PHOTO_EXPLAIN_RE.search(text)
+
+
+# ───────── прод 2026-10-22 15:53: фото одобрено, а бот попросил фото снова ─────────
+
+def test_thanks_for_photo_is_not_photo_request():
+    mem = _mem()   # фото уже есть в профиле
+    out = rag.purchase_before_photo(["¡Gracias por tu foto, Luis! 😊"], mem, "[фото одобрено]")
+    assert out == ["¡Gracias por tu foto, Luis! 😊"]
+    lead = {"interest": "event", "name": "Luis", "is_single": True}
+    prior = [msg("anna", "¿Me mandas una foto tuya?", 9)]
+    b, _, _ = revisar(["¡Gracias por tu foto, Luis! 😊"], "[фото одобрено]",
+                      {**lead, "photo_received": True}, prior)
+    assert b[0] == "¡Gracias por tu foto, Luis! 😊"
+    assert not any("foto tuya" in x for x in b)        # фото повторно не просим
+
+
+@pytest.mark.asyncio
+async def test_photo_turn_when_event_interest_only_in_history(monkeypatch):
+    """Интерес «Me interesa el evento» был в переписке, но в профиле не сохранился —
+    ход после фото всё равно ведёт к покупке (ссылка, видео, фото ивента)."""
+    hist = [msg("lead", "Hola", 40)] + [msg("anna", b, 39) for b in S1_HALLOWEEN] + [
+        msg("lead", "Me interesa el evento", 35),
+        msg("anna", "¿Cómo te llamas y estás soltero?", 34),
+        msg("lead", "Luis, sí soy soltero", 30), msg("anna", "¡Gracias, Luis! 😊", 29),
+        msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 29),
+        msg("lead", "35, soy abogado", 20), msg("anna", "¿Me mandas una foto tuya?", 19)]
+    lead = {"name": "Luis", "is_single": True, "age": 35, "profession": "abogado", "photo_received": True}
+    p = Pipe(monkeypatch, history=hist, lead_extra=lead)
+    r = await rag.generate_reply(p.lead, hist, "[фото одобрено]")
+    assert p.model_calls() == []
+    assert r["rag_meta"]["fuentes"] == ["venta_tras_foto"]
+    assert "Aquí puedes apartar tu lugar: [event_link]" in r["messages"]
+    assert not any("foto tuya" in m for m in r["messages"] + r.get("after_media", []))

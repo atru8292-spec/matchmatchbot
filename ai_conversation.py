@@ -582,6 +582,10 @@ _PHOTO_EXPLAIN_RE = re.compile(
     r"\b(?:es|ser[aá])\s+(?:s[oó]lo\s+)?para\s+(?:revisar|verificar|confirmar|validar)\b|"
     r"\bs[oó]lo\s+para\s+(?:revisar|verificar|confirmar|validar)\b", re.IGNORECASE)
 
+# Фраза именно просит фото («falta una foto tuya», «mándame tu foto»), а не благодарит за него.
+_PHOTO_ASK_RE = re.compile(r"\bfalta|\bnecesit|\bmand|\benv[ií]|\bcompart|\bp[aá]s(?:a|ame)|\bsub[ei]|"
+                           r"\bpuedes|\bpodr[ií]as|\bme\s+(?:regalas|haces)", re.IGNORECASE)
+
 # Фото самого лида (не «fotos de eventos pasados»).
 _LEAD_PHOTO_RE = re.compile(r"\bfoto\s+tuya|\btu\s+foto\b|\buna\s+foto\b(?!s)(?!\s+de\s+(?:los|la|el|nuestros?)\s+event)"
                             r"|\bselfie", re.IGNORECASE)
@@ -592,6 +596,8 @@ def purchase_before_photo(bubbles: list[str], mem: dict, user_text: str) -> list
     («se compra en línea…») и просьба фото, без объяснений вслух, зачем (решение 2026-10-22).
     Плюс осиротевшее «¿Me la puedes mandar?» после срезанной фразы про фото."""
     cal = mem["calificacion"]
+    if "[фото одобрено" in (user_text or "") or (cal.get("tenemos") or {}).get("photo"):
+        return bubbles      # фото уже есть: «Gracias por tu foto» — не просьба (прод 2026-10-22 15:53)
     # Просьба о фото лида — утверждением с объяснением («Para apartar tu lugar solo falta una
     # foto tuya, puede ser tipo selfie y reciente.», прод 2026-10-22): объяснений не даём, а
     # сверка такую фразу не пропускает — заменяем на короткий вопрос.
@@ -600,7 +606,8 @@ def purchase_before_photo(bubbles: list[str], mem: dict, user_text: str) -> list
     for b in bubbles:
         # «Solo la reviso.», «Es solo para verificar.» — объяснение, зачем фото (прод 2026-10-22)
         b = _drop_sentences(b, lambda x: "?" not in x and bool(_PHOTO_EXPLAIN_RE.search(x)))
-        new = _drop_sentences(b, lambda x: "?" not in x and bool(_LEAD_PHOTO_RE.search(x)))
+        new = _drop_sentences(b, lambda x: "?" not in x and bool(_LEAD_PHOTO_RE.search(x))
+                              and bool(_PHOTO_ASK_RE.search(x)))
         replaced = replaced or new != b
         fixed.append(new)
     bubbles = [b for b in fixed if b.strip() and _words(b)] or bubbles
@@ -1611,7 +1618,10 @@ def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict 
     ya, settings = mem["ya_hecho"], mem["settings"]
     if not caption_only_self_data(rest):
         return None             # в подписи вопрос или что-то кроме данных о себе — модель
-    if memory.ruta(lead, user_text) != "evento" or ya.get("enlace_enviado") \
+    ruta = memory.ruta(lead, user_text)
+    if ruta == "sin_definir" and any(interes_de(t) == "event" for t in (mem.get("lead_texts") or [])[-10:]):
+        ruta = "evento"     # интерес к ивенту назван раньше, но не сохранился (прод 2026-10-22)
+    if ruta != "evento" or ya.get("enlace_enviado") \
             or ya.get("boleto_comprado") or settings.get("event_active") != "1" \
             or not (settings.get("event_link") or "").strip():
         return None
