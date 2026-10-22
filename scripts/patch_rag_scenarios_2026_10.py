@@ -2,8 +2,12 @@
 
   №39 — убрать предложение про 5,500 с другом (бот 5,500 не называет никогда);
   №2, №15 — название «Slavic-Latino Connect Night» (как на сайте);
-  №2, №15, №51 — «entrantes» → «botanas»; без зачёркнутой «было» ([event_promo] убрать:
-         8000 на сайте — будущая ступень цены, а не старая);
+  №2, №15, №51 — «entrantes» → «botanas»; зачёркнутая старая цена [event_promo] остаётся
+         (автоответ владелицы 2026-10-22: preventa 6,000, было 9,000 — event_price_old);
+  №51 — убрать «único en toda América Latina» (не подтверждено);
+  №2, №51 — убрать предложение со временем окончания («medianoche», «1:00»), если оно есть
+         (ревью 2026-10-22): необязательная правка, предложение ищется в текущем тексте и
+         заменяется точно, сухой прогон его показывает;
   №40 не меняется (решение владелицы 2026-10-21: ни текст, ни эмодзи).
 
 ⛔ НЕ запускать до «деплой ок». Перед записью — бэкап затронутых строк в docs/backups/.
@@ -34,13 +38,30 @@ PATCHES = [
          "amigo, el precio es de 5,500 MXN por persona (en vez de 6,000).", ""),
     (2, "Slavic Latino Night", "Slavic-Latino Connect Night"),
     (2, "[event_price_nonmember] MXN[event_promo] e incluye bebida de bienvenida y entrantes",
-     "[event_price_nonmember] MXN e incluye bebida de bienvenida y botanas"),
+     "[event_price_nonmember] MXN[event_promo] e incluye bebida de bienvenida y botanas"),
     (15, "Slavic Latino Night", "Slavic-Latino Connect Night"),
     (15, "[event_price_nonmember] MXN[event_promo], incluye bebida de bienvenida, entrantes",
-     "[event_price_nonmember] MXN, incluye bebida de bienvenida, botanas"),
+     "[event_price_nonmember] MXN[event_promo], incluye bebida de bienvenida, botanas"),
     (51, "[event_price_nonmember] MXN[event_promo] e incluye bebida de bienvenida, entrantes",
-     "[event_price_nonmember] MXN e incluye bebida de bienvenida, botanas"),
+     "[event_price_nonmember] MXN[event_promo] e incluye bebida de bienvenida, botanas"),
+    (51, "Es un evento único en toda América Latina y también un gran espacio de networking",
+     "También es un gran espacio de networking"),
 ]
+
+# Необязательно: предложение с неподтверждённым временем окончания (если есть) — убрать.
+OPTIONAL_DROP = {2: (r"medianoche", r"\b1:00\b", r"[uú]nico\s+en"), 51: (r"medianoche", r"\b1:00\b")}
+
+
+def optional_patches(rows: dict[int, str]) -> list[tuple]:
+    """Точные замены из текущего текста: предложение с «medianoche»/«1:00» → удалить."""
+    import re
+    out = []
+    for sid, pats in OPTIONAL_DROP.items():
+        text = rows.get(sid) or ""
+        for sent in re.findall(r"[^.!?\n]*[.!?]", text):
+            if any(re.search(p, sent, re.IGNORECASE) for p in pats) and text.count(sent) == 1:
+                out.append((sid, sent, ""))
+    return out
 
 
 def plan(rows: dict[int, str], patches: list[tuple]) -> tuple[dict[int, str], list[str]]:
@@ -64,8 +85,8 @@ async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
-    patches = PATCHES
-    ids = sorted({p[0] for p in patches})
+    patches = list(PATCHES)
+    ids = sorted({p[0] for p in patches} | set(OPTIONAL_DROP))
 
     await db.init_pool()
     try:
@@ -75,6 +96,7 @@ async def main() -> int:
             "ai_allowed, blocks_lead, is_active, trigger_type, embedding::text AS embedding "
             "FROM scenarios WHERE id = ANY($1::int[]) ORDER BY id", ids)
         current = {r["id"]: r["template_es"] for r in rows}
+        patches = patches + optional_patches(current)
         changes, errors = plan(current, patches)
         for sid, text in changes.items():
             print(f"── #{sid}\nБЫЛО:\n{current[sid]}\nСТАНЕТ:\n{text}\n")

@@ -658,10 +658,11 @@ class TestPatchScript:
         assert changes == {39: "Buenas"}
         assert errors and "вхождений 2" in errors[0]
 
-    def test_patches_remove_5500_promo_entrantes(self):
+    def test_patches_remove_5500_entrantes_keep_promo(self):
         from scripts import patch_rag_scenarios_2026_10 as p
         for _, old, new in p.PATCHES:
-            assert "5,500" not in new and "[event_promo]" not in new and "entrantes" not in new
+            assert "5,500" not in new and "entrantes" not in new and "único" not in new
+            assert ("[event_promo]" in old) == ("[event_promo]" in new)   # зачёркнутая цена остаётся
         assert all(sid != 40 for sid, _, _ in p.PATCHES)   # №40 не меняем (решение владелицы)
         assert not hasattr(p, "PATCH_40")
 
@@ -2440,3 +2441,29 @@ class TestHardLimit:
         p.chat_replies = [reply(["Incluye bebida de bienvenida y botanas."])]
         r = await rag.generate_reply(p.lead, RUN2_BASE, "¿qué incluye?")
         assert r["action"] == "respond"
+
+
+
+def test_scenarios_after_patch_have_no_5500_unico_end_time():
+    """Ревью 2026-10-22 (4.8): по бэкапу всех прод-сценариев — после патча нет 5,500,
+    «único en América Latina» и времени окончания; в промпте v5 нет 5,500."""
+    from pathlib import Path
+    from scripts import patch_rag_scenarios_2026_10 as p
+    root = Path(__file__).resolve().parent.parent
+    backup = root / "docs/backups/scenarios_all_before_rag_20261021T142906Z.json"
+    if not backup.exists():
+        pytest.skip("нет локального бэкапа сценариев (docs/backups не в git)")
+    rows = {r["id"]: r["template_es"] for r in json.loads(backup.read_text("utf-8"))}
+    # время окончания, как могло появиться в проде после бэкапа
+    rows[51] = rows[51].replace("Comienza a las [event_start] (puedes venir más tarde)",
+                                "Comienza a las [event_start] y termina alrededor de la medianoche. "
+                                "Puedes venir más tarde")
+    changes, errors = p.plan(rows, list(p.PATCHES) + p.optional_patches(rows))
+    assert not errors
+    after = {**rows, **changes}
+    for sid, text in after.items():
+        assert not re.search(r"5[.,]?500", text or ""), sid
+    for sid in (2, 51):
+        assert not re.search(r"[uú]nico\s+en|medianoche|\b1:00\b", after[sid]), sid
+    assert "[event_promo]" in after[2] and "[event_promo]" in after[51]
+    assert not re.search(r"5[.,]?500", (root / "anna_prompt_v5.md").read_text("utf-8"))
