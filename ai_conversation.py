@@ -667,6 +667,10 @@ def drop_dangling(bubbles: list[str]) -> list[str]:
     return out
 
 
+_DATE_YEAR_RE = re.compile(rf"(\b\d{{1,2}}\s+de\s+(?:{memory._MONTHS}))\s+(?:de|del)\s+\d{{4}}\b",
+                           re.IGNORECASE)
+
+
 def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict,
                 user_text: str, dio_algo: bool = True,
                 answered: set[str] | frozenset = frozenset(),
@@ -675,6 +679,11 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
     """Проверки кодом. Возвращает (пузыри, причина silent или None, список правок)."""
     notes: list[str] = []
     settings, ya, cal = mem["settings"], mem["ya_hecho"], mem["calificacion"]
+    # Дата лиду без года: «el 18 de noviembre», не «el 18 de noviembre de 2026».
+    new = [_DATE_YEAR_RE.sub(r"\1", b) for b in bubbles]
+    if new != bubbles:
+        notes.append("убрала год из даты")
+        bubbles = new
     text = "\n\n".join(bubbles)
     if _5500_RE.search(_TOKEN_RE.sub(" ", text)):
         return [], "в ответе 5,500", ["5500"]

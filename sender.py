@@ -144,16 +144,16 @@ _ES_MONTHS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
 
 
 def _fmt_date_es(iso: str) -> str:
-    """'2026-07-22' → '22 de julio de 2026'. Не-ISO строку возвращаем как есть.
+    """'2026-07-22' → '22 de julio'. Не-ISO строку возвращаем как есть.
 
     event_date в app_settings хранится в ISO (единый источник для планировщика и
-    формы CRM); лиду показываем по-испански.
+    формы CRM); лиду показываем по-испански, без года (решение владелицы 2026-10-22).
     """
     try:
         d = datetime.strptime((iso or "").strip(), "%Y-%m-%d")
     except (ValueError, TypeError):
         return iso or ""
-    return f"{d.day} de {_ES_MONTHS[d.month - 1]} de {d.year}"
+    return f"{d.day} de {_ES_MONTHS[d.month - 1]}"
 
 
 async def _fill_event_vars(text: str) -> str | None:

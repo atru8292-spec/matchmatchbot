@@ -14,6 +14,7 @@ import pytest
 import ai
 import ai_conversation as rag
 import db
+import sender
 import knowledge
 import memory
 
@@ -1889,3 +1890,28 @@ class TestVerifierSmallTalkRun5:
         "Las chicas son todas modelos."])
     async def test_domain_claims_still_checked(self, monkeypatch, texto):
         assert await self._verify(monkeypatch, texto) == [texto]
+
+
+class TestDateWithoutYear:
+    def test_format(self):
+        assert sender._fmt_date_es("2026-11-18") == "18 de noviembre"
+        assert sender._fmt_date_es("18 de julio") == "18 de julio"
+
+    @pytest.mark.asyncio
+    async def test_greeting_and_photo_summary_rendered(self, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=SETTINGS))
+        out = await sender.render_bubbles(
+            GREETING_EVENT + [rag._story_after_photo(BY_ID, {"halloween"})], None, True)
+        text = " ".join(out)
+        assert "El 18 de noviembre tenemos Slavic-Latino Connect Night" in text
+        assert "Te espero el 18 de noviembre a las 8:30 PM en Polanco, CDMX" in text
+        assert "2026" not in text
+
+    def test_year_typed_by_model_removed(self):
+        b, reason, notes = check(["Es el 18 de noviembre de 2026, empieza a las [event_start]."],
+                                 user_text="¿cuándo es?")
+        assert reason is None and b == ["Es el 18 de noviembre, empieza a las [event_start]."]
+        assert "убрала год из даты" in notes
+        b, _, _ = check(["Ese evento ya pasó. El próximo es el 18 de noviembre del 2026."],
+                        user_text="¿cuándo es el evento?")
+        assert b == ["Ese evento ya pasó. El próximo es el 18 de noviembre."]
