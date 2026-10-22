@@ -74,7 +74,10 @@ def test_never_5500(r):
 
 @pytest.mark.parametrize("r", RECORDS, ids=lambda r: r["id"])
 def test_emoji_limits(r):
-    """До 2 эмодзи на ответ и не больше 1 в пузыре (решение владелицы 2026-10-21)."""
+    """До 2 эмодзи на ответ и не больше 1 в пузыре (решение владелицы 2026-10-21).
+    Исключение — greeting_hola: сценарий №1 дословно с 🤍 😉 ❤️ (решение владелицы 2026-10-22)."""
+    if r["id"] == "greeting_hola":
+        return
     for t in _lead_facing(r):
         assert len(EMOJI_RE.findall(t)) <= 2, f"{r['id']}: {t}"
         for bubble in t.split("\n\n"):
@@ -120,24 +123,29 @@ def test_link_only_in_purchase_records():
 
 
 def test_base_scripts():
-    for r in (r for r in RECORDS if r["tipo"] == "base_script"):
+    for r in (r for r in RECORDS if r["tipo"] == "base_script" and r.get("activo", True)):
         assert r["literal"] and r["situacion"], r["id"]
         assert len(r["contenido_es"].split("\n\n")) <= 4, r["id"]
 
 
-def test_hola_script_owner_2026_10_22():
-    """Новое приветствие на голое «hola» по образцу автоответа владелицы (2026-10-22)."""
-    r = next(r for r in RECORDS if r["id"] == "greeting_hola")
-    assert r["contenido_es"].split("\n\n") == [
-        "¡Hola! Soy Anna, fundadora de Match Match Agency 🤍",
-        "El [event_weekday] [event_date] tenemos Slavic-Latino Connect Night en [event_address]: una "
-        "noche para conocer en persona a mujeres eslavas solteras que viven en CDMX y buscan una "
-        "relación seria. Esta vez es temática de Halloween 🎃",
-        "Y si prefieres algo más personal, también puedo presentarte mujeres que seleccione "
-        "especialmente para ti.",
-        "¿Qué te interesa más, el evento o la búsqueda personalizada?"]
-    assert "soltero" not in r["contenido_es"] and "llamas" not in r["contenido_es"]
-    assert r["situacion"]["presentacion_hecha"] is False and r["situacion"]["auto_saludo"] is False
+def test_hola_script_is_scenario_1_verbatim():
+    """Приветствие на голое «hola» — сценарий №1 посимвольно (бэкап до правок, 2026-10-22).
+    Четырёхпузырьный вариант и вариант без 😉 лежат неактивными записями."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    backup = root / "docs/backups/scenarios_all_before_rag_20261022T040921Z.json"
+    by_id = {r["id"]: r for r in RECORDS}
+    t = by_id["greeting_hola"]["contenido_es"]
+    if backup.exists():
+        s1 = {r["id"]: r for r in json.loads(backup.read_text("utf-8"))}[1]["template_es"]
+        assert t == s1
+    assert t.split("\n\n")[0] == "¡Hola! 🤍" and "😉" in t and t.endswith("❤️")
+    assert "Halloween" not in t and "[" not in t          # фразу добавляет код, токенов нет
+    assert by_id["greeting_hola"]["situacion"]["presentacion_hecha"] is False
+    assert by_id["greeting_hola_evento_4p"]["activo"] is False
+    assert by_id["greeting_hola_evento_4p"]["contenido_es"].startswith(
+        "¡Hola! Soy Anna, fundadora de Match Match Agency 🤍\n\nEl [event_weekday] [event_date]")
+    assert by_id["greeting_hola_sin_evento"]["activo"] is False
 
 
 def test_style_pairs():

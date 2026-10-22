@@ -1,6 +1,6 @@
 # База знаний режима rag: ревью
 
-Источник: `knowledge/seed.json`, версия 2026-10-22b. Записей: 103, ждут Аню: 9.
+Источник: `knowledge/seed.json`, версия 2026-10-22b. Записей: 104, ждут Аню: 9.
 Документ собран скриптом `scripts/knowledge_review.py`, руками не править.
 
 - Записи с `confirmado=false` в ответы не подаются, пока Аня не подтвердит.
@@ -620,6 +620,23 @@
 
 **Текст (es):**
 
+> ¡Hola! 🤍
+>
+> Soy Anna, fundadora de Match Match Agency. Cuéntame qué estás buscando y yo te digo qué creo que te conviene más. 😉 Puedo presentarte personalmente mujeres que seleccione para ti, tomando en cuenta tu personalidad, tu estilo de vida y lo que realmente quieres encontrar. O, si prefieres algo más espontáneo, tenemos nuestro próximo evento en CDMX, donde vas a poder conocer en persona a varias mujeres solteras que también están buscando una relación seria.
+>
+> La idea no es que conozcas a muchas mujeres, sino que conozcas a las correctas. ❤️
+
+**Перевод:** Привет! 🤍 / Я Анна, основательница… могу лично подобрать женщин… или ближайший ивент в Мехико (+ «в этот раз Хеллоуин 🎃», если ивент включён) / Главное — правильные женщины ❤️
+
+- **Когда:** hola, buenas, buenos días, hola qué tal, información, quiero información, info, ¿qué ofrecen?
+- **Как отвечать (для модели):** Lo envía el sistema DOSLOVNO, sin modelo, al primer mensaje del lead sin pregunta (saludo «hola», «buenas»…). Si el evento está activo y su fecha no pasó, el sistema añade al final del párrafo del evento «Esta vez es temática de Halloween 🎃». Nombre y «¿estás soltero?» van en la siguiente respuesta.
+- **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["sin_definir"], "auto_saludo": false}`
+- **Источник:** сценарий №1 дословно (бэкап scenarios_all_before_rag_20261022T040921Z, одобрен владелицей); 2026-10-22: приветствие на голое «hola»
+
+### `greeting_hola_evento_4p` · (неактивно) Приветствие на «hola» из 4 пузырей с ивентом, 2026-10-22 · ✅ подтверждено
+
+**Текст (es):**
+
 > ¡Hola! Soy Anna, fundadora de Match Match Agency 🤍
 >
 > El [event_weekday] [event_date] tenemos Slavic-Latino Connect Night en [event_address]: una noche para conocer en persona a mujeres eslavas solteras que viven en CDMX y buscan una relación seria. Esta vez es temática de Halloween 🎃
@@ -632,8 +649,8 @@
 
 - **Когда:** hola, buenas, buenos días, hola qué tal, información, quiero información, info, ¿qué ofrecen?
 - **Как отвечать (для модели):** Se envía DOSLOVNO, sin modelo, solo si el primer mensaje no tiene pregunta, Anna aún no se presentó y no hubo saludo automático de WhatsApp. Después: evento → «¿Cómo te llamas y estás soltero?» y calificación del evento; búsqueda personalizada → ruta del servicio; respuesta poco clara → una pregunta corta para aclarar.
-- **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["sin_definir"], "auto_saludo": false}`
-- **Источник:** решение владелицы 2026-10-22 (по образцу автоответа)
+- **Флаги:** действие: ответить; можно почти дословно
+- **Источник:** решение владелицы 2026-10-22 (по образцу автоответа); выключено 2026-10-22: на голое «hola» — сценарий №1 (решение владелицы)
 
 ### `greeting_hola_sin_evento` · Saludo a un «hola» cuando el evento no está activo · ✅ подтверждено
 
@@ -650,7 +667,7 @@
 - **Когда:** hola, buenas, buenos días (sin pregunta) cuando el evento no está activo
 - **Как отвечать (для модели):** Lo envía el sistema DOSLOVNO, sin modelo: saludo a un «hola» sin pregunta cuando greeting_hola no se puede usar (evento inactivo).
 - **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["sin_definir"], "auto_saludo": false}`
-- **Источник:** №1, одобрен владелицей 08.09 (прежний greeting_hola без 😉); 2026-10-22: приветствие при выключенном ивенте
+- **Источник:** №1, одобрен владелицей 08.09 (прежний greeting_hola без 😉); 2026-10-22: приветствие при выключенном ивенте; выключено 2026-10-22: greeting_hola теперь сценарий №1 дословно
 
 ### `greeting_event` · Primer mensaje con interés en el evento, sin pregunta concreta · ✅ подтверждено
 

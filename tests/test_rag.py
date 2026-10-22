@@ -30,6 +30,12 @@ SEED = knowledge.load_seed()
 BY_ID = {r["id"]: r for r in SEED}
 
 
+# Приветствие на «hola» — сценарий №1 дословно; при включённом и не прошедшем ивенте код
+# добавляет фразу про Хеллоуин в конец абзаца про ивент (решение владелицы 2026-10-22).
+S1 = BY_ID["greeting_hola"]["contenido_es"].split("\n\n")
+S1_HALLOWEEN = [S1[0], S1[1] + " Esta vez es temática de Halloween 🎃", *S1[2:]]
+
+
 def msg(sender, text, minutes_ago, manual=False, source=None):
     meta = {}
     if manual:
@@ -425,7 +431,7 @@ class TestPipeline:
     async def test_hola_first_message_is_literal_no_model(self, monkeypatch):
         p = Pipe(monkeypatch)
         r = await rag.generate_reply(p.lead, [], "hola")
-        assert r["messages"] == BY_ID["greeting_hola"]["contenido_es"].split("\n\n")
+        assert r["messages"] == S1_HALLOWEEN
         assert p.model_calls() == []
 
     async def test_vi_el_evento_literal(self, monkeypatch):
@@ -2118,7 +2124,8 @@ class TestOwnerAutoreplyFacts:
     async def test_price_rendered_with_strikethrough_without_year(self, monkeypatch):
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=SETTINGS))
         out = await sender.render_bubbles(
-            [BY_ID["event_price"]["contenido_es"], BY_ID["greeting_hola"]["contenido_es"].split("\n\n")[1]],
+            [BY_ID["event_price"]["contenido_es"],
+             BY_ID["greeting_hola_evento_4p"]["contenido_es"].split("\n\n")[1]],
             None, True)
         assert out[0] == "El precio de preventa es de 6000 MXN ~9,000 MXN~."
         assert out[1].startswith("El miércoles 18 de noviembre tenemos Slavic-Latino Connect Night en "
@@ -2156,7 +2163,7 @@ class TestGreetingHola:
         p = Pipe(monkeypatch, lead_extra={})
         r = await rag.generate_reply(p.lead, [], "Hola")
         assert p.model_calls() == []
-        assert r["messages"] == BY_ID["greeting_hola"]["contenido_es"].split("\n\n")
+        assert r["messages"] == S1_HALLOWEEN
         assert r["rag_meta"]["fuentes"] == ["greeting_hola"]
 
     async def test_hola_with_question_goes_to_model(self, monkeypatch):
@@ -2410,13 +2417,12 @@ class TestLiteralTokens:
         assert await rag._literal_checked(res, CARLOS, "venta_por_compra", {}) is res
 
     async def test_empty_setting_drops_record_before_turn(self, monkeypatch):
-        """Пустая настройка выключает запись базы раньше: приветствие с пустым адресом не
-        отправляется дословно, отвечает модель."""
+        """Приветствие на «hola» (сценарий №1) токенов ивента не содержит: пустой адрес ему
+        не мешает, уходит дословно без модели."""
         p = Pipe(monkeypatch, settings={**SETTINGS, "event_address": ""}, lead_extra={})
         r = await rag.generate_reply(p.lead, [], "Hola")
-        # без адреса greeting_hola не годится — уходит приветствие без ивента, без модели
         assert p.model_calls() == []
-        assert r["messages"] == BY_ID["greeting_hola_sin_evento"]["contenido_es"].split("\n\n")
+        assert r["messages"] == S1_HALLOWEEN
 
 
 @pytest.mark.asyncio
@@ -2558,14 +2564,14 @@ class TestBareGreetingNeverSilent:
         r = await rag.generate_reply(p.lead, [], "Hola")
         assert p.model_calls() == []
         assert r["action"] == "respond"
-        assert r["messages"] == BY_ID["greeting_hola_sin_evento"]["contenido_es"].split("\n\n")
+        assert r["messages"] == S1                       # ивент выключен — без фразы про Хеллоуин
         assert "[" not in " ".join(r["messages"])
 
     async def test_event_active_hola_literal(self, monkeypatch):
         p = Pipe(monkeypatch, lead_extra={})
         r = await rag.generate_reply(p.lead, [], "buenos días")
         assert p.model_calls() == []
-        assert r["messages"] == BY_ID["greeting_hola"]["contenido_es"].split("\n\n")
+        assert r["messages"] == S1_HALLOWEEN
 
     async def test_hola_after_presentation_slot_question(self, monkeypatch):
         p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
@@ -2606,3 +2612,73 @@ def test_httpx_does_not_log_token_urls():
     import logging
     import main  # noqa: F401
     assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+
+
+
+# ───────── приветствие на «hola» = сценарий №1 (решение владелицы 2026-10-22) ─────────
+
+def _scenario_1_backup():
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    f = root / "docs/backups/scenarios_all_before_rag_20261022T040921Z.json"
+    if not f.exists():
+        pytest.skip("нет локального бэкапа сценариев (docs/backups не в git)")
+    return {r["id"]: r for r in json.loads(f.read_text("utf-8"))}[1]["template_es"]
+
+
+@pytest.mark.asyncio
+class TestHolaScenario1:
+    @pytest.mark.parametrize("text", ["hola", "Hola", "buenas", "buenos días", "hello", "hi",
+                                      "привет", "Здравствуйте", "good morning"])
+    async def test_bare_greeting_any_language_scenario_1(self, monkeypatch, text):
+        p = Pipe(monkeypatch, lead_extra={})
+        r = await rag.generate_reply(p.lead, [], text)
+        assert p.model_calls() == []
+        backup = _scenario_1_backup().split("\n\n")
+        # посимвольно с бэкапом сценария №1; добавленная фраза — отдельно
+        assert r["messages"][0] == backup[0] and r["messages"][2:] == backup[2:]
+        assert r["messages"][1] == backup[1] + " " + rag.HALLOWEEN_PHRASE
+        assert rag.HALLOWEEN_PHRASE == "Esta vez es temática de Halloween 🎃"
+        assert "😉" in r["messages"][1]
+
+    async def test_question_goes_to_model(self, monkeypatch):
+        p = Pipe(monkeypatch, lead_extra={})
+        p.chat_replies = [reply(["El precio de preventa es de [event_price_nonmember] MXN[event_promo]."])]
+        await rag.generate_reply(p.lead, [], "Hola, ¿cuánto cuesta?")
+        assert len(p.model_calls()) == 1
+
+    async def test_event_mention_greeting_event(self, monkeypatch):
+        p = Pipe(monkeypatch, lead_extra={})
+        r = await rag.generate_reply(p.lead, [], "hola, vi lo del evento")
+        assert p.model_calls() == []
+        assert r["rag_meta"]["fuentes"] == ["greeting_event"]
+
+    async def test_second_hola_in_a_row(self, monkeypatch):
+        hist = [msg("lead", "hola", 5)] + [msg("anna", b, 4) for b in S1_HALLOWEEN]
+        p = Pipe(monkeypatch, history=hist, lead_extra={})
+        r = await rag.generate_reply(p.lead, hist, "hola")
+        assert p.model_calls() == []
+        assert r["messages"] == ["¡Hola! 🤍", "¿Cómo te llamas y estás soltero?"]
+
+    async def test_after_whatsapp_auto_greeting(self, monkeypatch):
+        hist = [msg("lead", "Hola", 2), AUTO_GREETING_MSG]
+        p = Pipe(monkeypatch, history=hist, lead_extra={})
+        r = await rag.generate_reply(p.lead, hist, "Hola")
+        assert r["messages"] == ["¡Hola! 🤍", "¿Cómo te llamas y estás soltero?"]
+
+    async def test_event_inactive_no_halloween(self, monkeypatch):
+        p = Pipe(monkeypatch, settings={**SETTINGS, "event_active": "0"}, lead_extra={})
+        r = await rag.generate_reply(p.lead, [], "hola")
+        assert r["messages"] == _scenario_1_backup().split("\n\n")
+        assert "Halloween" not in " ".join(r["messages"])
+
+    async def test_event_date_passed_no_halloween(self, monkeypatch):
+        p = Pipe(monkeypatch, settings={**SETTINGS, "event_date": "2026-10-01"}, lead_extra={})
+        r = await rag.generate_reply(p.lead, [], "hola")
+        assert r["messages"] == _scenario_1_backup().split("\n\n")
+
+    async def test_event_today_still_halloween(self, monkeypatch):
+        monkeypatch.setattr(rag.knowledge, "today_cdmx", lambda now=None: "2026-11-18")
+        assert rag.halloween_activo(SETTINGS)
+        monkeypatch.setattr(rag.knowledge, "today_cdmx", lambda now=None: "2026-11-19")
+        assert not rag.halloween_activo(SETTINGS)

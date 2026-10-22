@@ -1586,7 +1586,34 @@ def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict 
 # сочинила описание агентства, проверка его отбросила, лид остался без ответа).
 _BARE_GREETING_RE = re.compile(
     r"^\W*(?:(?:hola+|holi|buenas|buen[oa]s?\s+(?:d[ií]as?|tardes|noches)|buen\s+d[ií]a|"
-    r"qu[eé]\s+tal|hey|saludos|que\s+onda|ana|anna)\W*)+$", re.IGNORECASE)
+    r"qu[eé]\s+tal|hey|saludos|que\s+onda|ana|anna|"
+    # английский и русский — ответ всё равно на испанском (2026-10-22)
+    r"hello|hi|good\s+(?:morning|afternoon|evening)|"
+    r"привет\w*|здравствуй\w*|добр(?:ый|ое)\s+(?:день|утро|вечер))\W*)+$", re.IGNORECASE)
+
+# Приветствие на первое «hola» — сценарий №1 дословно (greeting_hola). Пока ивент включён и
+# его дата не прошла (по Мехико), в конец абзаца про ивент добавляется одна фраза (решение
+# владелицы 2026-10-22). Сценарий №1 в БД не меняется.
+HALLOWEEN_PHRASE = "Esta vez es temática de Halloween 🎃"
+_EVENT_PARAGRAPH_END = "una relación seria."
+
+
+def halloween_activo(settings: dict) -> bool:
+    if settings.get("event_active") != "1":
+        return False
+    return (settings.get("event_date") or "") >= knowledge.today_cdmx()
+
+
+def greeting_hola_bubbles(rec: dict | None, settings: dict) -> list[str]:
+    bubbles = _bubbles_of(rec)
+    if not halloween_activo(settings):
+        return bubbles
+    out, added = [], False
+    for b in bubbles:
+        if not added and "evento" in b and b.endswith(_EVENT_PARAGRAPH_END):
+            b, added = f"{b} {HALLOWEEN_PHRASE}", True
+        out.append(b)
+    return out
 
 
 def is_bare_greeting(text: str) -> bool:
@@ -1600,15 +1627,15 @@ def _bubbles_of(rec: dict | None) -> list[str]:
 def saludo_fijo(user_text: str, mem: dict, by_id: dict) -> list[str] | None:
     """Ответ на голое приветствие из готовых текстов базы. None — не приветствие или
     подставить нечего (тогда — модель).
-    - Анна ещё не представлялась и автоприветствия не было: greeting_hola (ивент включён)
-      или greeting_hola_sin_evento.
+    - Анна ещё не представлялась и автоприветствия не было: greeting_hola (сценарий №1)
+      и фраза про Хеллоуин, если ивент включён и не прошёл.
     - Иначе «¡Hola! 🤍» и вопрос по следующему слоту анкеты, если его сейчас можно задать."""
     if not is_bare_greeting(user_text):
         return None
     ya = mem["ya_hecho"]
     if not ya.get("presentacion") and not ya.get("auto_saludo"):
-        return _bubbles_of(by_id.get("greeting_hola") or by_id.get("greeting_hola_sin_evento")) or None
-    hola = (_bubbles_of(by_id.get("greeting_hola_sin_evento")) or [None])[0]
+        return greeting_hola_bubbles(by_id.get("greeting_hola"), mem["settings"]) or None
+    hola = (_bubbles_of(by_id.get("greeting_hola")) or [None])[0]
     question = slot_question(mem["calificacion"])
     return [hola, question] if hola and question else None
 
@@ -1754,7 +1781,9 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
                                                         user_text, lead):
             stage = "pitched" if rid == "service_pitch" else "qualifying"
             interest = {"greeting_event": "event", "greeting_service": "agency"}.get(rid)
-            literal = _result([b.strip() for b in rec["contenido_es"].split("\n\n") if b.strip()],
+            text = (greeting_hola_bubbles(rec, settings) if rid == "greeting_hola"
+                    else [b.strip() for b in rec["contenido_es"].split("\n\n") if b.strip()])
+            literal = _result(text,
                               funnel_stage=stage, extracted={"interest": interest} if interest else {},
                               rag_meta={**meta, "fuentes": [rid], "literal": True})
             return await _literal_checked(literal, lead, rid, meta)
