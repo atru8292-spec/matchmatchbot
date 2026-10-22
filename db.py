@@ -514,6 +514,15 @@ async def get_daily_amount(name: str) -> float:
         return 0.0
 
 
+async def get_daily_amount(name: str) -> float:
+    """Сегодняшняя сумма name (по Мехико), например расход OpenAI режима rag. Нет ключа → 0."""
+    v = await get_setting(_daily_counter_key(name))
+    try:
+        return float(v) if v and v.strip() else 0.0
+    except ValueError:
+        return 0.0
+
+
 async def add_daily_amount(name: str, amount: float) -> float:
     """Прибавить amount к сегодняшней сумме name одним запросом (атомарно: параллельные
     ответы разных лидов не теряют приращения, code-review 2026-10-22). Вернуть новое значение."""

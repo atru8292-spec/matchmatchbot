@@ -42,6 +42,11 @@ MAX_BUBBLES = 4
 TOP_K = 5
 COST_COUNTER = "rag_cost_usd"
 DAILY_COST_WARN_USD = 5.0
+# Жёсткий лимит за сутки (app_settings.rag_daily_hard_limit_usd, по умолчанию 15): выше него
+# режим rag OpenAI не зовёт — молчание, Аня отвечает сама, техалерт раз в сутки (ревью 2026-10-22).
+HARD_LIMIT_KEY = "rag_daily_hard_limit_usd"
+HARD_LIMIT_DEFAULT_USD = 15.0
+_hard_limit_alerted: dict = {"day": None}
 
 # Дословно без модели (решение владелицы): «ты бот?» и блоки.
 VERBATIM_IDS = {40, 9, 12, 27, 28, 29, 7, 8}
@@ -1335,6 +1340,18 @@ async def unrendered_tokens(bubbles: list[str]) -> str | None:
     return None
 
 
+async def _literal_checked(result: dict, lead: dict, fuente: str, meta: dict) -> dict:
+    """Готовый ход без модели (приветствие, дословный сценарий, покупка, ход после фото):
+    все токены должны подставиться до отправки. Хоть один не подставился — не шлём ничего:
+    молчание (main: ручной режим и алерт Ане) и техалерт (ревью 2026-10-22)."""
+    problem = await unrendered_tokens((result.get("messages") or []) + (result.get("after_media") or []))
+    if problem:
+        await _tech_alert(f"токен не подставился ({fuente}): {problem}", lead.get("phone"))
+        return _silent(f"токен не подставился ({problem}) — ответь сама",
+                       rag_meta={**meta, "fuentes": [fuente]})
+    return result
+
+
 def _silent(reason: str, **extra) -> dict:
     return _result([], "silent", silent_reason=f"Режим rag: {reason}", **extra)
 
@@ -1450,6 +1467,9 @@ def venta_por_compra(lead: dict, mem: dict, user_text: str) -> dict | None:
 
 
 async def _venta_por_compra_lista(result: dict, lead: dict, meta: dict) -> dict:
+    checked = await _literal_checked(result, lead, "venta_por_compra", meta)
+    if checked is not result:
+        return checked
     result["rag_meta"] = {**meta, "fuentes": ["venta_por_compra"]}
     await _attach_media_captions(result, lead)
     if result.get("video_caption"):
@@ -1556,12 +1576,36 @@ async def _scenario_reply(sid: int) -> dict | None:
     return ai._fixed_reply(row) if row else None
 
 
+async def over_hard_limit(phone: str | None) -> float | None:
+    """Расход за сутки превысил жёсткий лимит → сумма, иначе None. Сбой чтения — не блокируем."""
+    try:
+        raw = (await db.get_settings([HARD_LIMIT_KEY])).get(HARD_LIMIT_KEY)
+        limit = float(raw) if raw and raw.strip() else HARD_LIMIT_DEFAULT_USD
+        spent = await db.get_daily_amount(COST_COUNTER)
+    except Exception:
+        logger.exception("rag: не прочитала дневной лимит расхода")
+        return None
+    if spent < limit:
+        return None
+    day = knowledge.today_cdmx()
+    if _hard_limit_alerted["day"] != day:
+        _hard_limit_alerted["day"] = day
+        await _tech_alert(f"режим rag: расход за сутки ${spent:.2f} ≥ лимита ${limit:.2f} — "
+                          f"OpenAI не зову до завтра, лиды уходят Ане", phone)
+    return spent
+
+
 async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dict:
     """Ответ в режиме rag. Контракт результата тот же, что у ai.generate_reply, плюс
     silent_reason (текст алерта Ане) и rag_estado (сохраняет main)."""
     prompt = load_prompt()          # нет промпта → NotImplementedError → legacy
     cost = Cost()
     lead = dict(lead or {})
+    spent = await over_hard_limit(lead.get("phone"))
+    if spent is not None:
+        result = _silent(f"дневной лимит расхода OpenAI исчерпан (${spent:.2f}) — ответь сама")
+        result["rag_meta"] = {"usd": 0.0, "tokens": {}, "fuentes": ["hard_limit"]}
+        return result
     try:
         result = await _generate(lead, user_text, prompt, cost)
     except Exception as e:
@@ -1616,7 +1660,7 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     if top:
         reply = ai._fixed_reply(top)
         reply["rag_meta"] = {**meta, "fuentes": [f"scenario:{top['id']}"]}
-        return reply
+        return await _literal_checked(reply, lead, f"scenario:{top['id']}", meta)
 
     # 2. base_script при точном совпадении ситуации.
     recs = knowledge.usable(await knowledge.records(), settings, knowledge.today_cdmx())
@@ -1627,9 +1671,10 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
                                                         user_text, lead):
             stage = "pitched" if rid == "service_pitch" else "qualifying"
             interest = {"greeting_event": "event", "greeting_service": "agency"}.get(rid)
-            return _result([b.strip() for b in rec["contenido_es"].split("\n\n") if b.strip()],
-                           funnel_stage=stage, extracted={"interest": interest} if interest else {},
-                           rag_meta={**meta, "fuentes": [rid], "literal": True})
+            literal = _result([b.strip() for b in rec["contenido_es"].split("\n\n") if b.strip()],
+                              funnel_stage=stage, extracted={"interest": interest} if interest else {},
+                              rag_meta={**meta, "fuentes": [rid], "literal": True})
+            return await _literal_checked(literal, lead, rid, meta)
 
     # 2.5. Скидки, наличные, перевод, возврат — решение владелицы: молча Ане.
     if _SILENT_TOPIC_RE.search(user_text or ""):
@@ -1652,11 +1697,9 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     # 2.7. Одобренное фото лида ивента с именем и «холост ли» — сразу к покупке (кодом).
     venta = venta_tras_foto(lead, mem, by_id, user_text)
     if venta:
-        problem = await unrendered_tokens(venta["messages"] + venta["after_media"])
-        if problem:
-            await _tech_alert(f"токен не подставился: {problem}", lead.get("phone"))
-            return _silent(f"токен не подставился ({problem}) — ответь сама",
-                           rag_meta={**meta, "fuentes": ["venta_tras_foto"]})
+        checked = await _literal_checked(venta, lead, "venta_tras_foto", meta)
+        if checked is not venta:
+            return checked
         venta["rag_meta"] = {**meta, "fuentes": ["venta_tras_foto"]}
         await _attach_media_captions(venta, lead)
         return venta

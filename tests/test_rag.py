@@ -2358,3 +2358,85 @@ async def test_objection_with_ir_not_link(monkeypatch):
     p.chat_replies = [reply(["Te entiendo, no es poco."])]
     r = await rag.generate_reply(p.lead, RUN2_BASE, "Me gustaría ir pero está muy caro")
     assert len(p.model_calls()) == 1 and not any("[event_link]" in m for m in r["messages"])
+
+
+# ───────── ревью 2026-10-22: 4.11 купил по текущему ивенту, 4.12 токены, 4.13 лимит ─────────
+
+class TestBoughtCurrentEvent:
+    LEAD = {"funnel_stage": "event_attended"}
+
+    def test_stage_from_past_event_is_not_bought(self):
+        ev = [{"to_stage": "event_attended", "changed_at": EVENT_DESDE - timedelta(days=30), "meta": {}}]
+        assert memory.boleto_del_evento_actual(self.LEAD, ev, SETTINGS, EVENT_DESDE) is False
+
+    def test_bought_after_current_event_announced(self):
+        ev = [{"to_stage": "event_attended", "changed_at": EVENT_DESDE + timedelta(hours=2), "meta": {}}]
+        assert memory.boleto_del_evento_actual(self.LEAD, ev, SETTINGS, EVENT_DESDE) is True
+
+    def test_meta_event_date_matches(self):
+        ev = [{"to_stage": "event_attended", "changed_at": None, "meta": '{"event_date": "2026-11-18"}'}]
+        assert memory.boleto_del_evento_actual(self.LEAD, ev, SETTINGS, None) is True
+
+    def test_other_stage_never_bought(self):
+        assert memory.boleto_del_evento_actual({"funnel_stage": "qualified"}, [], SETTINGS, EVENT_DESDE) is False
+
+    @pytest.mark.asyncio
+    async def test_past_attendee_can_buy_again(self, monkeypatch):
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra={**CARLOS, "funnel_stage": "event_attended"})
+        monkeypatch.setattr(db, "get_funnel_events", AsyncMock(return_value=[
+            {"to_stage": "event_attended", "changed_at": EVENT_DESDE - timedelta(days=40), "meta": {}}]))
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "¿cómo compro el boleto?")
+        assert r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
+
+
+@pytest.mark.asyncio
+class TestLiteralTokens:
+    async def test_verbatim_scenario_with_unrendered_token_not_sent(self, monkeypatch):
+        """Дословный сценарий из БД с токеном, которому нечего подставить, — ничего не шлём:
+        молчание (main: ручной режим и Аня) и техалерт."""
+        p = Pipe(monkeypatch, settings={**SETTINGS, "event_address": ""}, lead_extra=CARLOS)
+        monkeypatch.setattr(db, "search_scenarios_by_vector", AsyncMock(return_value=[
+            {"id": 40, "score": 0.99, "mode": "bot_auto", "blocks_lead": False,
+             "template_es": "Jaja no, soy Anna 🤍\n\nNos vemos en [event_address]."}]))
+        tech = AsyncMock()
+        monkeypatch.setattr(rag, "_tech_alert", tech)
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "¿eres un bot?")
+        assert r["action"] == "silent" and r["messages"] == [] and "токен" in r["silent_reason"]
+        tech.assert_awaited()
+        assert p.model_calls() == []
+
+    async def test_literal_checked_passes_good_turn(self, monkeypatch):
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value=SETTINGS))
+        res = rag._result([rag.BUY_LINK, rag.BUY_PAGE])
+        assert await rag._literal_checked(res, CARLOS, "venta_por_compra", {}) is res
+
+    async def test_empty_setting_drops_record_before_turn(self, monkeypatch):
+        """Пустая настройка выключает запись базы раньше: приветствие с пустым адресом не
+        отправляется дословно, отвечает модель."""
+        p = Pipe(monkeypatch, settings={**SETTINGS, "event_address": ""}, lead_extra={})
+        p.chat_replies = [reply(["¡Hola! Soy Anna, fundadora de Match Match Agency 🤍"])]
+        await rag.generate_reply(p.lead, [], "Hola")
+        assert len(p.model_calls()) == 1
+
+
+@pytest.mark.asyncio
+class TestHardLimit:
+    async def test_over_limit_no_openai_silent_alert_once(self, monkeypatch):
+        p = Pipe(monkeypatch, settings={**SETTINGS, "rag_daily_hard_limit_usd": "15"}, lead_extra=CARLOS)
+        monkeypatch.setattr(db, "get_daily_amount", AsyncMock(return_value=15.2))
+        tech = AsyncMock()
+        monkeypatch.setattr(rag, "_tech_alert", tech)
+        rag._hard_limit_alerted["day"] = None
+        r1 = await rag.generate_reply(p.lead, RUN2_BASE, "¿qué incluye?")
+        r2 = await rag.generate_reply(p.lead, RUN2_BASE, "¿dónde es?")
+        assert p.cost.await_count == 0          # расход не пишется: OpenAI не звали
+        assert r1["action"] == r2["action"] == "silent" and "лимит" in r1["silent_reason"]
+        assert p.chat_calls == []
+        assert tech.await_count == 1
+
+    async def test_under_limit_works(self, monkeypatch):
+        p = Pipe(monkeypatch, settings=SETTINGS, lead_extra=CARLOS)
+        monkeypatch.setattr(db, "get_daily_amount", AsyncMock(return_value=3.0))
+        p.chat_replies = [reply(["Incluye bebida de bienvenida y botanas."])]
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "¿qué incluye?")
+        assert r["action"] == "respond"

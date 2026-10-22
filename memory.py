@@ -172,8 +172,34 @@ def _has_price(text: str, price: str) -> bool:
     return bool(p) and any(_digits(n) == p for n in re.findall(r"\d[\d.,]*", text or ""))
 
 
+def boleto_del_evento_actual(lead: dict, eventos: list[dict], settings: dict,
+                             evento_desde: datetime | None) -> bool:
+    """Купил билет именно на текущий ивент (ревью 2026-10-22): стадия event_attended и смена
+    на неё после объявления текущего ивента (или meta.event_date = текущая дата). Стадия от
+    прошлого ивента — не покупка: такому лиду бот снова продаёт билет."""
+    if lead.get("funnel_stage") != "event_attended":
+        return False
+    ev_date = settings.get("event_date")
+    for e in reversed(eventos or []):
+        if e.get("to_stage") != "event_attended":
+            continue
+        meta = e.get("meta") or {}
+        if isinstance(meta, str):
+            try:
+                import json
+                meta = json.loads(meta)
+            except ValueError:
+                meta = {}
+        if ev_date and meta.get("event_date") == ev_date:
+            return True
+        ts = e.get("changed_at")
+        return bool(evento_desde and isinstance(ts, datetime) and _aware(ts) >= _aware(evento_desde))
+    return False
+
+
 def ya_hecho(prior: list[dict], lead: dict, settings: dict,
-             evento_desde: datetime | None, now: datetime) -> dict:
+             evento_desde: datetime | None, now: datetime,
+             boleto_actual: bool | None = None) -> dict:
     """Журнал по всей прошлой переписке. evento_desde — когда объявлен текущий ивент
     (обновление event_date/event_link в настройках): всё раньше — pasado."""
     out: dict = {
@@ -182,7 +208,8 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
         "foto_enviada": None, "precio_servicio_dado": None,
         "preguntas_calificacion": {k: 0 for k in SLOT_QUESTION_RE},
         "objeciones": [], "preguntas_sin_respuesta": [],
-        "boleto_comprado": lead.get("funnel_stage") == "event_attended",
+        "boleto_comprado": (bool(boleto_actual) if boleto_actual is not None
+                            else lead.get("funnel_stage") == "event_attended"),
         "llamada_agendada": None, "ana_escribio_a_mano": None, "pasado": [],
         "hechos_dichos": [], "auto_saludo": None,
     }
@@ -408,7 +435,14 @@ async def build(lead: dict, user_text: str, now: datetime | None = None) -> dict
             logger.exception("memory: заметки не прочитались [%s]", phone)
         desde = await _evento_desde()
     prior, burst = split_current_burst(msgs, user_text)
-    ya = ya_hecho(prior, lead, settings, desde, now)
+    eventos = []
+    if phone and lead.get("funnel_stage") == "event_attended":
+        try:
+            eventos = await db.get_funnel_events(phone)
+        except Exception:
+            logger.exception("memory: не прочитала смены стадий [%s]", phone)
+    ya = ya_hecho(prior, lead, settings, desde, now,
+                  boleto_actual=boleto_del_evento_actual(lead, eventos, settings, desde))
     last_out = ultima_respuesta(prior)
     lead_lines = [m.get("text") or "" for m in prior if autor(m) == "lead"]
     # Последние ответы Анны (бот или вручную) по текущему ивенту — источник для сверки.
