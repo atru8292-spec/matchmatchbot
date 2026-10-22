@@ -2325,7 +2325,7 @@ async def test_photo_with_question_caption_goes_to_model(monkeypatch):
 
 @pytest.mark.parametrize("text", ["Me gustaría ir pero está muy caro", "No puedo pagar ahorita",
                                   "ya me registré", "ya pagué", "lo voy a pensar, quiero ir",
-                                  "no voy a comprar nada"])
+                                  "no voy a comprar nada", "quiero ir, luego te aviso"])
 def test_not_a_purchase(text):
     assert not rag.wants_to_buy(text, None), text
 

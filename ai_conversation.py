@@ -192,7 +192,8 @@ _NOT_BUYING_RE = re.compile(
     re.IGNORECASE)
 # Колебание без «no sé»: «no sé cómo pagar» — это как раз вопрос о покупке.
 _HESITATE_RE = re.compile(r"\bpensar(?:lo|[eé])?\b|lo\s+pienso|\btal\s+vez\b|\bquiz[aá]s?\b|"
-                          r"\bm[aá]s\s+adelante\b|\bdespu[eé]s\s+(?:veo|te\s+digo)", re.IGNORECASE)
+                          r"\bm[aá]s\s+adelante\b|\bdespu[eé]s\s+(?:veo|te\s+digo)|"
+                          r"\bluego\s+(?:te\s+)?(?:aviso|digo)\b", re.IGNORECASE)
 
 
 def is_purchase(text: str) -> bool:
