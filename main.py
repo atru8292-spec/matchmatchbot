@@ -530,6 +530,27 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
     # экономит токены/запрос против 30 без потери качества.
     history = await db.get_conversation_history(phone, 20)
     result = await ai.generate_reply(lead, history, combined)
+    try:
+        await _apply_ai_result(phone, lead, combined, result)
+    except Exception:
+        # Режим rag (и тестовый лид в rag_test): сбой после генерации — лид не должен остаться
+        # без человека: ручной режим и алерт Ане, техалерт — выше по стеку (ревью 2026-10-22).
+        if result.get("rag_meta") is not None:
+            try:
+                await db.update_lead_fields(phone, mode="manual")
+            except Exception:
+                logger.exception("rag: не смог поставить manual после сбоя [%s]", phone)
+            try:
+                await escalation.notify_escalation(
+                    lead, "Режим rag: сбой после генерации ответа — проверь, дошёл ли ответ, "
+                          "и ответь сама", combined)
+            except Exception:
+                logger.exception("rag: алерт Ане после сбоя не ушёл [%s]", phone)
+        raise
+
+
+async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) -> None:
+    """Применить ответ AI: extracted → стадия → action → отправка."""
     # Режим rag: состояние разговора (уход от темы подряд, возвраты). Колонка из миграции 008;
     # без неё — только лог, ответ лиду не страдает.
     if result.get("rag_estado") is not None:

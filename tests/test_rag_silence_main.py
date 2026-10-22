@@ -90,3 +90,24 @@ async def test_rag_reply_sent_if_still_auto(monkeypatch, env):
     monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={**LEAD, "mode": "auto"}))
     await main._run_ai(PHONE, {**LEAD, "mode": "auto"}, "¿dónde es?")
     env["send"].assert_awaited_once()
+
+
+async def test_rag_failure_after_generation_manual_and_alert(monkeypatch, env):
+    """Ревью 2026-10-22 (4.7): ответ сгенерирован, отправка упала — ручной режим и алерт Ане
+    (техалерт — во внешнем обработчике), а не только техалерт."""
+    monkeypatch.setattr(ai, "generate_reply", AsyncMock(return_value=_rag("respond", ["Hola"])))
+    monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"mode": "auto"}))
+    monkeypatch.setattr(main.sender, "send", AsyncMock(side_effect=RuntimeError("wazzup down")))
+    with pytest.raises(RuntimeError):
+        await main._run_ai(PHONE, LEAD, "hola")
+    env["fields"].assert_any_await(PHONE, mode="manual")
+    assert "сбой после генерации" in env["escalation"].await_args.args[1]
+
+
+async def test_legacy_failure_after_generation_no_manual(monkeypatch, env):
+    legacy = {k: v for k, v in _rag("respond", ["Hola"]).items() if k != "rag_meta"}
+    monkeypatch.setattr(ai, "generate_reply", AsyncMock(return_value=legacy))
+    monkeypatch.setattr(main.sender, "send", AsyncMock(side_effect=RuntimeError("wazzup down")))
+    with pytest.raises(RuntimeError):
+        await main._run_ai(PHONE, LEAD, "hola")
+    env["escalation"].assert_not_awaited()
