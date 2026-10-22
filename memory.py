@@ -527,7 +527,16 @@ def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None
         etapa = "venta"          # ссылку уже прислали (бот или Аня вручную) — ворота пройдены
     else:
         etapa = "calificacion"
-    asked_last = bool(siguiente and pregunta_slot(siguiente, last_outbound))
+    # Лид ответил на часть пары («¿Cuántos años tienes y a qué te dedicas?» → «35») — недостающую
+    # часть один раз сразу, коротко (решение 2026-10-23); дальше — счётчик попыток (MAX 2).
+    corta = False
+    if siguiente and siguiente == bloqueado and tries.get(siguiente, 0) == 1:
+        pareja = {"name": "is_single", "is_single": "name", "age": "profession",
+                  "profession": "age"}.get(siguiente)
+        if pareja and have(pareja) and turno.get(pareja) == turno.get(siguiente) == ultimo_turno \
+                and ya.get("turnos_bot", 0) == turno.get(siguiente):
+            bloqueado, corta = None, True
+    asked_last = bool(siguiente and pregunta_slot(siguiente, last_outbound)) and not corta
     blocked = bool(es_objecion_precio(user_text) or _HESITATION_RE.search(user_text or "")
                    or _FAREWELL_RE.search(user_text or ""))
     return {
@@ -536,6 +545,7 @@ def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None
         "puede_preguntar": bool(siguiente) and siguiente != bloqueado and not asked_last
                            and not blocked,
         "intentos": dict(tries), "etapa": etapa, "pasar_a_llamada": pasar_a_llamada,
+        "pregunta_corta": corta,
         "foto_agotada": foto_agotada,
     }
 

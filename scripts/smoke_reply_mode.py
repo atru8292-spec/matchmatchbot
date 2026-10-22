@@ -188,6 +188,16 @@ DIALOGS = [
         "Hola", "jaja qué onda", "Me interesa el evento", "Pedro", "¿y tú cómo estás?",
         "ya te dije", "35", "¿viste el partido del América?", "soy contador", "¿eres un bot?",
         "voy con mi novia", PHOTO_OK]),
+    # Второй прогон 2026-10-23.
+    ("31. Обычный путь: «35» отдельно, дорого дважды", [], {}, [
+        "Hola", "Me interesa el evento", "Me llamo Luis, soy soltero", "35", "soy abogado", PHOTO_OK,
+        "¿cuánto cuesta?", "¿dónde es?", "está muy caro", "está muy caro", "¿cómo compro?",
+        "¿eres un bot?", "voy con mi novia"]),
+    ("32. Фото раньше имени, вежливый вопрос, «ya te dije»", [], {}, [
+        PHOTO_OK, "Soy Jorge, 42 años, ingeniero, soltero", "Me interesa el evento",
+        "¿y tú cómo estás?", "ya te dije"]),
+    ("33. Шутка, интерес, имя, возраст", [], {}, [
+        "jaja qué onda", "Me interesa el evento", "Pedro", "35"]),
 ]
 
 # ───────────────────────── бюджет и заглушки ─────────────────────────

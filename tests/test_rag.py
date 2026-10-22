@@ -1657,9 +1657,8 @@ class TestConversationLogic:
                  msg("anna", "¿Cómo te llamas y estás soltero?", 4)]
         b, _, _ = revisar(["¡Gracias, Luis! 😊"], "Luis", {"interest": "agency"}, prior,
                           extracted={"name": "Luis"})
-        # 2026-10-23: вопрос задаётся один раз — «¿Estás soltero?» сразу не переспрашиваем
-        # (повтор — через три хода после ответа лида на другую тему)
-        assert b == ["¡Gracias, Luis! 😊"]
+        # 2026-10-23 (второй прогон): недостающая часть пары — один раз сразу и коротко
+        assert b == ["¡Gracias, Luis! 😊", "¿Y estás soltero?"]
 
     def test_after_age_photo_request(self):
         prior = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 10)]

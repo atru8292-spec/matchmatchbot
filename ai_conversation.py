@@ -596,6 +596,23 @@ _COMPLIMENT_RE = re.compile(
 _LEAD_THANKS_RE = re.compile(r"\bgracias\b|\bte\s+agradezco\b|\bmuy\s+amable\b", re.IGNORECASE)
 
 
+# Вежливый вопрос лида («¿y tú cómo estás?», «bien y tú?», «¿qué tal tu día?») — отвечаем коротко
+# и тепло, «gracias» здесь уместно (прогон 2026-10-23: «Gracias por preguntar» срезалось целиком).
+_COURTESY_RE = re.compile(
+    r"\by\s+t[uú]\b|c[oó]mo\s+(?:est[aá]s|te\s+va|has\s+estado|amaneciste|va\s+tu\s+d[ií]a)|"
+    r"qu[eé]\s+tal(?:\s+(?:tu\s+d[ií]a|todo|est[aá]s))?\b", re.IGNORECASE)
+_COURTESY_ONLY_RE = re.compile(
+    r"^\W*(?:(?:hola|oye|jaja\w*|(?:muy\s+)?bien|todo\s+bien|gracias|y|t[uú]|c[oó]mo|est[aá]s|te|va|"
+    r"has|estado|amaneciste|tu|d[ií]a|qu[eé]|tal|todo)\W*)+$", re.IGNORECASE)
+COURTESY_REPLY = "Muy bien, gracias 😊"
+
+
+def es_cortesia(text: str) -> bool:
+    """Сообщение — только вежливый вопрос («¿y tú cómo estás?»), без другого вопроса или данных."""
+    text = text or ""
+    return bool(_COURTESY_RE.search(text)) and bool(_COURTESY_ONLY_RE.match(text))
+
+
 def lead_dio_algo(user_text: str, extracted: dict, lead: dict | None = None) -> bool:
     """Лид что-то дал: новые данные о себе, фото, благодарность или комплимент — тогда
     «Gracias» уместно. Данные, которые уже были в профиле, новыми не считаются."""
@@ -603,7 +620,8 @@ def lead_dio_algo(user_text: str, extracted: dict, lead: dict | None = None) -> 
     datos = {k: v for k, v in (extracted or {}).items()
              if k != "interest" and v not in (None, "") and lead.get(k) != v}
     return bool(datos) or "[фото одобрено" in (user_text or "") or \
-        bool(_COMPLIMENT_RE.search(user_text or "")) or bool(_LEAD_THANKS_RE.search(user_text or ""))
+        bool(_COMPLIMENT_RE.search(user_text or "")) or bool(_LEAD_THANKS_RE.search(user_text or "")) \
+        or bool(_COURTESY_RE.search(user_text or ""))
 
 
 def drop_repeated_slot_question(bubbles: list[str], last_reply: str | None,
@@ -775,6 +793,15 @@ _BROAD_ASK_RE = re.compile(r"de\s+qu[eé]\s+(?:se\s+trata|va|es)|c[oó]mo\s+(?:e
                            r"qu[eé]\s+es\s+(?:el|eso|esto)", re.IGNORECASE)
 
 
+_INTEREST_RE = re.compile(r"\bme\s+interes|\bquiero\s+(?:saber|info|ir|asistir|participar|conocer)|"
+                          r"\binfo\b|informaci[oó]n|\binformes\b|me\s+gustar[ií]a\s+(?:ir|saber|asistir)|"
+                          r"\bcu[eé]ntame\b", re.IGNORECASE)
+
+
+_NO_INTEREST_RE = re.compile(r"\b(?:no|ya\s+no|ni|sin)\s+(?:me\s+interes|necesito\s+info|quiero\s+(?:saber|info)|"
+                             r"info|informaci)", re.IGNORECASE)
+
+
 def temas_preguntados(user_text: str) -> set[str]:
     return {tema for tema, rx in _ASK_TEMA.items() if rx.search(user_text or "")}
 
@@ -792,8 +819,12 @@ def drop_unasked_facts(bubbles: list[str], user_text: str, mem: dict) -> list[st
     link = (settings.get("event_link") or "").strip()
     if any("[event_link]" in b or (link and link in b) for b in bubbles):
         return bubbles
+    # Лид выразил интерес или попросил информацию — описание из базы не срезаем (прогон 2026-10-23:
+    # «Me interesa el evento» → пустое «¡Qué gusto que te interese!»).
     asked = temas_preguntados(user_text)
-    broad = bool(_BROAD_ASK_RE.search(user_text or "") or memory._PRICE_OBJECTION_RE.search(user_text or ""))
+    interes = bool(_INTEREST_RE.search(user_text or "")) and not _NO_INTEREST_RE.search(user_text or "")
+    broad = interes or bool(_BROAD_ASK_RE.search(user_text or "")
+                            or memory._PRICE_OBJECTION_RE.search(user_text or ""))
     said = set(mem["ya_hecho"].get("hechos_dichos") or [])
 
     def unasked(sent):
@@ -815,12 +846,19 @@ _SLOT_QUESTIONS = {
 }
 
 
+_SLOT_QUESTIONS_CORTAS = {"profession": "¿Y a qué te dedicas?", "age": "¿Y cuántos años tienes?",
+                          "is_single": "¿Y estás soltero?", "name": "¿Y cómo te llamas?"}
+
+
 def slot_question(cal: dict) -> str | None:
     """Готовый вопрос по следующему слоту (имя и «холост ли» вместе, возраст и профессия
-    вместе), если его сейчас можно задать. None — спрашивать нечего или не время."""
+    вместе), если его сейчас можно задать. None — спрашивать нечего или не время. Лид ответил на
+    часть пары — недостающая часть коротко: «¿Y a qué te dedicas?» (решение 2026-10-23)."""
     nxt = cal.get("siguiente")
     if not nxt or not cal.get("puede_preguntar"):
         return None
+    if cal.get("pregunta_corta"):
+        return _SLOT_QUESTIONS_CORTAS.get(nxt)
     pair = {"name": ("name", "is_single"), "is_single": ("name", "is_single"),
             "age": ("age", "profession"), "profession": ("age", "profession")}.get(nxt, (nxt,))
     tenemos = cal.get("tenemos") or {}
@@ -1896,6 +1934,43 @@ def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict 
                    after_media=[question] if question else [])
 
 
+def venta_tras_datos(lead: dict, merged: dict, mem: dict, by_id: dict, user_text: str) -> dict | None:
+    """Фото уже одобрено раньше, а имя и «холост ли» лид дал только сейчас (прогон 2026-10-23:
+    бот только благодарил) — тот же шаг, что после фото: благодарность, ивент одной фразой,
+    ссылка, видео и фото прошлых ивентов. Фото не просим, возраст и профессию не спрашиваем."""
+    ya, settings = mem["ya_hecho"], mem["settings"]
+    if not lead.get("photo_received") or "[фото" in (user_text or ""):
+        return None
+    if lead.get("name") and lead.get("is_single") is True:
+        return None              # данные были и раньше — это не момент «закрыли анкету»
+    if not (merged.get("name") and merged.get("is_single") is True):
+        return None
+    # данные — в самом сообщении лида, а не только в извлечении модели (ревью 2026-10-23)
+    text = user_text or ""
+    if not lead.get("name") and str(merged["name"]).split()[0].lower() not in text.lower():
+        return None
+    if lead.get("is_single") is not True and not memory.responde_slot("is_single", text, False):
+        return None
+    if not caption_only_self_data(user_text or ""):
+        return None              # в сообщении ещё и вопрос — пусть отвечает модель
+    if memory.ruta(merged, user_text) == "servicio" or ya.get("enlace_enviado") \
+            or ya.get("boleto_comprado") or settings.get("event_active") != "1" \
+            or not (settings.get("event_link") or "").strip():
+        return None
+    bubbles = [f"¡Gracias, {merged['name']}! 😊"]
+    story = _story_after_photo(by_id, set(ya.get("hechos_dichos") or []))
+    if story:
+        bubbles.append(story)
+    bubbles.append(CTA_LINK)
+    # возраст и профессию — только если ещё не спрашивали (правило «один вопрос — один раз»)
+    cal = memory.calificacion(merged, ya, user_text, None)
+    question = slot_question(cal) if cal.get("siguiente") in ("age", "profession") else None
+    return _result(bubbles, funnel_stage="qualified",
+                   send_event_video=not ya.get("video_enviado"),
+                   send_event_photo=not ya.get("foto_enviada") and media_fits(mem),
+                   after_media=[question] if question else [])
+
+
 # Голое приветствие без вопроса («hola», «buenas», «buenos días»): ответ всегда готовым текстом
 # без модели, тишины не бывает (решение 2026-10-22: при выключенном ивенте модель на «Hola»
 # сочинила описание агентства, проверка его отбросила, лид остался без ответа).
@@ -2111,6 +2186,14 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
                           rag_meta={**meta, "fuentes": ["saludo_fijo"], "literal": True})
         return await _literal_checked(literal, lead, "saludo_fijo", meta)
 
+    # 2.2. Только вежливый вопрос — коротко и тепло, дальше вопрос по слоту, если его ещё можно
+    # задать (правило «один вопрос — один раз»), без модели.
+    if es_cortesia(user_text):
+        q = slot_question(cal)
+        literal = _result([COURTESY_REPLY] + ([q] if q else []),
+                          rag_meta={**meta, "fuentes": ["cortesia"], "literal": True})
+        return await _literal_checked(literal, lead, "cortesia", meta)
+
     # 2.5. Скидки, наличные, перевод, возврат — решение владелицы: молча Ане.
     if _SILENT_TOPIC_RE.search(user_text or ""):
         return _silent("скидка, способ оплаты или возврат (решение владелицы)",
@@ -2227,6 +2310,17 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
             reply = await _scenario_reply(9) or _result([NOT_SINGLE_FALLBACK], "block")
             reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
             return reply
+
+        # Фото одобрено раньше, имя и «холост ли» пришли сейчас — шаг к покупке, как после фото.
+        venta = venta_tras_datos(lead, merged, mem, by_id, user_text)
+        if venta:
+            venta.update(extracted=out["extracted"], rag_estado=estado,
+                         rag_meta={**meta, "fuentes": ["venta_tras_datos"]})
+            checked = await _literal_checked(venta, lead, "venta_tras_datos", meta)
+            if checked is not venta:
+                return checked
+            await _attach_media_captions(venta, lead)
+            return venta
 
         # Купить хотел раньше, имя и «холост ли» пришли сейчас — ссылка сразу после его ответа.
         if mem["compra_pendiente"] and not (lead.get("name") and lead.get("is_single") is True) \

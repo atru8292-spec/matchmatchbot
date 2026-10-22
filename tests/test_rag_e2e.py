@@ -229,8 +229,8 @@ async def test_c_service_path(monkeypatch):
     assert all_text(r)[-1] == "¿Cuántos años tienes y a qué te dedicas?"
     d.models["tengo 41"] = model(["¡Gracias! 😊"], extracted={"age": 41})
     r = await d.say("tengo 41")
-    # профессию спросили вместе с возрастом ходом раньше — сразу не переспрашиваем (2026-10-23)
-    assert all_text(r) == ["¡Gracias! 😊"]
+    # ответил только возрастом — недостающую часть один раз сразу и коротко (2026-10-23)
+    assert all_text(r) == ["¡Gracias! 😊", "¿Y a qué te dedicas?"]
     d.models["soy abogado"] = model(["¡Gracias! 😊"], extracted={"profession": "abogado"})
     r = await d.say("soy abogado")
     assert all_text(r)[-1] == "¿Me mandas una foto tuya?"
