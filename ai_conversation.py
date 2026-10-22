@@ -1381,6 +1381,32 @@ def _silent(reason: str, **extra) -> dict:
     return _result([], "silent", silent_reason=f"Режим rag: {reason}", **extra)
 
 
+# Алерт «бот промолчал» простым текстом (решение 2026-10-22): одна фраза причины.
+UNVERIFIED = "Бот не нашел подтвержденного ответа и ничего не отправил, чтобы не соврать"
+FAILURE = "Не получилось составить ответ, лид ничего не получил"
+_ALERT_CAUSES = [
+    (("утверждения без источника", "числа без источника", "в ответе 5,500", "ссылка не из базы",
+      "после проверок ответ пустой"), UNVERIFIED),
+    (("policy_anya_promise",), "Лид спрашивает о том, что ты обещала ему лично, а в базе этого нет"),
+    (("скидка, способ оплаты или возврат",), "Лид спрашивает про скидку, способ оплаты или возврат, это решаешь ты"),
+    (("Лид без фото хочет билет",), "Лид хочет билет, но не прислал фото после двух просьб"),
+    (("третий раз подряд не по теме",), "Лид третий раз подряд пишет не по теме"),
+    (("время окончания",), "Лид спрашивает, когда заканчивается ивент, а этого нет в базе"),
+    (("нет данных в базе",), "На этот вопрос в базе нет ответа"),
+    (("модель решила передать Ане", "политика молчания"), "Это вопрос, который по правилам решаешь ты"),
+    (("дневной лимит",), "Бот исчерпал дневной лимит расходов и сегодня больше не отвечает"),
+]
+
+
+def silent_alert(silent_reason: str | None) -> str:
+    """Фраза «Причина: …» для алерта по тексту silent_reason. Неизвестное — сбой."""
+    r = silent_reason or ""
+    for keys, phrase in _ALERT_CAUSES:
+        if any(k in r for k in keys):
+            return phrase
+    return FAILURE
+
+
 def _parse_model(raw: dict) -> dict:
     bubbles = raw.get("bubbles") or raw.get("messages") or []
     if not isinstance(bubbles, list):
@@ -1555,6 +1581,38 @@ def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict 
                    after_media=[question] if question else [])
 
 
+# Голое приветствие без вопроса («hola», «buenas», «buenos días»): ответ всегда готовым текстом
+# без модели, тишины не бывает (решение 2026-10-22: при выключенном ивенте модель на «Hola»
+# сочинила описание агентства, проверка его отбросила, лид остался без ответа).
+_BARE_GREETING_RE = re.compile(
+    r"^\W*(?:(?:hola+|holi|buenas|buen[oa]s?\s+(?:d[ií]as?|tardes|noches)|buen\s+d[ií]a|"
+    r"qu[eé]\s+tal|hey|saludos|que\s+onda|ana|anna)\W*)+$", re.IGNORECASE)
+
+
+def is_bare_greeting(text: str) -> bool:
+    return bool(_BARE_GREETING_RE.match((text or "").strip())) and "?" not in (text or "")
+
+
+def _bubbles_of(rec: dict | None) -> list[str]:
+    return [b.strip() for b in ((rec or {}).get("contenido_es") or "").split("\n\n") if b.strip()]
+
+
+def saludo_fijo(user_text: str, mem: dict, by_id: dict) -> list[str] | None:
+    """Ответ на голое приветствие из готовых текстов базы. None — не приветствие или
+    подставить нечего (тогда — модель).
+    - Анна ещё не представлялась и автоприветствия не было: greeting_hola (ивент включён)
+      или greeting_hola_sin_evento.
+    - Иначе «¡Hola! 🤍» и вопрос по следующему слоту анкеты, если его сейчас можно задать."""
+    if not is_bare_greeting(user_text):
+        return None
+    ya = mem["ya_hecho"]
+    if not ya.get("presentacion") and not ya.get("auto_saludo"):
+        return _bubbles_of(by_id.get("greeting_hola") or by_id.get("greeting_hola_sin_evento")) or None
+    hola = (_bubbles_of(by_id.get("greeting_hola_sin_evento")) or [None])[0]
+    question = slot_question(mem["calificacion"])
+    return [hola, question] if hola and question else None
+
+
 def revisar(out: dict, mem: dict, lead: dict, merged: dict, user_text: str,
             fichas: list[dict]) -> tuple[list[str], str | None, list[str]]:
     """Ответ модели → пузыри для лида: основной ответ плюс не больше одного шага (вопрос по
@@ -1701,6 +1759,13 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
                               rag_meta={**meta, "fuentes": [rid], "literal": True})
             return await _literal_checked(literal, lead, rid, meta)
 
+    # 2.1. Голое приветствие — готовый текст без модели, никогда не тишина.
+    saludo = saludo_fijo(user_text, mem, by_id)
+    if saludo:
+        literal = _result(saludo, funnel_stage="qualifying",
+                          rag_meta={**meta, "fuentes": ["saludo_fijo"], "literal": True})
+        return await _literal_checked(literal, lead, "saludo_fijo", meta)
+
     # 2.5. Скидки, наличные, перевод, возврат — решение владелицы: молча Ане.
     if _SILENT_TOPIC_RE.search(user_text or ""):
         return _silent("скидка, способ оплаты или возврат (решение владелицы)",
@@ -1809,7 +1874,7 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     bubbles, reason, notes = revisar(out, mem, lead, merged, user_text, fichas)
     meta["notas"] = notes
     if reason:
-        return _silent(reason, **extra)
+        return _silent(reason, silent_detail=reason if "числа" in reason else None, **extra)
     if any(_NO_DATA_RE.search(x) for x in bubbles):
         return _silent("нет данных в базе (модель ответила отпиской)", **extra)
     # Спросил, когда заканчивается, а в ответе про окончание ничего (времени конца в базе нет) —
@@ -1833,7 +1898,7 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         return _silent(f"policy_anya_promise: лид спрашивает о том, что обещала Аня, в базе "
                        f"этого нет — реши сама ({claims})", **extra)
     if claims:
-        return _silent(f"утверждения без источника: {claims}", **extra)
+        return _silent(f"утверждения без источника: {claims}", silent_detail=f"«{claims[0]}»", **extra)
 
     # Токены: каждый должен подставиться (нет event_price_next в настройках → не отправляем).
     problem = await unrendered_tokens(bubbles)

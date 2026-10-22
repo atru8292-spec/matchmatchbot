@@ -11,6 +11,8 @@ cuando_usar (text-embedding-3-small), один запрос на весь seed (
 venv/bin/python -m scripts.import_knowledge            # сухой прогон: что вставится/обновится
 venv/bin/python -m scripts.import_knowledge --write    # запись, ручные правки целы
 venv/bin/python -m scripts.import_knowledge --force    # запись поверх ручных правок
+venv/bin/python -m scripts.import_knowledge --write --no-embeddings   # без OpenAI: новые записи
+        без вектора (бот посчитает сам при поиске), у существующих векторы не трогаются
 """
 from __future__ import annotations
 
@@ -37,10 +39,22 @@ PROTECTED = ("activo", "confirmado", "contenido_es")
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def build_sql(force: bool = False) -> str:
+def build_sql(force: bool = False, embeddings: bool = True) -> str:
     """Upsert одной записи: колонки COLS + эмбеддинг (::vector). jsonb-поля передаются
     python-объектами — их кодирует кодек пула (db._init_connection). Без force поля
-    PROTECTED у записи с непустым updated_by остаются как в БД."""
+    PROTECTED у записи с непустым updated_by остаются как в БД. embeddings=False — вектор
+    не пишется (NULL у новой записи, у существующей остаётся прежний)."""
+    if not embeddings:
+        vals = ", ".join(f"${i + 1}" for i in range(len(COLS)))
+
+        def upd_n(c):
+            if c in PROTECTED and not force:
+                return (f"{c} = CASE WHEN COALESCE(knowledge.updated_by, '') = '' "
+                        f"THEN EXCLUDED.{c} ELSE knowledge.{c} END")
+            return f"{c} = EXCLUDED.{c}"
+        return (f"INSERT INTO knowledge ({', '.join(COLS)}) VALUES ({vals}) "
+                f"ON CONFLICT (id) DO UPDATE SET {', '.join(upd_n(c) for c in COLS[1:])}, "
+                f"updated_at = now()")
     vals = ", ".join(f"${i + 1}" for i in range(len(COLS))) + f", ${len(COLS) + 1}::vector"
 
     def upd(c):
@@ -76,6 +90,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true", help="записать, ручные правки целы")
     ap.add_argument("--force", action="store_true", help="записать поверх ручных правок")
+    ap.add_argument("--no-embeddings", action="store_true", help="без OpenAI: векторы не считать")
     args = ap.parse_args()
     recs = knowledge.load_seed()
     await db.init_pool()
@@ -96,6 +111,14 @@ async def main() -> int:
             return 0
         backup = await backup_table(pool)
         print(f"Бэкап: {backup.relative_to(ROOT)}")
+        if args.no_embeddings:
+            sql = build_sql(force=args.force, embeddings=False)
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    for r in recs:
+                        await conn.execute(sql, *row_params(r))
+            print(f"Записано {len(recs)} записей без эмбеддингов (OpenAI не вызывался)")
+            return 0
         cost = ai_conversation.Cost()
         vecs = await ai_conversation._embed_batch([r["cuando_usar"] or r["titulo"] for r in recs], cost)
         sql = build_sql(force=args.force)

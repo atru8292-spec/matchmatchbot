@@ -39,6 +39,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+# httpx на INFO пишет полный URL запроса — у Telegram в нём токен бота. В журнал не пускаем.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("matchmatch")
 
 # Подтверждение при opt-out (лид попросил не писать). Одно тёплое сообщение, дальше тишина.
@@ -541,9 +543,8 @@ async def _run_ai(phone: str, lead: dict, combined: str) -> None:
             except Exception:
                 logger.exception("rag: не смог поставить manual после сбоя [%s]", phone)
             try:
-                await escalation.notify_escalation(
-                    lead, "Режим rag: сбой после генерации ответа — проверь, дошёл ли ответ, "
-                          "и ответь сама", combined)
+                await escalation.notify_bot_silent(
+                    lead, combined, "Не получилось отправить ответ, проверь переписку и ответь сам")
             except Exception:
                 logger.exception("rag: алерт Ане после сбоя не ушёл [%s]", phone)
         raise
@@ -629,7 +630,12 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
             logger.exception("не смог поставить manual (silent) для %s", phone)
         title = await db.get_scenario_title(result["used_scenario_id"])
         logger.info("AI silent [%s] (scenario=%s) — без ответа лиду", phone, result["used_scenario_id"])
-        # silent_reason — режим rag: чего не хватило (нет данных, политика молчания, проверка).
+        if result.get("rag_meta") is not None:
+            # Новый режим: понятный алерт «бот промолчал» (причина одной фразой).
+            await escalation.notify_bot_silent(
+                lead, combined, ai_conversation.silent_alert(result.get("silent_reason")),
+                result.get("silent_detail"))
+            return
         await escalation.notify_escalation(
             lead, result.get("silent_reason") or title
             or "Похоже на клиента агентства — бот промолчал", combined)
@@ -670,9 +676,7 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
                 await db.update_lead_fields(phone, mode="manual")
             except Exception:
                 logger.exception("не смог поставить manual (rag, 0 бабблов) [%s]", phone)
-            await escalation.notify_escalation(
-                lead, "Режим rag: ответ не ушёл лиду (все сообщения отброшены при отправке) — "
-                      "ответь сама", combined)
+            await escalation.notify_bot_silent(lead, combined, ai_conversation.FAILURE)
     # Антибан-догон: СБРАСЫВАЕМ таймер тишины на любом ответе лида (он активен → не нудим),
     # а не только когда таймер пуст. Так догон уходит лишь после реального молчания N дней
     # (пробел (а): раньше активный лид в той же стадии всё равно получал догон).

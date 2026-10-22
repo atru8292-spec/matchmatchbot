@@ -2170,12 +2170,10 @@ class TestGreetingHola:
         переходим к квалификации."""
         hist = [msg("lead", "Hola", 2), AUTO_GREETING_MSG]
         p = Pipe(monkeypatch, history=hist, lead_extra={})
-        p.chat_replies = [reply(["¡Hola! Soy Anna, fundadora de Match Match Agency 🤍"])]
         r = await rag.generate_reply(p.lead, hist, "Hola")
-        assert len(p.model_calls()) == 1
-        ctx = p.model_calls()[0][1]
-        assert ctx["memoria"]["ya_hecho"]["auto_saludo"]
-        assert r["messages"][-1] == "¿Cómo te llamas y estás soltero?"
+        # готовый текст без модели (2026-10-22): «¡Hola! 🤍» и вопрос анкеты
+        assert p.model_calls() == []
+        assert r["messages"] == ["¡Hola! 🤍", "¿Cómo te llamas y estás soltero?"]
 
 
 
@@ -2415,9 +2413,10 @@ class TestLiteralTokens:
         """Пустая настройка выключает запись базы раньше: приветствие с пустым адресом не
         отправляется дословно, отвечает модель."""
         p = Pipe(monkeypatch, settings={**SETTINGS, "event_address": ""}, lead_extra={})
-        p.chat_replies = [reply(["¡Hola! Soy Anna, fundadora de Match Match Agency 🤍"])]
-        await rag.generate_reply(p.lead, [], "Hola")
-        assert len(p.model_calls()) == 1
+        r = await rag.generate_reply(p.lead, [], "Hola")
+        # без адреса greeting_hola не годится — уходит приветствие без ивента, без модели
+        assert p.model_calls() == []
+        assert r["messages"] == BY_ID["greeting_hola_sin_evento"]["contenido_es"].split("\n\n")
 
 
 @pytest.mark.asyncio
@@ -2545,3 +2544,65 @@ class TestRun11Fixes:
     def test_presale_end_question_not_end_time_silence(self):
         assert rag._END_TIME_Q_RE.search("¿cuándo termina la preventa?")
         assert rag._END_TIME_A_RE.search("Es por tiempo limitado, hasta el 29 de octubre.")
+
+
+
+# ───────── 2026-10-22: «Hola» никогда не тишина, понятный алерт, алерты Арины только ей ─────────
+
+@pytest.mark.asyncio
+class TestBareGreetingNeverSilent:
+    async def test_event_inactive_hola_literal(self, monkeypatch):
+        """Прод 2026-10-22 10:07: event_active=0, на «Hola» модель сочинила описание агентства,
+        проверка отбросила, лид остался без ответа. Теперь — готовое приветствие без ивента."""
+        p = Pipe(monkeypatch, settings={**SETTINGS, "event_active": "0"}, lead_extra={})
+        r = await rag.generate_reply(p.lead, [], "Hola")
+        assert p.model_calls() == []
+        assert r["action"] == "respond"
+        assert r["messages"] == BY_ID["greeting_hola_sin_evento"]["contenido_es"].split("\n\n")
+        assert "[" not in " ".join(r["messages"])
+
+    async def test_event_active_hola_literal(self, monkeypatch):
+        p = Pipe(monkeypatch, lead_extra={})
+        r = await rag.generate_reply(p.lead, [], "buenos días")
+        assert p.model_calls() == []
+        assert r["messages"] == BY_ID["greeting_hola"]["contenido_es"].split("\n\n")
+
+    async def test_hola_after_presentation_slot_question(self, monkeypatch):
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "hola")
+        assert p.model_calls() == []
+        assert r["messages"] == ["¡Hola! 🤍", "¿Cuántos años tienes y a qué te dedicas?"]
+
+    @pytest.mark.parametrize("text,bare", [("Hola", True), ("hola!!", True), ("Buenas tardes", True),
+                                           ("hola, qué tal", True), ("hola, ¿cuánto cuesta?", False),
+                                           ("hola, vi el evento", False), ("hola soy Pedro", False)])
+    async def test_bare_greeting_detection(self, text, bare):
+        assert rag.is_bare_greeting(text) is bare
+
+
+def test_silent_alert_causes_cover_all_reasons():
+    """Каждая причина молчания нового режима даёт понятную фразу; технических слов нет."""
+    import pathlib
+    src = pathlib.Path(rag.__file__).read_text("utf-8")
+    reasons = re.findall(r'_silent\(f?"([^"{]+)', src)
+    assert len(reasons) >= 15
+    for r in reasons:
+        phrase = rag.silent_alert("Режим rag: " + r)
+        assert phrase and not re.search(r"rag|режим|стади|policy|fuentes", phrase, re.IGNORECASE), r
+    assert rag.silent_alert("Режим rag: утверждения без источника: ['x']") == rag.UNVERIFIED
+    assert rag.silent_alert("Режим rag: сбой OpenAI или ответа модели (RuntimeError)") == rag.FAILURE
+    assert "скидку" in rag.silent_alert("Режим rag: скидка, способ оплаты или возврат (решение владелицы)")
+
+
+def test_import_without_embeddings_keeps_vectors():
+    from scripts import import_knowledge as ik
+    sql = ik.build_sql(embeddings=False)
+    assert "embedding" not in sql and "::vector" not in sql
+    assert sql.count("$") == len(ik.COLS)
+    assert "contenido_es = CASE WHEN" in sql
+
+
+def test_httpx_does_not_log_token_urls():
+    import logging
+    import main  # noqa: F401
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING

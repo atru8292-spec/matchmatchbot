@@ -1,6 +1,6 @@
 # База знаний режима rag: ревью
 
-Источник: `knowledge/seed.json`, версия 2026-10-22b. Записей: 102, ждут Аню: 9.
+Источник: `knowledge/seed.json`, версия 2026-10-22b. Записей: 103, ждут Аню: 9.
 Документ собран скриптом `scripts/knowledge_review.py`, руками не править.
 
 - Записи с `confirmado=false` в ответы не подаются, пока Аня не подтвердит.
@@ -634,6 +634,23 @@
 - **Как отвечать (для модели):** Se envía DOSLOVNO, sin modelo, solo si el primer mensaje no tiene pregunta, Anna aún no se presentó y no hubo saludo automático de WhatsApp. Después: evento → «¿Cómo te llamas y estás soltero?» y calificación del evento; búsqueda personalizada → ruta del servicio; respuesta poco clara → una pregunta corta para aclarar.
 - **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["sin_definir"], "auto_saludo": false}`
 - **Источник:** решение владелицы 2026-10-22 (по образцу автоответа)
+
+### `greeting_hola_sin_evento` · Saludo a un «hola» cuando el evento no está activo · ✅ подтверждено
+
+**Текст (es):**
+
+> ¡Hola! 🤍
+>
+> Soy Anna, fundadora de Match Match Agency. Cuéntame qué estás buscando y yo te digo qué creo que te conviene más. Puedo presentarte personalmente mujeres que seleccione para ti, tomando en cuenta tu personalidad, tu estilo de vida y lo que realmente quieres encontrar. O, si prefieres algo más espontáneo, tenemos nuestro próximo evento en CDMX, donde vas a poder conocer en persona a varias mujeres solteras que también están buscando una relación seria.
+>
+> La idea no es que conozcas a muchas mujeres, sino que conozcas a las correctas. ❤️
+
+**Перевод:** Привет! Я Анна… могу лично подобрать женщин, или есть ближайший ивент… Главное — правильные женщины.
+
+- **Когда:** hola, buenas, buenos días (sin pregunta) cuando el evento no está activo
+- **Как отвечать (для модели):** Lo envía el sistema DOSLOVNO, sin modelo: saludo a un «hola» sin pregunta cuando greeting_hola no se puede usar (evento inactivo).
+- **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["sin_definir"], "auto_saludo": false}`
+- **Источник:** №1, одобрен владелицей 08.09 (прежний greeting_hola без 😉); 2026-10-22: приветствие при выключенном ивенте
 
 ### `greeting_event` · Primer mensaje con interés en el evento, sin pregunta concreta · ✅ подтверждено
 

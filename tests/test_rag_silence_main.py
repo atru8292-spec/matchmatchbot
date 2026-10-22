@@ -21,6 +21,7 @@ def env(monkeypatch):
         "fields": AsyncMock(),
         "title": AsyncMock(return_value=None),
         "escalation": AsyncMock(),
+        "bot_silent": AsyncMock(),
         "error": AsyncMock(),
         "send": AsyncMock(return_value=0),
         "stage": AsyncMock(),
@@ -34,6 +35,7 @@ def env(monkeypatch):
     monkeypatch.setattr(db, "reset_followup_timer", m["timer"])
     monkeypatch.setattr(db, "update_rag_state", m["rag_state"])
     monkeypatch.setattr(main.escalation, "notify_escalation", m["escalation"])
+    monkeypatch.setattr(main.escalation, "notify_bot_silent", m["bot_silent"])
     monkeypatch.setattr(main.escalation, "notify_error", m["error"])
     monkeypatch.setattr(main.sender, "send", m["send"])
     return m
@@ -51,7 +53,9 @@ async def test_silent_sets_manual_and_alerts_anya(monkeypatch, env):
         "silent", [], silent_reason="Режим rag: нет данных в базе знаний")))
     await main._run_ai(PHONE, LEAD, "¿hay estacionamiento?")
     env["fields"].assert_any_await(PHONE, mode="manual")
-    assert "нет данных" in env["escalation"].await_args.args[1]
+    # новый алерт простым текстом: причина одной фразой, старый «Клиент готов…» не шлётся
+    assert env["bot_silent"].await_args.args[2] == "На этот вопрос в базе нет ответа"
+    env["escalation"].assert_not_awaited()
     env["send"].assert_not_awaited()
 
 
@@ -61,7 +65,8 @@ async def test_rag_nothing_sent_sets_manual_and_alerts_anya(monkeypatch, env):
         "respond", ["Puedes comprar tu boleto aquí: [event_link]"])))
     await main._run_ai(PHONE, LEAD, "¿cómo compro?")
     env["fields"].assert_any_await(PHONE, mode="manual")
-    env["escalation"].assert_awaited()
+    env["bot_silent"].assert_awaited()
+    env["escalation"].assert_not_awaited()
     env["error"].assert_awaited()
 
 
@@ -101,7 +106,7 @@ async def test_rag_failure_after_generation_manual_and_alert(monkeypatch, env):
     with pytest.raises(RuntimeError):
         await main._run_ai(PHONE, LEAD, "hola")
     env["fields"].assert_any_await(PHONE, mode="manual")
-    assert "сбой после генерации" in env["escalation"].await_args.args[1]
+    assert "Не получилось отправить ответ" in env["bot_silent"].await_args.args[2]
 
 
 async def test_legacy_failure_after_generation_no_manual(monkeypatch, env):
