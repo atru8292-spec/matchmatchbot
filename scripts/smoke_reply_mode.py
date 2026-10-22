@@ -254,7 +254,8 @@ def judge(bubbles: list[str], lead_text: str, presented_before: bool,
         buying = bool(_PURCHASE.search(lead_text))
     if (LINK in text or "rusaencdmx.com" in text) and not buying:
         out.append("ссылка без вопроса о покупке")
-    if LINK in text and not photo:
+    # с 2026-10-22 на прямой вопрос о покупке ссылка уходит и без фото (нужны имя и «холост ли»)
+    if LINK in text and not photo and not buying:
         out.append("ссылка до фото")
     if presented_before and re.search(r"soy anna", text, re.I):
         out.append("повторная презентация")

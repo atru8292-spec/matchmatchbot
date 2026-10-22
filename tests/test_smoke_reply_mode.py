@@ -32,7 +32,9 @@ def test_judge_page_word_is_not_purchase_and_big_numbers():
 
 def test_judge_photo_gate():
     """Ссылка до одобренного фото — нарушение; после фото с прошлым вопросом о покупке — нет."""
-    assert "ссылка до фото" in s.judge([s.LINK], "¿cómo compro el boleto?", False, photo=False)
+    # с 2026-10-22 на прямой вопрос о покупке ссылка и без фото — не нарушение
+    assert "ссылка до фото" not in s.judge([s.LINK], "¿cómo compro el boleto?", False, photo=False)
+    assert "ссылка до фото" in s.judge([s.LINK], "¿qué incluye?", False, buying=False, photo=False)
     assert s.judge([s.LINK], s.PHOTO_OK, False, buying=True, photo=True) == []
     assert "ссылка без вопроса о покупке" in s.judge([s.LINK], s.PHOTO_OK, False, buying=False)
 

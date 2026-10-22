@@ -513,13 +513,16 @@ def purchase_before_photo(bubbles: list[str], mem: dict, user_text: str) -> list
         out = [_ORPHAN_LA_RE.sub(PHOTO_REQUEST, b) for b in out]
     out = [b for b in out if b and _words(b)]
     buying = wants_to_buy(user_text, mem.get("ultimo_mensaje_anna"))
-    if buying and cal["etapa"] == "calificacion" and cal.get("siguiente") == "photo":
+    nxt = cal.get("siguiente")
+    if buying and cal["etapa"] == "calificacion" and nxt in ("name", "is_single", "photo"):
         text = " ".join(out)
         if not re.search(r"en\s+l[ií]nea|p[aá]gina", text, re.IGNORECASE):
             out.insert(0, BUY_ONLINE_SENTENCE)
-        if not memory.pregunta_slot("photo", text) and \
-                not memory.pregunta_slot("photo", mem.get("ultimo_mensaje_anna")):
-            out.append(PHOTO_REQUEST)
+        # До ссылки не хватает имени и «холост ли» — спрашиваем их (фото для покупки не нужно).
+        question = slot_question({**cal, "puede_preguntar": True}) if nxt != "photo" else PHOTO_REQUEST
+        if question and not memory.pregunta_slot(nxt, text) and \
+                not memory.pregunta_slot(nxt, mem.get("ultimo_mensaje_anna")):
+            out.append(question)
     return out or bubbles
 
 
@@ -1257,6 +1260,35 @@ def _story_after_photo(by_id: dict, said: set[str]) -> str:
     return " ".join(parts)
 
 
+# Прямой вопрос о покупке (решение владелицы 2026-10-22): ссылка сразу, фото лида не нужно,
+# нужны имя и «холост ли». Пузыри: ссылка, оплата на странице (там же фото и детали), видео
+# (если ещё не слали). Без просьбы фото, без вопроса о возрасте, без фото прошлых ивентов.
+BUY_LINK = "Puedes comprar tu boleto aquí: [event_link]"
+BUY_PAGE = "El pago se hace en la página y ahí mismo ves fotos de eventos pasados y todos los detalles."
+BUY_VIDEO_CAPTION = "Te dejo también un video del evento."
+
+
+def venta_por_compra(lead: dict, mem: dict, user_text: str) -> dict | None:
+    """Ход покупки по прямому вопросу. lead — с данными этого сообщения (имя и «холост ли»
+    могли прийти сейчас). None — случай не наш: не ивент, ивент выключен, уже купил,
+    нет имени или «холост ли»."""
+    ya, settings = mem["ya_hecho"], mem["settings"]
+    if memory.ruta(lead, user_text) == "servicio" or ya.get("boleto_comprado") \
+            or settings.get("event_active") != "1" or not (settings.get("event_link") or "").strip():
+        return None
+    if not (lead.get("name") and lead.get("is_single") is True):
+        return None
+    return _result([BUY_LINK, BUY_PAGE], send_event_video=not ya.get("video_enviado"))
+
+
+async def _venta_por_compra_lista(result: dict, lead: dict, meta: dict) -> dict:
+    result["rag_meta"] = {**meta, "fuentes": ["venta_por_compra"]}
+    await _attach_media_captions(result, lead)
+    if result.get("video_caption"):
+        result["video_caption"] = _caption_within_budget(BUY_VIDEO_CAPTION, result["messages"])
+    return result
+
+
 def media_fits(mem: dict) -> bool:
     """Фото прошлых ивентов к месту: лид в последних сообщениях не возражал, не прощался
     и не злился."""
@@ -1419,6 +1451,14 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         return _silent("скидка, способ оплаты или возврат (решение владелицы)",
                        rag_meta={**meta, "fuentes": ["policy_silent_topic"]})
 
+    # 2.55. Прямой вопрос о покупке в этом сообщении, имя и «холост ли» есть — ссылка сразу,
+    # без фото (решение владелицы 2026-10-22). Давний «¿y cómo pago?» в переписке не считается:
+    # иначе ссылка ушла бы в ответ на «¿cuántas mujeres van?».
+    if wants_to_buy(user_text, mem["ultimo_mensaje_anna"]):
+        compra = venta_por_compra(lead, mem, user_text)
+        if compra:
+            return await _venta_por_compra_lista(compra, lead, meta)
+
     # 2.6. Ивент: фото не прислал после двух просьб — ссылки без фото нет, решает Аня.
     if cal.get("foto_agotada") and cal["etapa"] == "calificacion":
         return _silent("Лид без фото хочет билет, реши сама (две просьбы прислать фото без ответа)",
@@ -1504,6 +1544,14 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         reply = await _scenario_reply(9) or _result([NOT_SINGLE_FALLBACK], "block")
         reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
         return reply
+
+    # Купить хотел раньше, имя и «холост ли» пришли сейчас — ссылка сразу после его ответа.
+    if mem["compra_pendiente"] and not (lead.get("name") and lead.get("is_single") is True) \
+            and "[фото одобрено" not in (user_text or ""):
+        compra = venta_por_compra(merged, mem, user_text)
+        if compra:
+            compra.update(extracted=out["extracted"], rag_estado=estado)
+            return await _venta_por_compra_lista(compra, lead, meta)
 
     bubbles, reason, notes = revisar(out, mem, lead, merged, user_text, fichas)
     meta["notas"] = notes

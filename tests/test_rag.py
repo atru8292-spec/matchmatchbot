@@ -298,7 +298,8 @@ class TestCheckReply:
         cal = memory.calificacion({"interest": "event"}, ya, "x", None)
         b, _, notes = check(["Aquí: [event_link]", "¿Cómo te llamas y estás soltero?"],
                             user_text="¿cómo compro?", ya_hecho=ya, calificacion=cal)
-        assert b == ["¿Cómo te llamas y estás soltero?"]
+        # нет имени и «холост ли»: ссылки нет, ответ по сути и вопрос (решение 2026-10-22)
+        assert b == [rag.BUY_ONLINE_SENTENCE, "¿Cómo te llamas y estás soltero?"]
 
     def test_emoji_limit_and_one_question(self):
         b, _, _ = check(["Ahora cuesta 6000 MXN 🤍✨ ¿Te sirve?", "¿Cómo te llamas? 😊 ¿Estás soltero? 🎃"])
@@ -879,17 +880,13 @@ class TestEventPhotoGate:
         assert rag.compra_pendiente(mem, "[фото одобрено]") is False
         assert rag.compra_pendiente(_mem(lead_texts=["hola", "¿dónde es?"]), "¿dónde es?") is False
 
-    async def test_buy_before_photo_asks_photo(self, monkeypatch):
+    async def test_buy_before_photo_gets_link(self, monkeypatch):
+        """Решение 2026-10-22: на прямой вопрос о покупке ссылка сразу, фото не нужно."""
         p = Pipe(monkeypatch, lead_extra=self.NO_PHOTO)
-        p.chat_replies = [reply(["Se compra en línea en la página del evento: [event_link]",
-                                 "¿Me mandas una foto tuya?"], fuentes=["event_how_to_buy"])]
         r = await rag.generate_reply(p.lead, [], "¿cómo compro el boleto?")
-        ctx = p.model_calls()[0][1]
-        assert ctx["calificacion"]["siguiente"] == "photo"
-        assert ctx["calificacion"]["compra_pendiente"] is True
-        assert ctx["calificacion"]["etapa"] == "calificacion"
-        assert all("[event_link]" not in m for m in r["messages"])
-        assert not r.get("send_event_video")
+        assert p.model_calls() == []
+        assert r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
+        assert r["send_event_video"] is True and not r["send_event_photo"]
 
     async def test_photo_approved_sends_link_with_video(self, monkeypatch):
         history = [msg("lead", "¿cómo compro el boleto?", 30),
@@ -1107,16 +1104,25 @@ class TestOwnerRisks:
         r = await rag.generate_reply(p.lead, hist, "¿me guardas el lugar hasta el viernes?")
         assert r["action"] == "silent" and "policy_anya_promise" in r["silent_reason"]
 
-    async def test_photo_dead_end_goes_to_anya(self, monkeypatch):
-        """Две просьбы фото без ответа, лид спрашивает, как купить → ручной режим и Аня (пункт 8)."""
+    async def test_photo_dead_end_buy_gets_link(self, monkeypatch):
+        """Две просьбы фото без ответа, лид спрашивает, как купить: раньше — Аня (пункт 8),
+        с решения 2026-10-22 фото для покупки не нужно — ссылка сразу."""
         hist = [msg("anna", "¿Me mandas una foto tuya?", 60), msg("lead", "¿y dónde es?", 50),
                 msg("anna", "Es en Polanco, CDMX. ¿Me mandas una foto tuya?", 49)]
         p = Pipe(monkeypatch, history=hist, lead_extra={"name": "Carlos", "is_single": True,
                                                          "interest": "event", "age": 35,
                                                          "profession": "médico"})
         r = await rag.generate_reply(p.lead, hist, "¿cómo compro el boleto?")
-        assert r["action"] == "silent" and "без фото" in r["silent_reason"]
+        assert r["action"] == "respond" and r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
         assert p.model_calls() == []
+
+    async def test_photo_dead_end_other_question_still_anya(self, monkeypatch):
+        hist = [msg("anna", "¿Me mandas una foto tuya?", 60), msg("lead", "¿y dónde es?", 50),
+                msg("anna", "Es en Polanco, CDMX. ¿Me mandas una foto tuya?", 49)]
+        p = Pipe(monkeypatch, history=hist, lead_extra={"name": "Carlos", "is_single": True,
+                                                         "interest": "event"})
+        r = await rag.generate_reply(p.lead, hist, "¿a qué hora empieza?")
+        assert r["action"] == "silent" and "без фото" in r["silent_reason"]
 
     async def test_empty_next_price_token_never_sent(self, monkeypatch):
         """Нет event_price_next, а модель написала токен → не отправляем, Аня + техалерт (п. 10)."""
@@ -1944,3 +1950,83 @@ class TestRun6D3:
     def test_costume_fact_not_touched(self):
         b, _, _ = check(["Ir disfrazado no es obligatorio."], user_text="¿hay que ir disfrazado?")
         assert b == ["Ir disfrazado no es obligatorio."]
+
+
+# ───────── прямой вопрос о покупке до фото (решение владелицы 2026-10-22) ─────────
+
+D1_BEFORE_BUY = ([msg("lead", "hola, vi el evento", 40)] + [msg("anna", b, 39) for b in GREETING_EVENT]
+                 + [msg("lead", "me llamo Javier, sí soltero", 35),
+                    msg("anna", "¡Gracias, Javier! 😊", 34),
+                    msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 34),
+                    msg("lead", "¿qué incluye?", 30),
+                    msg("anna", "Incluye bebida de bienvenida y botanas.", 29)])
+
+
+@pytest.mark.asyncio
+class TestCompraDirecta:
+    async def test_d1_buy_before_photo(self, monkeypatch):
+        """Д1 «ok, ¿cómo compro el boleto?» до фото: было «El pago se hace… ¿Me mandas una foto
+        tuya?» без ссылки. Теперь: ссылка, оплата на странице, видео; без фото и вопросов."""
+        p = Pipe(monkeypatch, history=D1_BEFORE_BUY,
+                 lead_extra={"name": "Javier", "is_single": True, "interest": "event"})
+
+        async def video(reply, scenario, lead):
+            reply["video_caption"] = "x"
+        monkeypatch.setattr(ai, "_maybe_announce_event_video", video)
+        r = await rag.generate_reply(p.lead, D1_BEFORE_BUY, "ok, ¿cómo compro el boleto?")
+        assert p.model_calls() == []
+        assert r["messages"] == ["Puedes comprar tu boleto aquí: [event_link]",
+                                 "El pago se hace en la página y ahí mismo ves fotos de eventos "
+                                 "pasados y todos los detalles."]
+        assert r["send_event_video"] is True and r["video_caption"] == "Te dejo también un video del evento."
+        assert r["send_event_photo"] is False and not r.get("after_media")
+        assert not any("?" in m for m in r["messages"])
+
+    async def test_no_name_asks_name_then_link(self, monkeypatch):
+        """Лид без имени спрашивает, как купить: ответ по сути и «¿Cómo te llamas y estás
+        soltero?», без ссылки; ответил — ссылка сразу."""
+        hist = [msg("lead", "hola, vi el evento", 40)] + [msg("anna", b, 39) for b in GREETING_EVENT[:2]]
+        p = Pipe(monkeypatch, history=hist, lead_extra={"interest": "event"})
+        p.chat_replies = [reply(["Puedes comprar tu boleto aquí: [event_link]"])]
+        r = await rag.generate_reply(p.lead, hist, "¿dónde compro el boleto?")
+        assert r["messages"] == [rag.BUY_ONLINE_SENTENCE, "¿Cómo te llamas y estás soltero?"]
+        assert not r["send_event_video"]
+
+        hist2 = hist + [msg("lead", "¿dónde compro el boleto?", 5),
+                        msg("anna", rag.BUY_ONLINE_SENTENCE, 4),
+                        msg("anna", "¿Cómo te llamas y estás soltero?", 4)]
+        p = Pipe(monkeypatch, history=hist2, lead_extra={"interest": "event"})
+        p.chat_replies = [reply(["¡Gracias, Pedro!"], extracted={"name": "Pedro", "is_single": True})]
+        r = await rag.generate_reply(p.lead, hist2, "Pedro, sí soltero")
+        assert r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
+        assert r["extracted"] == {"name": "Pedro", "is_single": True}
+        assert r["send_event_video"] is True
+
+    async def test_repeat_buy_after_link_repeats_link_not_video(self, monkeypatch):
+        hist = D1_BEFORE_BUY + [msg("lead", "ok, ¿cómo compro el boleto?", 10),
+                                msg("anna", f"Puedes comprar tu boleto aquí: {LINK}", 9),
+                                msg("anna", rag.BUY_PAGE, 9)]
+        hist = hist + [dict(msg("anna", db.media_marker("video", SETTINGS["event_date"]), 8))]
+        p = Pipe(monkeypatch, history=hist,
+                 lead_extra={"name": "Javier", "is_single": True, "interest": "event"})
+        r = await rag.generate_reply(p.lead, hist, "¿cómo compro?")
+        assert r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
+        assert r["send_event_video"] is False
+
+    async def test_cash_question_still_silent(self, monkeypatch):
+        p = Pipe(monkeypatch, lead_extra={"name": "Javier", "is_single": True, "interest": "event"})
+        r = await rag.generate_reply(p.lead, [], "¿puedo pagar en efectivo en OXXO?")
+        assert r["action"] == "silent"
+
+    async def test_service_lead_not_affected(self, monkeypatch):
+        p = Pipe(monkeypatch, lead_extra={"name": "Luis", "is_single": True, "interest": "agency"})
+        p.chat_replies = [reply(["La inversión es desde $10,000 USD."])]
+        await rag.generate_reply(p.lead, [], "¿cómo pago el servicio?")
+        assert len(p.model_calls()) == 1
+
+    async def test_old_payment_question_does_not_trigger_link(self, monkeypatch):
+        p = Pipe(monkeypatch, history=OLD_LIES, lead_extra={"name": "Carlos", "is_single": True,
+                                                            "interest": "event"})
+        p.chat_replies = [reply(["Incluye bebida de bienvenida y botanas."])]
+        r = await rag.generate_reply(p.lead, OLD_LIES, "¿qué incluye?")
+        assert not any("[event_link]" in m for m in r["messages"])

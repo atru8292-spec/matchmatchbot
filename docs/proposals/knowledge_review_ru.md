@@ -235,14 +235,14 @@
 
 > Puedes comprar tu boleto aquí: [event_link]
 >
-> El pago se hace en la página y el boleto te llega por correo.
+> El pago se hace en la página y ahí mismo ves fotos de eventos pasados y todos los detalles.
 
 **Перевод:** Купить билет можно здесь: [ссылка]. Оплата на странице, билет придёт на почту.
 
 - **Когда:** ¿cómo compro el boleto?, ¿dónde pago?, quiero mi boleto, ¿cómo reservo?, pásame el link, me interesa, quiero ir
-- **Как отвечать (для модели):** ÚNICO caso en que das el enlace: el lead pregunta cómo comprar o dice que quiere ir, y ya tienes su nombre, si está soltero y su foto aprobada. Antes de eso: responde que se compra en línea en la página del evento y haz la pregunta pendiente (nombre y soltero, o su foto), sin explicar para qué es la foto. Si ya_hecho.enlace_enviado es true y no lo pidió de nuevo explícitamente, no lo repitas. No pidas nombre ni correo para el evento.
+- **Как отвечать (для модели):** Cuando el lead pregunta cómo comprar y ya tienes su nombre y si está soltero (la foto no hace falta para comprar). Si falta nombre o estado civil: event_buy_online y la pregunta «¿Cómo te llamas y estás soltero?». Si ya_hecho.enlace_enviado tiene fecha, repítelo solo si vuelve a preguntar cómo comprar o pide el enlace. No pidas nombre completo ni correo para el evento.
 - **Флаги:** действие: ответить; можно почти дословно; действует до 2026-11-18
-- **Источник:** промпт «Cómo comprar», №21
+- **Источник:** промпт «Cómo comprar», №21; текст решения владелицы 2026-10-22
 
 ### `event_buy_online` · Se compra en línea · ✅ подтверждено
 
