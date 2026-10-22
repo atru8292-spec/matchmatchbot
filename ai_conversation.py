@@ -1328,8 +1328,9 @@ def drop_claims(bubbles: list[str], claims: list[str]) -> list[str]:
     bad = [b for b in bad if b]
 
     def is_bad(sent):
+        # «Sí, Pedro, ya me dijiste…» против «Sí, ya me dijiste…»: вставленное имя — та же фраза
         n = norm(sent)
-        return bool(n) and any(b in n or n in b for b in bad)
+        return bool(n) and any(b in n or n in b or _fits(b, n, 0.8) for b in bad)
     out = [_drop_sentences(b, is_bad) for b in bubbles]
     return [b for b in out if b.strip() and _words(b) and not is_bad(b)]
 
