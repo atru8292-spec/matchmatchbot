@@ -1696,9 +1696,9 @@ class TestVentaTrasFoto:
         r = await rag.generate_reply(p.lead, RUN2_BASE, "[фото одобрено]")
         assert p.model_calls() == []
         assert r["action"] == "respond"
-        # приветствие уже сказало дату, Polanco и Хеллоуин — не повторяем
+        # сводка одной фразой; Хеллоуин уже был в приветствии — его не добавляем
         assert r["messages"] == ["¡Gracias por tu foto, Carlos! 😊",
-                                 "Empieza a las [event_start]. Incluye bebida de bienvenida y botanas.",
+                                 "Te espero el [event_date] a las [event_start] en [event_address], con bebida de bienvenida y botanas.",
                                  "Aquí puedes apartar tu lugar: [event_link]"]
         assert not any("?" in m for m in r["messages"])
         assert r["send_event_video"] and r["send_event_photo"]
@@ -1709,8 +1709,10 @@ class TestVentaTrasFoto:
         p = Pipe(monkeypatch, history=D1_HISTORY, lead_extra=JAVIER)
         r = await rag.generate_reply(p.lead, D1_HISTORY, "[фото одобрено]")
         assert p.model_calls() == []
-        # «что входит» уже сказано, дата/место/Хеллоуин — в приветствии
-        assert r["messages"] == ["¡Gracias por tu foto, Javier! 😊", "Empieza a las [event_start].",
+        # прогон 4: было только «Empieza a las 8:30 PM.» — теперь сводка целиком, без повтора
+        # Хеллоуина (он был в приветствии), хотя дата, место и «что входит» уже звучали
+        assert r["messages"] == ["¡Gracias por tu foto, Javier! 😊",
+                                 "Te espero el [event_date] a las [event_start] en [event_address], con bebida de bienvenida y botanas.",
                                  "Aquí puedes apartar tu lugar: [event_link]"]
         assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
 
@@ -1718,9 +1720,8 @@ class TestVentaTrasFoto:
         history = [msg("lead", "Carlos, soltero", 20), msg("anna", "¿Me mandas una foto tuya?", 19)]
         p = Pipe(monkeypatch, history=history, lead_extra={**CARLOS, "photo_received": True})
         r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
-        assert r["messages"][1] == (BY_ID["event_date_time"]["contenido_es"] + " "
-                                    + BY_ID["event_halloween"]["contenido_es"] + " "
-                                    + BY_ID["event_includes"]["contenido_es"])
+        assert r["messages"][1] == ("Te espero el [event_date] a las [event_start] en [event_address], con bebida de bienvenida y botanas." + " "
+                                    + BY_ID["event_halloween"]["contenido_es"])
         assert "medianoche" not in " ".join(r["messages"])
 
     async def test_no_question_when_age_known(self, monkeypatch):
@@ -1858,3 +1859,9 @@ class TestSlotOrderRun4:
                "paso_extra": {"tipo": None, "texto": ""}}
         b, _, _ = rag.revisar(out, mem, CARLOS, CARLOS, "¿cómo compro el boleto?", list(BY_ID.values()))
         assert b[-1] == "¿Me mandas una foto tuya?"
+
+
+def test_photo_summary_without_includes_record():
+    by_id = {k: v for k, v in BY_ID.items() if k != "event_includes"}
+    assert rag._story_after_photo(by_id, {"halloween"}) == \
+        "Te espero el [event_date] a las [event_start] en [event_address]."

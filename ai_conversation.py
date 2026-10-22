@@ -1199,23 +1199,29 @@ def build_context(lead: dict, mem: dict, fichas: list[dict], always: dict, user_
 PHOTO_THANKS = "¡Gracias por tu foto, {name}! 😊"
 PHOTO_THANKS_NO_NAME = "¡Gracias por tu foto! 😊"
 CTA_LINK = "Aquí puedes apartar tu lugar: [event_link]"
-START_SENTENCE = "Empieza a las [event_start]."
+SUMMARY_SENTENCE = "Te espero el [event_date] a las [event_start] en [event_address]"
 _ANGER_RE = re.compile(r"molest|enoj|harto|hart[ao]|fastidi|spam|deja\s+de|no\s+me\s+escrib|"
                        r"no\s+me\s+interesa", re.IGNORECASE)
 
 
 def _story_after_photo(by_id: dict, said: set[str]) -> str:
-    """Рассказ про ивент из записей базы: дата, время и место, Хеллоуин, что входит — только
-    то, чего ещё не говорили (ya_hecho.hechos_dichos)."""
+    """Сводка ивента одной фразой в момент покупки (решение владелицы 2026-10-22, правило «без
+    повтора» здесь не действует): дата, время, место и что входит — токены карточки и запись
+    event_includes. Хеллоуин — только если о нём ещё не говорили."""
     parts = []
-    when = by_id.get("event_date_time")
-    if when and not {"fecha", "lugar"} & said:
-        parts.append(when["contenido_es"])
-    elif when and "hora" not in said:
-        parts.append(START_SENTENCE)
-    for rid, tema in (("event_halloween", "halloween"), ("event_includes", "incluye")):
-        if by_id.get(rid) and tema not in said:
-            parts.append(by_id[rid]["contenido_es"])
+    if by_id.get("event_date_time"):
+        summary = SUMMARY_SENTENCE
+        inc = by_id.get("event_includes")
+        m = re.match(r"^\s*Incluye\s+(.+?)\.?\s*$", inc["contenido_es"]) if inc else None
+        if m:
+            summary += f", con {m.group(1)}"
+        parts.append(summary + ".")
+        if inc and not m:
+            parts.append(inc["contenido_es"])
+    elif by_id.get("event_includes"):
+        parts.append(by_id["event_includes"]["contenido_es"])
+    if by_id.get("event_halloween") and "halloween" not in said:
+        parts.append(by_id["event_halloween"]["contenido_es"])
     return " ".join(parts)
 
 
