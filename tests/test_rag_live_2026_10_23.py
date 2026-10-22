@@ -384,3 +384,11 @@ def test_drop_claims_with_name_inserted():
          "¿Cuántos años tienes y a qué te dedicas?"]
     out = rag.drop_claims(b, ["Sí, ya me dijiste que te interesa el evento y que estás soltero."])
     assert out == ["¿Cuántos años tienes y a qué te dedicas?"]
+
+
+def test_objection_old_db_record_not_verbatim():
+    """Код выкачен раньше импорта seed: в БД старая запись (literal=false) — не дословно."""
+    old = {"id": "obj_event_price", "confirmado": True, "literal": False,
+           "contenido_es": "Te entiendo, no es poco."}
+    mem = {"ya_hecho": {"objeciones": []}}
+    assert rag.objecion_precio({"interest": "event"}, mem, "está muy caro", {"obj_event_price": old}) is None

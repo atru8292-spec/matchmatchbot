@@ -1850,7 +1850,10 @@ def objecion_precio(lead: dict, mem: dict, user_text: str, by_id: dict) -> list[
     if previas:
         return "segunda"
     rec = by_id.get("obj_event_price")
-    if not rec or not rec.get("confirmado") or not (rec.get("contenido_es") or "").strip():
+    # дословно — только утверждённая запись с literal (старая запись в БД до импорта seed
+    # literal=false: тогда как раньше, через модель)
+    if not rec or not rec.get("confirmado") or not rec.get("literal") \
+            or not (rec.get("contenido_es") or "").strip():
         return None
     bubbles = [b.strip() for b in rec["contenido_es"].split("\n\n") if b.strip()]
     return keep_emojis(bubbles, per_bubble=MAX_EMOJI_TOTAL)
