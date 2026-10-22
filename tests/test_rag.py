@@ -2722,3 +2722,29 @@ def test_event_photos_sentence_not_touched():
     out = rag.purchase_before_photo(["El pago se hace en la página y ahí mismo ves fotos de eventos "
                                      "pasados y todos los detalles."], mem, "ok")
     assert out == ["El pago se hace en la página y ahí mismo ves fotos de eventos pasados y todos los detalles."]
+
+
+def test_run_15_46_solo_la_reviso_removed():
+    """Прод 2026-10-22 15:46: ушло «Solo la reviso.» и «¿Podrías mandarme una foto tuya? Solo
+    la reviso.» — объяснение, зачем фото. Теперь без него."""
+    lead = {"interest": "event", "name": "Luis", "is_single": True}
+    prior = [msg("lead", "Luis, sí soy soltero", 10), msg("anna", "¡Gracias, Luis! 😊", 9),
+             msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 9)]
+    b, reason, _ = revisar(["¡Gracias, Luis! 😊",
+                            "Para apartar tu lugar solo falta una foto tuya. Solo la reviso.",
+                            "¿Podrías mandarme una foto tuya? Solo la reviso."],
+                           "35, soy abogado", lead, prior, extracted={"age": 35, "profession": "abogado"})
+    assert reason is None
+    assert b == ["¡Gracias, Luis! 😊", "¿Podrías mandarme una foto tuya?"]
+    assert not any("reviso" in x for x in b)
+
+
+@pytest.mark.parametrize("text", ["Solo la reviso.", "La reviso yo misma.", "Es solo para verificar.",
+                                  "Solo para confirmar que eres tú."])
+def test_photo_explanations_detected(text):
+    assert rag._PHOTO_EXPLAIN_RE.search(text)
+
+
+@pytest.mark.parametrize("text", ["La revisión del boleto es en la entrada.", "Lo veremos en el evento."])
+def test_other_sentences_not_photo_explanations(text):
+    assert not rag._PHOTO_EXPLAIN_RE.search(text)

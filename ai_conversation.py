@@ -575,6 +575,13 @@ _ORPHAN_LA_RE = re.compile(r"¿?\s*me\s+la\s+(?:puedes\s+)?(?:mandar|enviar|mand
                            r"[^?]*\??", re.IGNORECASE)
 
 
+# Пояснение, зачем фото, даже без слова «foto»: «Solo la reviso.», «Es solo para verificar.»
+_PHOTO_EXPLAIN_RE = re.compile(
+    r"^\W*(?:y\s+)?(?:s[oó]lo\s+)?(?:la|lo)\s+(?:reviso|revisamos|verifico|verificamos|veo|vemos|"
+    r"uso|usamos|necesito|necesitamos)\b|"
+    r"\b(?:es|ser[aá])\s+(?:s[oó]lo\s+)?para\s+(?:revisar|verificar|confirmar|validar)\b|"
+    r"\bs[oó]lo\s+para\s+(?:revisar|verificar|confirmar|validar)\b", re.IGNORECASE)
+
 # Фото самого лида (не «fotos de eventos pasados»).
 _LEAD_PHOTO_RE = re.compile(r"\bfoto\s+tuya|\btu\s+foto\b|\buna\s+foto\b(?!s)(?!\s+de\s+(?:los|la|el|nuestros?)\s+event)"
                             r"|\bselfie", re.IGNORECASE)
@@ -591,12 +598,15 @@ def purchase_before_photo(bubbles: list[str], mem: dict, user_text: str) -> list
     replaced = False
     fixed = []
     for b in bubbles:
+        # «Solo la reviso.», «Es solo para verificar.» — объяснение, зачем фото (прод 2026-10-22)
+        b = _drop_sentences(b, lambda x: "?" not in x and bool(_PHOTO_EXPLAIN_RE.search(x)))
         new = _drop_sentences(b, lambda x: "?" not in x and bool(_LEAD_PHOTO_RE.search(x)))
         replaced = replaced or new != b
         fixed.append(new)
+    bubbles = [b for b in fixed if b.strip() and _words(b)] or bubbles
     if replaced:
         # «¿Me la mandas por aquí?» без фразы про фото — висит, заменяется общим вопросом
-        bubbles = [_ORPHAN_LA_RE.sub("", b).strip() for b in fixed]
+        bubbles = [_ORPHAN_LA_RE.sub("", b).strip() for b in bubbles]
         bubbles = [b for b in bubbles if b and _words(b)]
         if not any(memory.pregunta_slot("photo", b) for b in bubbles):
             bubbles.append(PHOTO_REQUEST)
