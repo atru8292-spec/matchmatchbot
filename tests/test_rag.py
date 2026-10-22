@@ -2183,3 +2183,61 @@ def test_greeting_hola_answer_el_evento_then_name_question():
                                          BY_ID["greeting_hola"]["contenido_es"].split("\n\n")]
     b, reason, _ = revisar(["¡Qué bien!"], "el evento", {}, prior, extracted={"interest": "event"})
     assert reason is None and b[-1] == "¿Cómo te llamas y estás soltero?"
+
+
+# ───────── независимое ревью 2026-10-22: числа в утверждениях ─────────
+
+@pytest.mark.asyncio
+class TestReviewNumbers:
+    RECS = knowledge.usable(SEED, SETTINGS, "2026-10-22")
+
+    async def _verify(self, monkeypatch, texto, respaldo=None):
+        async def chat(model, system, user, cost, **kw):
+            return {"afirmaciones": [{"texto": texto, "respaldo": respaldo}]}
+        monkeypatch.setattr(rag, "_chat", chat)
+        return await rag.verify_claims([texto], self.RECS, memory.evento_actual(SETTINGS), [],
+                                       rag.Cost(), SETTINGS)
+
+    @pytest.mark.parametrize("texto,respaldo", [
+        # 4.1: склейка «evento número 30» + «3,000 mujeres» и запись услуги «15 mujeres»
+        ("Van 15 mujeres al evento.", None),
+        ("Van 15 mujeres al evento.", "te presento a 15 mujeres eslavas"),
+        ("Van 40 mujeres.", None),
+        ("Al evento van 3,000 mujeres.", "Trabajo con más de 3,000 mujeres eslavas."),
+        # 4.6: числа словами
+        ("Van unas cuarenta mujeres.", None),
+        ("Habrá cien personas en el evento.", None),
+    ])
+    async def test_invented_counts_rejected(self, monkeypatch, texto, respaldo):
+        assert await self._verify(monkeypatch, texto, respaldo) == [texto]
+
+    async def test_attendees_only_from_event_attendees(self, monkeypatch):
+        text = "Van 30 mujeres eslavas solteras y 30 hombres solteros."
+        assert await self._verify(monkeypatch, text) == []
+        no_att = [r for r in self.RECS if r["id"] not in ("event_attendees",)]
+
+        async def chat(model, system, user, cost, **kw):
+            return {"afirmaciones": [{"texto": text, "respaldo": None}]}
+        monkeypatch.setattr(rag, "_chat", chat)
+        assert await rag.verify_claims([text], no_att, memory.evento_actual(SETTINGS), [], rag.Cost(),
+                                       SETTINGS) == [text]
+
+    async def test_backstop_without_model_list(self, monkeypatch):
+        """Страховка кодом: «N mujeres» не откатывается в склейку claim_supported."""
+        async def chat(model, system, user, cost, **kw):
+            return {"afirmaciones": []}
+        monkeypatch.setattr(rag, "_chat", chat)
+        claims = await rag.verify_claims(["Van 15 mujeres al evento."], self.RECS,
+                                         memory.evento_actual(SETTINGS), [], rag.Cost(), SETTINGS)
+        assert claims == ["Van 15 mujeres al evento."]
+
+
+def test_word_numbers_and_alcohol():
+    assert rag.numbers_in("Van unas cuarenta mujeres") == {"40"}
+    assert rag.numbers_in("Docenas de personas ya encontraron pareja") == {"docenas"}
+    assert rag.numbers_in("Hay dos formas de conocer gente") == set()
+    assert rag.num_pairs("Van 30 mujeres eslavas") == {("30", "muje")}
+    assert any(rx.search("Hay alcohol") for rx in rag._HARD_FACT_RES)
+    assert any(rx.search("Hay alcohól") for rx in rag._HARD_FACT_RES)
+    _, reason, _ = check(["Van unas cuarenta mujeres."], user_text="¿cuántas van?")
+    assert reason and "числа" in reason

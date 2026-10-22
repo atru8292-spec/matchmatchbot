@@ -285,9 +285,37 @@ def _norm_url(u: str) -> str:
     return re.sub(r"^(?:https?://)?(?:www\.)?", "", u.rstrip(_URL_TRAIL).lower())
 
 
+# Числа словами перед существительным-счётом: «unas cuarenta mujeres», «docenas de personas»
+# (ревью 2026-10-22). Отдельно «dos» не считаем числом: «hay dos formas» — не факт о людях.
+_WORD_NUMS = {"dos": "2", "tres": "3", "cuatro": "4", "cinco": "5", "seis": "6", "siete": "7",
+              "ocho": "8", "nueve": "9", "diez": "10", "once": "11", "doce": "12", "quince": "15",
+              "veinte": "20", "treinta": "30", "cuarenta": "40", "cincuenta": "50",
+              "sesenta": "60", "setenta": "70", "ochenta": "80", "noventa": "90", "cien": "100",
+              "ciento": "100", "docenas": "docenas", "decenas": "decenas", "cientos": "cientos",
+              "miles": "miles"}
+_COUNT_NOUN = (r"(?:mujeres|hombres|personas|chicas|chicos|invitad[oa]s|asistentes|parejas|"
+               r"solter[oa]s|eslavas|eventos|boletos|lugares)")
+_WORD_NUM_RE = re.compile(rf"\b({'|'.join(_WORD_NUMS)})\s+(?:de\s+)?{_COUNT_NOUN}", re.IGNORECASE)
+_NUM_NOUN_RE = re.compile(rf"(\d[\d,.]*|\b(?:{'|'.join(_WORD_NUMS)})\b)\s+(?:de\s+)?([a-záéíóúñ]+)",
+                          re.IGNORECASE)
+
+
 def numbers_in(text: str) -> set[str]:
     text = _URL_RE.sub(" ", _TOKEN_RE.sub(" ", text or ""))   # цифры внутри ссылок не считаем
-    return {_norm_num(n) for n in _NUM_RE.findall(text)}
+    return {_norm_num(n) for n in _NUM_RE.findall(text)} | \
+        {_WORD_NUMS[m.group(1).lower()] for m in _WORD_NUM_RE.finditer(text)}
+
+
+def num_pairs(text: str) -> set[tuple[str, str]]:
+    """Пары «число + слово после него»: «30 mujeres eslavas» → ('30', 'muje')."""
+    out = set()
+    for m in _NUM_NOUN_RE.finditer(_TOKEN_RE.sub(" ", text or "")):
+        raw, word = m.group(1).lower(), m.group(2)
+        num = _WORD_NUMS.get(raw) or _norm_num(raw)
+        stem = next(iter(_stems(word)), None)
+        if stem:
+            out.add((num, stem))
+    return out
 
 
 def render_tokens(text: str, settings: dict) -> str:
@@ -834,8 +862,9 @@ _HARD_FACT_RES = [re.compile(p, re.IGNORECASE) for p in (
     r"\befectivo\b", r"\boxxo\b", r"\bwalmart\b", r"transferencia", r"dep[oó]sito", r"\btarjeta",
     r"meses\s+sin\s+intereses", r"\bpag(?:o|ar|as|a)\b", r"\bgratis\b|\bgratuit", r"descuento",
     r"promoci[oó]n", r"reembolso|devoluci[oó]n", r"\bno\s+(?:se\s+)?inclu",
-    r"\bcena\b", r"barra\s+libre", r"alcohol", r"estacionamiento|\bvalet\b",
-    r"\d[\d,.]*\s+(?:mujeres|hombres|personas|chicas|invitad[oa]s|asistentes)",
+    r"\bcena\b", r"barra\s+libre", r"alcoh[oó]l", r"estacionamiento|\bvalet\b",
+    rf"(?:\d[\d,.]*|\b(?:{'|'.join(_WORD_NUMS)}))\s+(?:de\s+)?(?:mujeres|hombres|personas|chicas|"
+    r"invitad[oa]s|asistentes)",
     r"\btermina\b|\bacaba\b|hasta\s+las\b|medianoche", r"garant[ií]a", r"\bcupo\b|\blugares\b")]
 
 
@@ -872,6 +901,58 @@ def _fits(claim: str, sent: str, min_overlap: float) -> bool:
     return not words or len(words & _stems(sent)) >= min_overlap * len(words)
 
 
+class Src(str):
+    """Предложение источника с типом записи (event/service/…): тема «N mujeres» из записи
+    услуги не подтверждает «N mujeres al evento» (ревью 2026-10-22)."""
+    tipo: str = ""
+
+
+def _src(text: str, tipo: str) -> Src:
+    s = Src(text)
+    s.tipo = tipo or ""
+    return s
+
+
+_CLAIM_EVENT_RE = re.compile(r"evento|boleto|\bnoche\b|fiesta|asist|\bvan\b", re.IGNORECASE)
+_CLAIM_SERVICE_RE = re.compile(r"servicio|selecci|te\s+presento|agencia|trabajo\s+con", re.IGNORECASE)
+_PEOPLE_COUNT_RE = re.compile(
+    rf"(?:\d[\d,.]*|\b(?:{'|'.join(_WORD_NUMS)}))\s+(?:de\s+)?(?:mujeres|hombres|personas|chicas|"
+    r"invitad[oa]s|asistentes)", re.IGNORECASE)
+
+
+def _rec_topic(rec: dict) -> str:
+    """Тема записи: service (услуга, тариф) или event; по id, а не по tipo — service_pitch
+    имеет tipo base_script, а говорит об услуге."""
+    rid, tipo = rec.get("id") or "", rec.get("tipo") or ""
+    if tipo in ("service", "tariff") or rid.startswith(("service", "tariff", "obj_service",
+                                                         "greeting_service")):
+        return "service"
+    if tipo == "event" or rid.startswith(("event", "obj_event", "greeting_event")):
+        return "event"
+    return tipo
+
+
+def _same_topic(claim: str, src: str) -> bool:
+    tipo = getattr(src, "tipo", "") or ""
+    if _CLAIM_EVENT_RE.search(claim) and tipo.startswith("service"):
+        return False
+    if _CLAIM_SERVICE_RE.search(claim) and tipo == "event":
+        return False
+    return True
+
+
+def _fits_num(claim: str, sent: str, min_overlap: float) -> bool:
+    """Утверждение с числом: одно предложение источника — числа точно, пары «число + слово»,
+    тема и отрицание вместе, без склейки двух фраз («evento número 30» + «3,000 mujeres» ≠
+    «Van 30 mujeres al evento»). Слова — значимые основы (без «ahora», «pero»…)."""
+    if not numbers_in(claim) <= numbers_in(sent) or _neg(claim) != _neg(sent):
+        return False
+    if not num_pairs(claim) <= num_pairs(sent) or not _same_topic(claim, sent):
+        return False
+    words = _content_stems(claim)
+    return not words or len(words & _stems(sent)) >= min_overlap * len(words)
+
+
 def claim_supported(claim: str, sources: list[str], respaldo: str | None = None) -> bool:
     """Код решает, подтверждено ли утверждение; источники — отдельные ПРЕДЛОЖЕНИЯ
     подтверждённых фич и карточки ивента (не запись целиком: «No …» в одной фразе записи
@@ -883,6 +964,14 @@ def claim_supported(claim: str, sources: list[str], respaldo: str | None = None)
     3. Цитата модели, если она реально есть в источниках: тем же предложением числа и
        отрицание как в п. 1, слов ≥ 50 % (пересказ «No es obligatorio ir disfrazado»).
     """
+    if numbers_in(claim):
+        if any(_fits_num(claim, sent, 0.6) for sent in sources):
+            return True
+        if respaldo and _stems(respaldo):
+            return any(len(_stems(respaldo) & _stems(sent)) >= 0.8 * min(len(_stems(respaldo)),
+                                                                          len(_stems(sent)) or 1)
+                       and _fits_num(claim, sent, 0.5) for sent in sources)
+        return False
     if any(_fits(claim, sent, 0.8) for sent in sources):
         return True
     words = _stems(claim)
@@ -925,8 +1014,11 @@ def _hard_part_supported(sent: str, sources: list[str]) -> bool:
     stems = _stems(sent)
     for src in sources:
         if all(rx.search(src) for rx in topics) and numbers_in(sent) <= numbers_in(src) \
+                and num_pairs(sent) <= num_pairs(src) and _same_topic(sent, src) \
                 and _neg(sent) == _neg(src) and len(stems & _stems(src)) * 4 >= len(stems):
             return True
+    if _PEOPLE_COUNT_RE.search(sent):
+        return False        # «N mujeres/personas» — только одним предложением, без склейки
     return claim_supported(sent, sources)
 
 
@@ -934,26 +1026,28 @@ def fact_sources(recs: list[dict], card: dict | None, settings: dict) -> list[st
     """Источники фактов — предложения ТОЛЬКО подтверждённых записей базы (knowledge.usable)
     и карточки ивента. Прошлые ответы бота и слова лида — никогда: у старых лидов там выдумки
     legacy («puedes pagar en OXXO», «30 mujeres») — решение владелицы 2026-10-22."""
-    out = []
+    out: list[str] = []
     for r in recs:
         txt = r.get("contenido_es") or ""
+        tipo = _rec_topic(r)
         for variant in (txt, render_tokens(txt, settings)) if txt else ():
             for sent in (x for part in variant.split("\n") for x in _sentences(part)):
-                out.append(sent)
+                out.append(_src(sent, tipo))
                 # части фразы: «…puedes venir disfrazado y, si no tienes disfraz, …» — отрицание
                 # второй части не должно мешать подтвердить первую (повторное ревью 2026-10-22)
-                out += [c.strip() for c in _clauses(sent) if c.strip() != sent and _stems(c)]
+                out += [_src(c.strip(), tipo) for c in _clauses(sent) if c.strip() != sent and _stems(c)]
     if card:
-        out += [render_tokens(f"{k}: {v}", settings) for k, v in card.items() if k != "valores"]
-        out += [f"{k}: {v}" for k, v in (card.get("valores") or {}).items()]
+        out += [_src(render_tokens(f"{k}: {v}", settings), "event") for k, v in card.items()
+                if k != "valores"]
+        out += [_src(f"{k}: {v}", "event") for k, v in (card.get("valores") or {}).items()]
         if (card.get("valores") or {}).get("event_date"):
-            out.append(sender._fmt_date_es(card["valores"]["event_date"]))
+            out.append(_src(sender._fmt_date_es(card["valores"]["event_date"]), "event"))
         # Одна фраза со всей карточкой: «El evento Slavic-Latino Connect Night será el 18 de
         # noviembre en Polanco» подтверждается целиком (смоук 2026-10-22).
-        out.append(render_tokens(
-            f"El evento {card.get('nombre', '')} es y será el {card.get('fecha', '')}, empieza a "
-            f"las {card.get('inicio', '')}, en {card.get('lugar', '')}; cuesta {card.get('precio', '')}.",
-            settings))
+        out.append(_src(render_tokens(
+            f"El evento {card.get('nombre', '')} es y será el {card.get('dia', '')} "
+            f"{card.get('fecha', '')}, empieza a las {card.get('inicio', '')}, en "
+            f"{card.get('lugar', '')}; cuesta {card.get('precio', '')}.", settings), "event"))
     return out
 
 
