@@ -2682,3 +2682,22 @@ class TestHolaScenario1:
         assert rag.halloween_activo(SETTINGS)
         monkeypatch.setattr(rag.knowledge, "today_cdmx", lambda now=None: "2026-11-19")
         assert not rag.halloween_activo(SETTINGS)
+
+
+def test_extracted_types_for_db():
+    """Прод 2026-10-22 15:22: «35, soy abogado» → age "35" строкой, запись в leads упала."""
+    out = rag._parse_model({"bubbles": ["x"], "extracted": {"age": "35", "profession": "abogado",
+                                                          "is_single": "true"}})
+    assert out["extracted"] == {"age": 35, "profession": "abogado", "is_single": True}
+    assert rag._clean_extracted({"age": "treinta"}) == {}
+    assert rag._clean_extracted({"age": 41, "is_single": False}) == {"age": 41, "is_single": False}
+
+
+@pytest.mark.asyncio
+async def test_interest_from_message_when_model_misses(monkeypatch):
+    """Прод 2026-10-22 15:10: «Me interesa el evento» — модель не извлекла interest."""
+    hist = [msg("lead", "Hola", 10)] + [msg("anna", b, 9) for b in S1_HALLOWEEN]
+    p = Pipe(monkeypatch, history=hist, lead_extra={})
+    p.chat_replies = [reply(["Es una noche para conocer en persona a mujeres eslavas solteras que buscan una relación seria."])]
+    r = await rag.generate_reply(p.lead, hist, "Me interesa el evento")
+    assert r["extracted"].get("interest") == "event"

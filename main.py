@@ -631,6 +631,9 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
         title = await db.get_scenario_title(result["used_scenario_id"])
         logger.info("AI silent [%s] (scenario=%s) — без ответа лиду", phone, result["used_scenario_id"])
         if result.get("rag_meta") is not None:
+            # причина в журнал — чтобы разбирать молчание без Telegram
+            logger.info("rag silent [%s]: %s | %s", phone, result.get("silent_reason"),
+                        (result.get("silent_detail") or "")[:200])
             # Новый режим: понятный алерт «бот промолчал» (причина одной фразой).
             await escalation.notify_bot_silent(
                 lead, combined, ai_conversation.silent_alert(result.get("silent_reason")),

@@ -1407,12 +1407,33 @@ def silent_alert(silent_reason: str | None) -> str:
     return FAILURE
 
 
+def _clean_extracted(ex: dict) -> dict:
+    """Типы под колонки leads (прод 2026-10-22: модель вернула age "35" строкой — запись в БД
+    упала, возраст не сохранился). age — целое, is_single — bool; непонятное — выкидываем."""
+    out = dict(ex)
+    if "age" in out:
+        m = re.search(r"\d{1,3}", str(out["age"]))
+        if m:
+            out["age"] = int(m.group(0))
+        else:
+            out.pop("age")
+    if "is_single" in out and not isinstance(out["is_single"], bool):
+        v = str(out["is_single"]).strip().lower()
+        if v in ("true", "sí", "si", "yes", "1"):
+            out["is_single"] = True
+        elif v in ("false", "no", "0"):
+            out["is_single"] = False
+        else:
+            out.pop("is_single")
+    return out
+
+
 def _parse_model(raw: dict) -> dict:
     bubbles = raw.get("bubbles") or raw.get("messages") or []
     if not isinstance(bubbles, list):
         bubbles = [str(bubbles)]
     raw_ex = raw.get("extracted") or {}
-    extracted = {k: raw_ex.get(k) for k in ai._EXTRACTED_KEYS if raw_ex.get(k) is not None}
+    extracted = _clean_extracted({k: raw_ex.get(k) for k in ai._EXTRACTED_KEYS if raw_ex.get(k) is not None})
     stage = raw.get("funnel_stage")
     paso = raw.get("paso_extra") if isinstance(raw.get("paso_extra"), dict) else {}
     return {
@@ -1856,6 +1877,11 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
                        rag_meta=meta)
 
     meta["fuentes"] = out["fuentes"]
+    # Интерес назван в сообщении («me interesa el evento»), а модель его не извлекла — отмечаем
+    # кодом, иначе маршрут остаётся «не определён» (прод 2026-10-22).
+    if not lead.get("interest") and not out["extracted"].get("interest") \
+            and interes_de(user_text) in ("event", "agency"):
+        out["extracted"]["interest"] = interes_de(user_text)
     estado = dict(lead.get("rag_estado") or {})
     if out["en_tema"]:
         estado["fuera_de_tema_seguidos"] = 0
