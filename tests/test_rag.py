@@ -2319,3 +2319,42 @@ async def test_photo_with_question_caption_goes_to_model(monkeypatch):
     p.chat_replies = [reply(["¡Gracias por tu foto, Carlos! 😊", "Incluye bebida de bienvenida y botanas."])]
     await rag.generate_reply(p.lead, RUN2_BASE, "¿qué incluye?\n\n[фото одобрено]")
     assert len(p.model_calls()) == 1
+
+
+# ───────── ревью 2026-10-22 (4.5): что не покупка ─────────
+
+@pytest.mark.parametrize("text", ["Me gustaría ir pero está muy caro", "No puedo pagar ahorita",
+                                  "ya me registré", "ya pagué", "lo voy a pensar, quiero ir",
+                                  "no voy a comprar nada"])
+def test_not_a_purchase(text):
+    assert not rag.wants_to_buy(text, None), text
+
+
+@pytest.mark.parametrize("text", ["¿cómo compro el boleto?", "quiero ir", "no sé cómo pagar",
+                                  "pásame el link", "¿dónde compro?"])
+def test_still_a_purchase(text):
+    assert rag.wants_to_buy(text, None), text
+
+
+@pytest.mark.asyncio
+async def test_service_payment_without_interest_goes_to_model(monkeypatch):
+    p = Pipe(monkeypatch, lead_extra={"name": "Luis", "is_single": True})
+    p.chat_replies = [reply(["La inversión es desde $10,000 USD."])]
+    r = await rag.generate_reply(p.lead, [], "¿Cómo se paga el servicio?")
+    assert len(p.model_calls()) == 1 and not any("[event_link]" in m for m in r["messages"])
+
+
+@pytest.mark.asyncio
+async def test_purchase_plus_other_question_goes_to_model(monkeypatch):
+    p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
+    p.chat_replies = [reply(["Van 30 mujeres eslavas solteras y 30 hombres solteros."])]
+    await rag.generate_reply(p.lead, RUN2_BASE, "¿Cómo pago? ¿Y cuántas mujeres van?")
+    assert len(p.model_calls()) == 1
+
+
+@pytest.mark.asyncio
+async def test_objection_with_ir_not_link(monkeypatch):
+    p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
+    p.chat_replies = [reply(["Te entiendo, no es poco."])]
+    r = await rag.generate_reply(p.lead, RUN2_BASE, "Me gustaría ir pero está muy caro")
+    assert len(p.model_calls()) == 1 and not any("[event_link]" in m for m in r["messages"])

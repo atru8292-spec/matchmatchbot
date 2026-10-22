@@ -183,15 +183,41 @@ _SILENT_TOPIC_RE = re.compile(
     r"en\s+la\s+(?:entrada|puerta)\s+(?:se\s+)?pag", re.IGNORECASE)
 
 
+# Не покупка (ревью 2026-10-22): возражение или колебание («me gustaría ir pero está muy caro»),
+# отрицание («no puedo pagar ahorita»), прошедшее время («ya me registré», «ya pagué»).
+_NOT_BUYING_RE = re.compile(
+    r"\bno\s+(?:puedo|podr[eé]|podr[ií]a|voy\s+a|quiero|pienso|creo|tengo\s+(?:para|dinero)|"
+    r"me\s+alcanza(?:\s+para)?)\s+(?:\w+\s+)?(?:pag|compr|reserv|apart|ir\b|asistir)|"
+    r"\b(?:registr[eé]|pagu[eé]|compr[eé]|reserv[eé]|apart[eé])\b|ya\s+me\s+registr|ya\s+(?:lo\s+)?pag",
+    re.IGNORECASE)
+# Колебание без «no sé»: «no sé cómo pagar» — это как раз вопрос о покупке.
+_HESITATE_RE = re.compile(r"\bpensar(?:lo|[eé])?\b|lo\s+pienso|\btal\s+vez\b|\bquiz[aá]s?\b|"
+                          r"\bm[aá]s\s+adelante\b|\bdespu[eé]s\s+(?:veo|te\s+digo)", re.IGNORECASE)
+
+
+def is_purchase(text: str) -> bool:
+    t = text or ""
+    return bool(_PURCHASE_RE.search(t)) and not _NOT_BUYING_RE.search(t) \
+        and not memory._PRICE_OBJECTION_RE.search(t) and not _HESITATE_RE.search(t)
+
+
 def wants_to_buy(user_text: str, last_anna: str | None,
                  recent_lead: list[str] | None = None) -> bool:
     """Лид хочет купить: спросил сейчас, согласился на предложенную ссылку или спрашивал,
     как купить, в последних сообщениях (ссылку тогда придержали до имени и «холост ли»)."""
-    if _PURCHASE_RE.search(user_text or ""):
+    if is_purchase(user_text):
         return True
-    if last_anna and _OFFER_LINK_RE.search(last_anna) and _AFFIRM_RE.search(user_text or ""):
+    if last_anna and _OFFER_LINK_RE.search(last_anna) and _AFFIRM_RE.search(user_text or "") \
+            and not _NOT_BUYING_RE.search(user_text or ""):
         return True
-    return any(_PURCHASE_RE.search(t or "") for t in (recent_lead or [])[-3:])
+    return any(is_purchase(t) for t in (recent_lead or [])[-3:])
+
+
+def solo_compra(user_text: str) -> bool:
+    """В сообщении только покупка: других вопросов нет («¿Cómo pago? ¿Y cuántas mujeres van?»
+    — второй вопрос отвечает модель, а не готовый ход покупки)."""
+    qs = _QUESTION_SENT_RE.findall(user_text or "")
+    return all(is_purchase(q) for q in qs)
 
 
 def compra_pendiente(mem: dict, user_text: str) -> bool:
@@ -202,7 +228,7 @@ def compra_pendiente(mem: dict, user_text: str) -> bool:
     if wants_to_buy(user_text, mem.get("ultimo_mensaje_anna"), (mem.get("lead_texts") or [])[:-1]):
         return True
     # Глубже 3 сообщений — только вопрос или просьба о покупке, а не «me registré en Instagram».
-    return any(_PURCHASE_RE.search(t or "") and (has_question(t) or _BUY_REQUEST_RE.search(t))
+    return any(is_purchase(t) and (has_question(t) or _BUY_REQUEST_RE.search(t))
                for t in (mem.get("lead_texts") or [])[:-1][-10:])
 
 
@@ -1410,7 +1436,11 @@ def venta_por_compra(lead: dict, mem: dict, user_text: str) -> dict | None:
     могли прийти сейчас). None — случай не наш: не ивент, ивент выключен, уже купил,
     нет имени или «холост ли»."""
     ya, settings = mem["ya_hecho"], mem["settings"]
-    if memory.ruta(lead, user_text) == "servicio" or ya.get("boleto_comprado") \
+    ruta = memory.ruta(lead, user_text)
+    # интерес не известен — нужен признак ивента в самом сообщении («¿cómo se paga el servicio?»)
+    if ruta == "sin_definir" and not memory._EVENT_WORD_RE.search(user_text or ""):
+        return None
+    if ruta == "servicio" or ya.get("boleto_comprado") \
             or settings.get("event_active") != "1" or not (settings.get("event_link") or "").strip():
         return None
     if not (lead.get("name") and lead.get("is_single") is True):
@@ -1608,7 +1638,7 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     # 2.55. Прямой вопрос о покупке в этом сообщении, имя и «холост ли» есть — ссылка сразу,
     # без фото (решение владелицы 2026-10-22). Давний «¿y cómo pago?» в переписке не считается:
     # иначе ссылка ушла бы в ответ на «¿cuántas mujeres van?».
-    if wants_to_buy(user_text, mem["ultimo_mensaje_anna"]):
+    if wants_to_buy(user_text, mem["ultimo_mensaje_anna"]) and solo_compra(user_text):
         compra = venta_por_compra(lead, mem, user_text)
         if compra:
             return await _venta_por_compra_lista(compra, lead, meta)
