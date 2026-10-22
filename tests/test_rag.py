@@ -2467,3 +2467,26 @@ def test_scenarios_after_patch_have_no_5500_unico_end_time():
         assert not re.search(r"[uú]nico\s+en|medianoche|\b1:00\b", after[sid]), sid
     assert "[event_promo]" in after[2] and "[event_promo]" in after[51]
     assert not re.search(r"5[.,]?500", (root / "anna_prompt_v5.md").read_text("utf-8"))
+
+
+def test_import_knowledge_protects_manual_edits():
+    """Ревью 2026-10-22 (4.9): без --force поля, правленные в мини-CRM, seed не перезаписывает."""
+    from scripts import import_knowledge as ik
+    sql = ik.build_sql()
+    for c in ("activo", "confirmado", "contenido_es"):
+        assert f"{c} = CASE WHEN COALESCE(knowledge.updated_by, '') = '' THEN EXCLUDED.{c} " \
+               f"ELSE knowledge.{c} END" in sql
+    assert "titulo = EXCLUDED.titulo" in sql
+    forced = ik.build_sql(force=True)
+    assert "CASE WHEN" not in forced and "contenido_es = EXCLUDED.contenido_es" in forced
+
+
+@pytest.mark.asyncio
+async def test_import_knowledge_backup(tmp_path, monkeypatch):
+    from scripts import import_knowledge as ik
+    monkeypatch.setattr(ik, "ROOT", tmp_path)
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(return_value=[{"id": "event_price", "contenido_es": "x", "embedding": "[1]"}])
+    path = await ik.backup_table(pool)
+    data = json.loads(path.read_text("utf-8"))
+    assert data == [{"id": "event_price", "contenido_es": "x"}] and "docs/backups" in str(path)

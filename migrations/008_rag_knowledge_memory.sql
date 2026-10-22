@@ -47,8 +47,9 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS memoria_mensajes integer;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS memoria_updated_at timestamptz;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS rag_estado jsonb NOT NULL DEFAULT '{}';
 
--- Следующая ступень цены ивента (сайт: MXN 6000 → 7000 → 8000), токен [event_price_next].
-INSERT INTO app_settings (key, value, updated_at) VALUES ('event_price_next', '7000', now())
+-- Лестницы цен нет (автоответ владелицы 2026-10-22: preventa 6,000, зачёркнутая 9,000 —
+-- event_price_old). Ключ следующей ступени оставляем пустым: [event_price_next] не используется.
+INSERT INTO app_settings (key, value, updated_at) VALUES ('event_price_next', '', now())
 ON CONFLICT (key) DO NOTHING;
 
 -- Дата объявления текущего ивента (18.11.2026: ссылка задана 2026-10-20 17:45 UTC) — граница
