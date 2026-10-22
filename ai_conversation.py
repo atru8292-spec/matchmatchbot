@@ -537,10 +537,22 @@ def whole_price(bubbles: list[str], settings: dict) -> list[str]:
         return says(sent, "[event_price_next]", nxt) or bool(_LADDER_RE.search(sent))
     def cut_ladder(sent):
         # «Ahora cuesta 6000 MXN; la siguiente etapa es de 7000 MXN.» → часть про текущую цену
-        keep = [c.strip() for c in re.split(r"\s*[;,]\s*", sent.rstrip(".!")) if c.strip() and not ladder(c)]
+        keep = [c.strip() for c in re.split(r"\s*;\s*|,\s+", sent.rstrip(".!")) if c.strip() and not ladder(c)]
         return (", ".join(keep) + ".") if keep else ""
+    old = re.sub(r"\D", "", settings.get("event_price_old") or "")
+
+    def old_by_hand(part):
+        return bool(old and old in {re.sub(r"\D", "", n) for n in numbers_in(part)})
     out = []
     for b in bubbles:
+        # Зачёркнутую цену рисует [event_promo]; «~9,000~» и «antes costaba 9,000 MXN», написанные
+        # моделью вручную, убираем (прогон 2026-10-22: двойная зачёркнутая и ложное молчание).
+        b = re.sub(r"\s*~[^~\n]+~", "", b)
+        for sent in _sentences(b):
+            if old_by_hand(sent):
+                keep = [c.strip() for c in re.split(r"\s*;\s*|,\s+", sent.rstrip(".!"))
+                        if c.strip() and not old_by_hand(c)]
+                b = b.replace(sent, (", ".join(keep) + ".") if keep else "", 1)
         for sent in _sentences(b):
             if ladder(sent):
                 b = b.replace(sent, cut_ladder(sent), 1)
@@ -570,8 +582,11 @@ def purchase_before_photo(bubbles: list[str], mem: dict, user_text: str) -> list
     cal = mem["calificacion"]
     out = []
     for b in bubbles:
-        if memory.pregunta_slot("photo", b) or re.search(r"\bfoto", b, re.IGNORECASE):
+        if memory.pregunta_slot("photo", b) or re.search(r"\bfoto", b, re.IGNORECASE) \
+                or _PHOTO_WHY_RE.search(b):
             b = _PHOTO_WHY_RE.sub("", b)
+            # «Es para completar tu registro.» → без огрызка «Es.»
+            b = _drop_sentences(b, lambda x: not _content_stems(x) and "?" not in x)
             b = re.sub(r"^\s*(?:s[oó]lo\s+)?(?:me\s+)?falta\s+una\s+foto\s+tuya\s*[.,]?\s*", "", b,
                        flags=re.IGNORECASE)
         out.append(b.strip())
@@ -736,14 +751,24 @@ def drop_dangling(bubbles: list[str]) -> list[str]:
     for b in bubbles:
         if _DANGLING_RE.search(b):
             ends = [m.end() for m in re.finditer(r"[.!?]", b)]
-            b = b[:ends[-1]] if ends else ""
-        if b.strip():
+            if ends:
+                b = b[:ends[-1]]
+            else:
+                # «Jajaja, no lo vi, volviendo al evento,» → «Jajaja, no lo vi.»
+                parts = [p for p in re.split(r"\s*,\s*", b.rstrip(" ,:;—–-")) if p.strip()]
+                b = (", ".join(parts[:-1]) + ".") if len(parts) > 1 else ""
+        if b.strip() and _words(b):
             out.append(b.strip())
     return out
 
 
 _DATE_YEAR_RE = re.compile(rf"(\b\d{{1,2}}\s+de\s+(?:{memory._MONTHS}))\s+(?:de|del)\s+\d{{4}}\b",
                            re.IGNORECASE)
+
+
+_END_TIME_Q_RE = re.compile(r"\btermina|\bacaba|hasta\s+qu[eé]\s+hora|cu[aá]nto\s+dura|"
+                            r"a\s+qu[eé]\s+hora\s+(?:sale|se\s+acaba|cierra)", re.IGNORECASE)
+_END_TIME_A_RE = re.compile(r"termin|acab|dura|cierr|hasta\s+(?:las|la|el)\b", re.IGNORECASE)
 
 
 def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict,
@@ -1787,6 +1812,10 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         return _silent(reason, **extra)
     if any(_NO_DATA_RE.search(x) for x in bubbles):
         return _silent("нет данных в базе (модель ответила отпиской)", **extra)
+    # Спросил, когда заканчивается, а в ответе про окончание ничего (времени конца в базе нет) —
+    # уклонение вроде «La hora de inicio es…»: молча Ане (прогон 2026-10-22).
+    if _END_TIME_Q_RE.search(user_text or "") and not _END_TIME_A_RE.search(" ".join(bubbles)):
+        return _silent("спросил время окончания — в базе его нет", **extra)
 
     try:
         claims = await verify_claims(bubbles, recs, card, mem["lead_texts"], cost, settings,

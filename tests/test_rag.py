@@ -2490,3 +2490,58 @@ async def test_import_knowledge_backup(tmp_path, monkeypatch):
     path = await ik.backup_table(pool)
     data = json.loads(path.read_text("utf-8"))
     assert data == [{"id": "event_price", "contenido_es": "x"}] and "docs/backups" in str(path)
+
+
+# ───────── живой прогон 2026-10-22 (59 ходов): дефекты и их исправления ─────────
+
+class TestRun11Fixes:
+    @pytest.mark.parametrize("given,expected", [
+        # ходы 4 и 35: модель сама дописала «~9,000~» — была двойная зачёркнутая
+        (["El precio de preventa es de [event_price_nonmember] MXN ~9,000~."],
+         ["El precio de preventa es de [event_price_nonmember] MXN[event_promo]."]),
+        (["El precio de preventa es de 6000 MXN ~9,000 MXN~."],
+         ["El precio de preventa es de 6000 MXN[event_promo]."]),
+        # ход 56: «antes costaba 9,000 MXN» вручную — было ложное молчание на сверке
+        (["El precio de preventa es de [event_price_nonmember] MXN[event_promo], antes costaba 9,000 MXN."],
+         ["El precio de preventa es de [event_price_nonmember] MXN[event_promo]."]),
+    ])
+    def test_price_strike_once(self, given, expected):
+        assert rag.whole_price(given, SETTINGS) == expected
+
+    @pytest.mark.asyncio
+    async def test_run11_d19_price_not_silent(self, monkeypatch):
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
+        p.chat_replies = [reply(["El precio de preventa es de [event_price_nonmember] MXN[event_promo], "
+                                 "antes costaba 9,000 MXN."], fuentes=["event_price"])]
+        p.verify = {"afirmaciones": [{"texto": "El precio de preventa es de 6000 MXN", "respaldo": None}]}
+        monkeypatch.setattr(knowledge, "search", AsyncMock(return_value=[BY_ID["event_price"]]))
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "¿cuánto cuesta?")
+        assert r["action"] == "respond"
+        assert r["messages"] == ["El precio de preventa es de [event_price_nonmember] MXN[event_promo]."]
+
+    @pytest.mark.asyncio
+    async def test_run11_end_time_evasion_silent(self, monkeypatch):
+        """Ход 7: «¿a qué hora termina?» → «La hora de inicio es…» — уклонение, теперь Аня."""
+        p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
+        p.chat_replies = [reply(["La hora de inicio es a las [event_start], en [event_address]."])]
+        r = await rag.generate_reply(p.lead, RUN2_BASE, "¿a qué hora termina?")
+        assert r["action"] == "silent" and "окончания" in r["silent_reason"]
+
+    def test_run11_photo_why_fragment_removed(self):
+        """Ход 49: после вырезанного «para completar…» оставалось «Es.»"""
+        b, _, _ = check(["Empieza a las [event_start], en [event_address].",
+                         "Es para completar tu registro.",
+                         "¿Podrías mandarme una foto tuya? Es para avanzar."],
+                        user_text="¿a qué hora empieza?")
+        assert not any(re.fullmatch(r"\W*Es\W*", x) or x.endswith(" Es.") for x in b)
+        assert b[0] == "Empieza a las [event_start], en [event_address]."
+
+    def test_run11_d3_dangling_without_period(self):
+        """Ход 24: «Jajaja, no lo vi, volviendo al evento,» удалялось целиком."""
+        assert rag.drop_dangling(["Jajaja, no lo vi, volviendo al evento,",
+                                  "¿Cuántos años tienes y a qué te dedicas?"]) == \
+            ["Jajaja, no lo vi.", "¿Cuántos años tienes y a qué te dedicas?"]
+
+    def test_presale_end_question_not_end_time_silence(self):
+        assert rag._END_TIME_Q_RE.search("¿cuándo termina la preventa?")
+        assert rag._END_TIME_A_RE.search("Es por tiempo limitado, hasta el 29 de octubre.")
