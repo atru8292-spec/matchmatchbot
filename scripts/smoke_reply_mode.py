@@ -175,6 +175,19 @@ DIALOGS = [
         "¿cuánto cuesta?", "¿cuántas personas van?", "¿dónde es?", "¿a qué hora termina?",
         "está muy caro", "¿cómo compro?", "¿eres un bot?", "voy con mi novia", "¿aceptan tarjeta?",
         "¿viste el partido del América ayer?"]),
+    # Прогон 2026-10-23 перед живыми лидами: повтор вопросов, ошибки, «está muy caro».
+    ("28. Ивент по шагам: фото, цена, дорого, покупка", [], {}, [
+        "Hola", "Me interesa el evento", "Me llamo Luis, soy soltero", "35, soy abogado", PHOTO_OK,
+        "¿cuánto cuesta?", "¿dónde es?", "¿qué incluye?", "está muy caro", "¿a qué hora empieza?",
+        "¿cómo compro?"]),
+    ("29. Всё одним сообщением, фото рано, вопросы вне базы", [], {}, [
+        "Hola", PHOTO_OK, "Soy Jorge, tengo 42 años, soy ingeniero y estoy soltero",
+        "Me interesa el evento", "¿es seguro?", "¿quedan lugares?", "¿aceptan tarjeta?",
+        "¿a qué hora termina?", "¿cuánto cuesta?", "¿dónde es?", "¿cómo compro?"]),
+    ("30. Невпопад, шутки, «ya te dije»", [], {}, [
+        "Hola", "jaja qué onda", "Me interesa el evento", "Pedro", "¿y tú cómo estás?",
+        "ya te dije", "35", "¿viste el partido del América?", "soy contador", "¿eres un bot?",
+        "voy con mi novia", PHOTO_OK]),
 ]
 
 # ───────────────────────── бюджет и заглушки ─────────────────────────
@@ -199,13 +212,13 @@ class Spend:
 def install(spend: Spend, dry: bool) -> None:
     orig_post = ai._openai_post
 
-    async def post(url, payload, timeout):
+    async def post(url, payload, timeout, **kw):
         if spend.usd + RESERVE_USD >= spend.limit:   # запас на один вызов
             raise Budget(f"бюджет ${spend.limit:.2f} исчерпан (${spend.usd:.3f})")
         if FAIL_NEXT["n"] and "chat/completions" in url:
             FAIL_NEXT["n"] -= 1
             raise RuntimeError("429 Too Many Requests (смоук: имитация сбоя)")
-        r = await (_fake_post(url, payload) if dry else orig_post(url, payload, timeout))
+        r = await (_fake_post(url, payload) if dry else orig_post(url, payload, timeout, **kw))
         usage = r.json().get("usage") or {}
         p = rag.PRICES.get(payload.get("model"), rag.PRICES["gpt-4.1"])
         tin = int(usage.get("prompt_tokens") or 0)
@@ -501,13 +514,17 @@ async def amain(args) -> None:
     from config import settings
     if not args.dry and not (settings.openai_api_key or "").startswith("sk-"):
         raise SystemExit("нет OPENAI_API_KEY в окружении процесса")
+    if args.rag_model:
+        rag.MODEL = args.rag_model
+        rag.FALLBACK_MODEL = "gpt-4.1" if args.rag_model.startswith("gpt-5") else rag.FALLBACK_MODEL
     spend = Spend(args.budget)
     install(spend, args.dry)
     leads: dict[str, Lead] = {}
     install_db(leads)
     await db.init_pool()
     db._pool = ReadOnlyPool(db._pool)
-    lines = [f"# Смоук reply_mode ({'DRY' if args.dry else 'OpenAI'}) {NOW:%Y-%m-%d %H:%M} UTC", ""]
+    lines = [f"# Смоук reply_mode ({'DRY' if args.dry else 'OpenAI'}, rag: {rag.MODEL}) "
+             f"{NOW:%Y-%m-%d %H:%M} UTC", ""]
     rows = []
     modes = ("legacy", "rag") if args.modes == "both" else ("rag",)
     try:
@@ -592,4 +609,6 @@ if __name__ == "__main__":
     ap.add_argument("--modes", choices=["both", "rag"], default="both")
     # только эти диалоги по номеру: --part dialogs --only 1,3,11
     ap.add_argument("--only", default="")
+    ap.add_argument("--rag-model", default="",
+                    help="основная модель режима rag на этот прогон (например gpt-5); по умолчанию как в коде")
     asyncio.run(amain(ap.parse_args()))

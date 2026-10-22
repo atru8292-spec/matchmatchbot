@@ -15,11 +15,15 @@ silent = лиду ничего, ручной режим и алерт Ане (ma
 """
 from __future__ import annotations
 
+import asyncio
+import collections
 import json
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
+
+import httpx
 
 import ai
 import conversation_rules
@@ -35,6 +39,19 @@ logger = logging.getLogger(__name__)
 PROMPT_PATH = Path(__file__).resolve().parent / "anna_prompt_conversation.md"
 MODEL = "gpt-4.1"
 CHECK_MODEL = "gpt-4.1-mini"
+# Технический сбой (таймаут, 5xx, лимит 429, битый JSON): до TECH_ATTEMPTS попыток основной
+# моделью с паузами, потом запасная модель (решение Арины 2026-10-23: не молчать из-за ошибок).
+FALLBACK_MODEL = "gpt-4o"
+# GPT-5 (рассуждающая модель) — для сравнения в смоуке (решение Арины 2026-10-23: сравнить в
+# прогоне, по умолчанию gpt-4.1). У неё нет temperature, длина — max_completion_tokens (туда же
+# входит рассуждение), уровень рассуждения — reasoning_effort.
+GPT5_REASONING_EFFORT = "low"
+GPT5_MAX_COMPLETION_TOKENS = 4000
+CHECK_FALLBACK_MODEL = "gpt-4o-mini"
+TECH_ATTEMPTS = 3
+FALLBACK_ATTEMPTS = 2
+RETRY_PAUSES = (2.0, 5.0)        # пауза после 1-й и 2-й неудачи, сек
+_sleep = asyncio.sleep           # тесты подменяют, чтобы не ждать
 SUMMARY_MODEL = "gpt-4.1-mini"
 EMBED_MODEL = "text-embedding-3-small"
 TEMPERATURE = 0.3
@@ -58,6 +75,10 @@ PRICES = {
     "gpt-4.1": {"in": 2.00, "cached": 0.50, "out": 8.00},
     "gpt-4.1-mini": {"in": 0.40, "cached": 0.10, "out": 1.60},
     "text-embedding-3-small": {"in": 0.02, "cached": 0.02, "out": 0.0},
+    "gpt-4o": {"in": 2.5, "cached": 1.25, "out": 10.0},
+    "gpt-5": {"in": 1.25, "cached": 0.125, "out": 10.0},
+    "gpt-5-mini": {"in": 0.25, "cached": 0.025, "out": 2.0},
+    "gpt-4o-mini": {"in": 0.15, "cached": 0.075, "out": 0.6},
 }
 
 VIDEO_CAPTION = "Te dejo también un video con los detalles del evento."
@@ -118,19 +139,92 @@ def load_prompt() -> str:
 
 
 async def _chat(model: str, system: str, user: dict | str, cost: Cost,
-                max_tokens: int = 700, temperature: float = TEMPERATURE) -> dict:
+                max_tokens: int = 700, temperature: float = TEMPERATURE,
+                retries: int | None = None) -> dict:
     content = user if isinstance(user, str) else json.dumps(user, ensure_ascii=False, default=str)
-    r = await ai._openai_post(
-        "https://api.openai.com/v1/chat/completions",
-        {"model": model, "temperature": temperature, "max_tokens": max_tokens,
-         "response_format": {"type": "json_object"},
-         "messages": [{"role": "system", "content": system},
-                      {"role": "user", "content": content}]},
-        timeout=60,
-    )
+    r = await ai._openai_post("https://api.openai.com/v1/chat/completions",
+                              chat_payload(model, system, content, max_tokens, temperature),
+                              timeout=90 if model.startswith("gpt-5") else 60, max_retries=retries)
     data = r.json()
     cost.add(model, data.get("usage"))
     return json.loads(data["choices"][0]["message"]["content"])
+
+
+def chat_payload(model: str, system: str, content: str, max_tokens: int, temperature: float) -> dict:
+    """Тело запроса chat/completions: gpt-4.x — temperature и max_tokens; gpt-5 — без
+    temperature, max_completion_tokens с запасом на рассуждение, reasoning_effort."""
+    body = {"model": model, "response_format": {"type": "json_object"},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}]}
+    if model.startswith("gpt-5"):
+        body["max_completion_tokens"] = max(GPT5_MAX_COMPLETION_TOKENS, max_tokens)
+        body["reasoning_effort"] = GPT5_REASONING_EFFORT
+    else:
+        body["temperature"] = temperature
+        body["max_tokens"] = max_tokens
+    return body
+
+
+class TechFailure(Exception):
+    """OpenAI не ответил после повторов и запасной модели. motivo — причина по-русски."""
+
+    def __init__(self, motivo: str):
+        super().__init__(motivo)
+        self.motivo = motivo
+
+
+def motivo_tecnico(e: BaseException) -> str:
+    """Причина технического сбоя простыми словами (для алерта Ане)."""
+    if isinstance(e, TechFailure):
+        return e.motivo
+    if isinstance(e, httpx.TimeoutException):
+        return "OpenAI не ответил вовремя (таймаут)"
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        if code == 429:
+            return "OpenAI ограничил запросы (лимит, 429)"
+        if code >= 500:
+            return f"у OpenAI сбой на сервере ({code})"
+        if code in (401, 403):
+            return f"OpenAI не принял ключ ({code})"
+        return f"OpenAI отклонил запрос ({code})"
+    if isinstance(e, httpx.TransportError):
+        return "нет связи с OpenAI"
+    if isinstance(e, (json.JSONDecodeError, ValueError, KeyError, TypeError, IndexError)):
+        return "модель вернула битый ответ (не JSON)"
+    return f"непредвиденная ошибка ({type(e).__name__})"
+
+
+def _retryable(e: BaseException) -> bool:
+    """4xx, кроме 429, повтором не лечится (ключ, формат запроса)."""
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        return code == 429 or code >= 500
+    return True
+
+
+async def _chat_robust(model: str, fallback: str, system: str, user: dict | str, cost: Cost,
+                       parse=None, **kw) -> dict:
+    """_chat с повторами: TECH_ATTEMPTS попыток основной моделью (паузы RETRY_PAUSES), затем
+    FALLBACK_ATTEMPTS — запасной. parse — разбор ответа (его сбой = битый ответ, повторяем).
+    Всё упало → TechFailure с причиной последней ошибки."""
+    last: BaseException | None = None
+    for m, attempts in ((model, TECH_ATTEMPTS), (fallback, FALLBACK_ATTEMPTS)):
+        for i in range(attempts):
+            try:
+                raw = await _chat(m, system, user, cost, retries=0, **kw)
+                if not isinstance(raw, dict):
+                    raise ValueError("ответ модели не объект JSON")
+                return parse(raw) if parse else raw
+            except Exception as e:
+                last = e
+                logger.warning("rag: %s попытка %d/%d: %s", m, i + 1, attempts, motivo_tecnico(e))
+                if not _retryable(e):
+                    break
+                if i + 1 < attempts:
+                    await _sleep(RETRY_PAUSES[min(i, len(RETRY_PAUSES) - 1)])
+        if m == model:
+            logger.warning("rag: %s не ответил — запасная модель %s", model, fallback)
+    raise TechFailure(motivo_tecnico(last) if last else "OpenAI не ответил")
 
 
 async def _embed_batch(texts: list[str], cost: Cost | None = None) -> list[list[float]]:
@@ -739,11 +833,14 @@ _SLOT_PAIR = {"name": ("name", "is_single"), "is_single": ("name", "is_single"),
 
 
 def slots_permitidos(cal: dict) -> frozenset:
-    """О каких слотах сейчас можно спросить: следующий (с парой), если вопрос сейчас уместен."""
+    """О каких слотах сейчас можно спросить: следующий (с парой), если вопрос сейчас уместен.
+    Слот, ответ на который уже есть, — нет («¿Cuántos años…?» лиду, назвавшему возраст)."""
     nxt = cal.get("siguiente")
     if not nxt or not cal.get("puede_preguntar"):
         return frozenset()
-    return frozenset(_SLOT_PAIR.get(nxt, (nxt,)))
+    tenemos = cal.get("tenemos") or {}
+    return frozenset(s for s in _SLOT_PAIR.get(nxt, (nxt,))
+                     if not (tenemos.get(s) is True if s == "is_single" else tenemos.get(s)))
 
 
 def drop_out_of_order_slot_questions(bubbles: list[str], permitidos: frozenset) -> list[str]:
@@ -764,7 +861,9 @@ def paso_extra_ok(paso: dict, cal: dict) -> str | None:
     texto = (paso or {}).get("texto") or ""
     if (paso or {}).get("tipo") != "pregunta" or "?" not in texto or not cal.get("puede_preguntar"):
         return None
-    return texto if any(memory.pregunta_slot(s, texto) for s in memory.SLOT_QUESTION_RE) else None
+    asked = {s for s in memory.SLOT_QUESTION_RE if memory.pregunta_slot(s, texto)}
+    # только то, что сейчас можно спросить; про известное — нет (вместо него — вопрос кодом)
+    return texto if asked and asked <= slots_permitidos(cal) else None
 
 
 def add_slot_question(bubbles: list[str], question: str | None, user_text: str,
@@ -894,6 +993,12 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
     # Факт без вопроса лида убираем; на его место — следующий вопрос по слоту, если он нужен.
     # Если от ответа ничего не остаётся — оставляем как есть: ложное молчание хуже.
     trimmed = drop_unasked_facts(bubbles, user_text, mem)
+    if permitidos is not None:
+        # вопросы не по очереди и про уже известное — до добавления вопроса кодом
+        new = drop_out_of_order_slot_questions(trimmed, permitidos)
+        if new != trimmed:
+            notes.append("убрала вопрос по слоту не по порядку")
+            trimmed = new
     new = add_slot_question(trimmed, pregunta_siguiente, user_text, answered)
     if not new:
         notes.append("факт без вопроса лида оставлен: без него ответ пустой")
@@ -903,11 +1008,6 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         if new != trimmed:
             notes.append("добавила вопрос по следующему слоту")
         bubbles = new
-    if permitidos is not None:
-        new = drop_out_of_order_slot_questions(bubbles, permitidos)
-        if new != bubbles:
-            notes.append("убрала вопрос по слоту не по порядку")
-            bubbles = new
     new = drop_repeated_slot_question(bubbles, mem.get("ultimo_mensaje_anna"), answered)
     if new != bubbles:
         notes.append("убрала повтор вопроса по слоту")
@@ -1220,6 +1320,36 @@ def sentence_supported(sent: str, sources: list[str], respaldo: str | None = Non
     return len(clauses) > 1 and bool(parts) and all(claim_supported(c, sources, respaldo) for c in parts)
 
 
+def drop_claims(bubbles: list[str], claims: list[str]) -> list[str]:
+    """Убрать из ответа фразы с утверждениями без источника; пустые пузыри — тоже."""
+    def norm(t):
+        return re.sub(r"\s+", " ", _EMOJI_RE.sub("", t or "")).strip(" .!¡¿?").lower()
+    bad = [norm(c.split(" (вопрос да/нет")[0]) for c in claims]
+    bad = [b for b in bad if b]
+
+    def is_bad(sent):
+        n = norm(sent)
+        return bool(n) and any(b in n or n in b for b in bad)
+    out = [_drop_sentences(b, is_bad) for b in bubbles]
+    return [b for b in out if b.strip() and _words(b) and not is_bad(b)]
+
+
+def con_sustancia(bubbles: list[str], user_text: str) -> bool:
+    """Остаток ответа можно отправить: лид спросил — есть фраза по сути (не «Gracias» и не
+    вопрос по слоту); лид дал данные — достаточно чего угодно."""
+    if not bubbles:
+        return False
+    if not has_question(user_text):
+        return True
+    for b in bubbles:
+        for sent in _sentences(b):
+            if "?" in sent or _THANKS_RE.match(sent) and len(_words(sent)) <= 3:
+                continue
+            if len(_words(sent)) >= 2 or _TOKEN_RE.search(sent) or re.search(r"\d", sent):
+                return True
+    return False
+
+
 async def verify_claims(bubbles: list[str], recs: list[dict], card: dict | None,
                         lead_texts: list[str], cost: Cost,
                         settings: dict | None = None, name: str | None = None) -> list[str]:
@@ -1230,7 +1360,8 @@ async def verify_claims(bubbles: list[str], recs: list[dict], card: dict | None,
         "FUENTES": {"evento_actual": card, "fichas": contenidos},
         "LO_QUE_DIJO_EL_CLIENTE": lead_texts[-15:],
     }
-    out = await _chat(CHECK_MODEL, VERIFY_SYSTEM, payload, cost, max_tokens=500, temperature=0)
+    out = await _chat_robust(CHECK_MODEL, CHECK_FALLBACK_MODEL, VERIFY_SYSTEM, payload, cost,
+                             max_tokens=500, temperature=0)
     items = out.get("afirmaciones")
     if items is None:                       # старый формат ответа
         items = [{"texto": c, "respaldo": None} for c in out.get("sin_fuente") or []]
@@ -1436,8 +1567,33 @@ async def _literal_checked(result: dict, lead: dict, fuente: str, meta: dict) ->
     return result
 
 
-def _silent(reason: str, **extra) -> dict:
-    return _result([], "silent", silent_reason=f"Режим rag: {reason}", **extra)
+# Три вида молчания (решение Арины 2026-10-23): алерт говорит, какой случай; счёт — в логе.
+TECNICO, VERIFICACION, FUERA_DE_BASE = "tecnico", "verificacion", "fuera_de_base"
+_KIND_TAG = {TECNICO: "[техническая ошибка]", VERIFICACION: "[проверка не пройдена]",
+             FUERA_DE_BASE: "[вне базы]"}
+_KIND_PREFIX = {TECNICO: "Техническая ошибка", VERIFICACION: "Проверка не пройдена",
+                FUERA_DE_BASE: "Вопрос вне базы"}
+_KIND_BY_TEXT = [
+    (TECNICO, ("сбой", "техническ", "недоступн", "лимит расхода", "токен не подставился")),
+    (VERIFICACION, ("утверждения без источника", "числа без источника", "в ответе 5,500",
+                    "ссылка не из базы", "после проверок ответ пустой", "проверк")),
+]
+SILENT_COUNTS: collections.Counter = collections.Counter()
+
+
+def _kind_of(reason: str) -> str:
+    for kind, keys in _KIND_BY_TEXT:
+        if any(k in reason for k in keys):
+            return kind
+    return FUERA_DE_BASE
+
+
+def _silent(reason: str, kind: str | None = None, **extra) -> dict:
+    kind = kind or _kind_of(reason)
+    SILENT_COUNTS[kind] += 1
+    logger.info("rag silencio tipo=%s motivo=%s | всего: %s", kind, reason, dict(SILENT_COUNTS))
+    return _result([], "silent", silent_reason=f"Режим rag {_KIND_TAG[kind]}: {reason}",
+                   silent_kind=kind, **extra)
 
 
 # Алерт «бот промолчал» простым текстом (решение 2026-10-22): одна фраза причины.
@@ -1451,6 +1607,7 @@ _ALERT_CAUSES = [
     (("Лид без фото хочет билет",), "Лид хочет билет, но не прислал фото после двух просьб"),
     (("третий раз подряд не по теме",), "Лид третий раз подряд пишет не по теме"),
     (("время окончания",), "Лид спрашивает, когда заканчивается ивент, а этого нет в базе"),
+    (("второй раз возражает по цене",), "Лид второй раз говорит, что дорого (по цене), реши сама"),
     (("нет данных в базе",), "На этот вопрос в базе нет ответа"),
     (("модель решила передать Ане", "политика молчания"), "Это вопрос, который по правилам решаешь ты"),
     (("дневной лимит",), "Бот исчерпал дневной лимит расходов и сегодня больше не отвечает"),
@@ -1458,12 +1615,14 @@ _ALERT_CAUSES = [
 
 
 def silent_alert(silent_reason: str | None) -> str:
-    """Фраза «Причина: …» для алерта по тексту silent_reason. Неизвестное — сбой."""
+    """Фраза «Причина: …» для алерта: какой из трёх случаев и что именно. Неизвестное — сбой."""
     r = silent_reason or ""
-    for keys, phrase in _ALERT_CAUSES:
-        if any(k in r for k in keys):
-            return phrase
-    return FAILURE
+    kind = next((k for k, tag in _KIND_TAG.items() if tag in r), None) or _kind_of(r)
+    if kind == TECNICO and "техническая ошибка:" in r:
+        detail = r.split("техническая ошибка:", 1)[1].strip()
+        return f"{_KIND_PREFIX[kind]}: {detail}. Повторы и запасная модель не помогли, лид ничего не получил"
+    phrase = next((p for keys, p in _ALERT_CAUSES if any(k in r for k in keys)), FAILURE)
+    return f"{_KIND_PREFIX[kind]}: {phrase}"
 
 
 def _clean_extracted(ex: dict) -> dict:
@@ -1629,6 +1788,37 @@ def caption_only_self_data(rest: str) -> bool:
     if not rest:
         return True
     return len(rest.split()) <= 12 and not _NOT_SELF_RE.search(rest)
+
+
+_OBJ_PHRASE_RE = re.compile(
+    r"(?:\b(?:qu[eé]|muy|tan|demasiado|est[aá]|es|se\s+me\s+hace|bien|s[uú]per|uf+|ay|pero|"
+    r"me\s+parece|lo\s+veo|sale)\s*,?\s*)*(?:" + memory.PRICE_OBJECTION_RE.pattern + r")\w*",
+    re.IGNORECASE)
+_OBJ_OTHER_Q_RE = re.compile(r"\b(?:cu[aá]nd[oa]|d[oó]nde|c[oó]mo|cu[aá]l|cu[aá]nt[oa]s?|qui[eé]n|"
+                             r"hay\s+descuento|incluye)\b", re.IGNORECASE)
+
+
+def objecion_precio(lead: dict, mem: dict, user_text: str, by_id: dict) -> list[str] | str | None:
+    """Возражение по цене ивента: первое в диалоге — пузыри утверждённого текста
+    obj_event_price (дословно, без модели), второе — "segunda" (молча Ане). None — не наш случай:
+    нет возражения, путь услуги, или в сообщении есть другой вопрос."""
+    text = user_text or ""
+    if not memory.es_objecion_precio(text) or memory.ruta(lead, text) == "servicio":
+        return None
+    # «uf, qué caro», «es caro ¿no?» — не вопрос; «está caro, ¿cuándo es?» — вопрос
+    other = _OBJ_PHRASE_RE.sub(" ", text)
+    other = re.sub(r"¿?\s*(?:no|verdad|cierto|neta)\s*\?", " ", other, flags=re.IGNORECASE)
+    if "?" in other or "¿" in other or _OBJ_OTHER_Q_RE.search(other):
+        return None
+    previas = [o for o in mem["ya_hecho"].get("objeciones") or []
+               if o.get("tipo") == "precio" and o.get("actual", True)]
+    if previas:
+        return "segunda"
+    rec = by_id.get("obj_event_price")
+    if not rec or not rec.get("confirmado") or not (rec.get("contenido_es") or "").strip():
+        return None
+    bubbles = [b.strip() for b in rec["contenido_es"].split("\n\n") if b.strip()]
+    return keep_emojis(bubbles, per_bubble=MAX_EMOJI_TOTAL)
 
 
 def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict | None:
@@ -1808,7 +1998,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
     except Exception as e:
         logger.exception("rag: сбой режима")
         await _tech_alert(repr(e), lead.get("phone"))
-        result = _silent(f"сбой режима rag ({type(e).__name__}) — ответь сама")
+        result = _silent(f"техническая ошибка: {motivo_tecnico(e)}", kind=TECNICO)
     finally:
         await _record_daily_cost(cost)
     interes_en_extracted(result, lead, user_text)
@@ -1888,6 +2078,16 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         return _silent("скидка, способ оплаты или возврат (решение владелицы)",
                        rag_meta={**meta, "fuentes": ["policy_silent_topic"]})
 
+    # 2.52. «Está muy caro» (ивент): первый раз — утверждённый текст владелицы дословно, второй —
+    # молча Ане (решение 2026-10-23). Возражение плюс другой вопрос — модель.
+    objecion = objecion_precio(lead, mem, user_text, by_id)
+    if objecion is not None:
+        if objecion == "segunda":
+            return _silent("лид второй раз возражает по цене — реши сама", kind=FUERA_DE_BASE,
+                           rag_meta={**meta, "fuentes": ["obj_event_price"]})
+        literal = _result(objecion, rag_meta={**meta, "fuentes": ["obj_event_price"], "literal": True})
+        return await _literal_checked(literal, lead, "obj_event_price", meta)
+
     # 2.55. Прямой вопрос о покупке в этом сообщении, имя и «холост ли» есть — ссылка сразу,
     # без фото (решение владелицы 2026-10-22). Давний «¿y cómo pago?» в переписке не считается:
     # иначе ссылка ушла бы в ответ на «¿cuántas mujeres van?».
@@ -1925,103 +2125,138 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
         {k: context[k] for k in ("memoria", "historial", "calificacion")},
         ensure_ascii=False, default=str)) // 4
 
-    try:
-        out = _parse_model(await _chat(MODEL, prompt, context, cost))
-        if out["falta_dato"] and out["query_extra"]:
-            vec2 = (await _embed_batch([out["query_extra"]], cost))[0]
-            more = await knowledge.search(vec2, recs, embed_records, top_k=TOP_K)
+    # Модель → проверки. Проверка не прошла: отправляем прошедшие пузыри; ничего не прошло —
+    # одна повторная попытка с другим поиском в базе, потом молчание (решение 2026-10-23).
+    estado = dict(lead.get("rag_estado") or {})
+    fallo = None
+    for intento in (1, 2):
+        try:
+            out = await _chat_robust(MODEL, FALLBACK_MODEL, prompt, context, cost, parse=_parse_model)
+            if out["falta_dato"] and out["query_extra"]:
+                vec2 = (await _embed_batch([out["query_extra"]], cost))[0]
+                more = await knowledge.search(vec2, recs, embed_records, top_k=TOP_K)
+                seen = {f["id"] for f in fichas}
+                fichas = fichas + [f for f in more if f["id"] not in seen]
+                context["fichas"] = [knowledge.ficha_for_model(f) for f in fichas]
+                context["reintento"] = "Segunda búsqueda con query_extra. Si aún falta el dato: falta_dato=true."
+                out = await _chat_robust(MODEL, FALLBACK_MODEL, prompt, context, cost, parse=_parse_model)
+        except Exception as e:
+            # Сбой после повторов и запасной модели: старый ответ НЕ отправляем — молчание,
+            # ручной режим, алерт Ане с причиной и техалерт (решение владелицы 2026-10-22).
+            logger.exception("rag: OpenAI/разбор ответа упал после повторов")
+            await _tech_alert(repr(e), lead.get("phone"))
+            return _silent(f"техническая ошибка: {motivo_tecnico(e)}", kind=TECNICO, rag_meta=meta)
+
+        meta["fuentes"] = out["fuentes"]
+        if intento == 1:
+            if out["en_tema"]:
+                estado["fuera_de_tema_seguidos"] = 0
+                estado["regresos"] = 0
+            else:
+                estado["fuera_de_tema_seguidos"] = int(estado.get("fuera_de_tema_seguidos") or 0) + 1
+        extra = {"rag_estado": estado, "extracted": out["extracted"], "rag_meta": meta}
+
+        if out["falta_dato"]:
+            return _silent("нет данных в базе знаний", kind=FUERA_DE_BASE, **extra)
+        if out["accion"] == "silent":
+            return _silent("модель решила передать Ане", kind=FUERA_DE_BASE, **extra)
+        silent_ids = {f["id"] for f in fichas if f.get("accion") == "silent_escalate"}
+        if silent_ids & set(out["fuentes"]):
+            return _silent(f"политика молчания ({', '.join(sorted(silent_ids & set(out['fuentes'])))})",
+                           kind=FUERA_DE_BASE, **extra)
+        if not out["en_tema"] and intento == 1:
+            if estado["fuera_de_tema_seguidos"] >= 3 or int(estado.get("regresos") or 0) >= 2:
+                return _silent("лид третий раз подряд не по теме", kind=FUERA_DE_BASE, **extra)
+            estado["regresos"] = int(estado.get("regresos") or 0) + 1
+
+        # Фильтры по данным, названным в этом сообщении: дословно №7/№8/№9 и блок.
+        merged = {**lead, **out["extracted"]}
+        age = merged.get("age")
+        if isinstance(age, str) and age.strip().isdigit():
+            age = int(age.strip())
+        if isinstance(age, int) and not (MIN_AGE <= age <= MAX_AGE):
+            reply = await _scenario_reply(7 if age < MIN_AGE else 8) or _result(
+                list(ai._AGE_OUT_OF_RANGE_BUBBLES), "block")
+            reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
+            return reply
+        if out["extracted"].get("is_single") is False:
+            reply = await _scenario_reply(9) or _result([NOT_SINGLE_FALLBACK], "block")
+            reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
+            return reply
+
+        # Купить хотел раньше, имя и «холост ли» пришли сейчас — ссылка сразу после его ответа.
+        if mem["compra_pendiente"] and not (lead.get("name") and lead.get("is_single") is True) \
+                and "[фото одобрено" not in (user_text or ""):
+            compra = venta_por_compra(merged, mem, user_text)
+            if compra:
+                compra.update(extracted=out["extracted"], rag_estado=estado)
+                return await _venta_por_compra_lista(compra, lead, meta)
+
+        bubbles, reason, notes = revisar(out, mem, lead, merged, user_text, fichas)
+        if reason:
+            # весь ответ отклонён (число, ссылка, 5,500) — оставляем пузыри, прошедшие проверку
+            good = [b for b in out["bubbles"]
+                    if not revisar({**out, "bubbles": [b], "paso_extra": {}}, mem, lead, merged,
+                                   user_text, fichas)[1]]
+            if good and len(good) < len(out["bubbles"]):
+                bubbles, reason, notes = revisar({**out, "bubbles": good}, mem, lead, merged,
+                                                 user_text, fichas)
+                notes.append(f"отправлены пузыри, прошедшие проверку ({len(good)} из {len(out['bubbles'])})")
+        meta["notas"] = notes
+        if reason:
+            fallo = (reason, "числа" in reason)
+        else:
+            if any(_NO_DATA_RE.search(x) for x in bubbles):
+                return _silent("нет данных в базе (модель ответила отпиской)", kind=FUERA_DE_BASE, **extra)
+            # Спросил, когда заканчивается, а в ответе про окончание ничего (времени конца в базе
+            # нет) — уклонение вроде «La hora de inicio es…»: молча Ане (прогон 2026-10-22).
+            if _END_TIME_Q_RE.search(user_text or "") and not _END_TIME_A_RE.search(" ".join(bubbles)):
+                return _silent("спросил время окончания — в базе его нет", kind=FUERA_DE_BASE, **extra)
+            try:
+                claims = await verify_claims(bubbles, recs, card, mem["lead_texts"], cost, settings,
+                                             merged.get("name") or ai._plausible_name(lead.get("whatsapp_name")))
+            except Exception as e:
+                logger.exception("rag: проверка второй моделью упала после повторов")
+                return _silent(f"техническая ошибка: проверяющая модель недоступна — {motivo_tecnico(e)}",
+                               kind=TECNICO, **extra)
+            yn = yes_no_claim(user_text, bubbles)
+            if yn:
+                sources = fact_sources(recs, card, settings)
+                hard = any(rx.search(yn) for rx in _HARD_FACT_RES)
+                if not (hard_fact_supported(yn, sources) if hard else sentence_supported(yn, sources)):
+                    claims = list(claims) + [f"{yn} (вопрос да/нет: «{bubbles[0][:60]}»)"]
+            if claims and promesa_de_anya(claims, mem.get("historial") or []):
+                return _silent(f"policy_anya_promise: лид спрашивает о том, что обещала Аня, в базе "
+                               f"этого нет — реши сама ({claims})", kind=FUERA_DE_BASE, **extra)
+            if claims:
+                kept = drop_claims(bubbles, claims)
+                if con_sustancia(kept, user_text):
+                    notes.append(f"убрала утверждения без источника, остальное отправлено: {claims}")
+                    bubbles, claims = kept, []
+            if not claims:
+                break
+            fallo = (f"утверждения без источника: {claims}", f"«{claims[0]}»")
+        if intento == 1:
+            # повторная попытка: поиск по одному тексту лида, шире, и подсказка модели
+            logger.info("rag: проверка не прошла (%s) — повторная попытка с другим поиском", fallo[0])
+            more = await knowledge.search(vec_user, recs, embed_records, top_k=TOP_K * 2)
             seen = {f["id"] for f in fichas}
             fichas = fichas + [f for f in more if f["id"] not in seen]
             context["fichas"] = [knowledge.ficha_for_model(f) for f in fichas]
-            context["reintento"] = "Segunda búsqueda con query_extra. Si aún falta el dato: falta_dato=true."
-            out = _parse_model(await _chat(MODEL, prompt, context, cost))
-    except Exception as e:
-        # Сбой нового режима: старый ответ НЕ отправляем — молчание, ручной режим, алерт Ане
-        # и техалерт (решение владелицы 2026-10-22).
-        logger.exception("rag: OpenAI/разбор ответа упал")
-        await _tech_alert(repr(e), lead.get("phone"))
-        return _silent(f"сбой OpenAI или ответа модели ({type(e).__name__}) — ответь сама",
-                       rag_meta=meta)
-
-    meta["fuentes"] = out["fuentes"]
-    estado = dict(lead.get("rag_estado") or {})
-    if out["en_tema"]:
-        estado["fuera_de_tema_seguidos"] = 0
-        estado["regresos"] = 0
+            context["reintento"] = (
+                "Tu respuesta anterior no pasó la verificación: " + str(fallo[0])[:300] +
+                ". Responde solo con datos de las fichas y del evento actual, sin repetir eso. "
+                "Si el dato no está: falta_dato=true.")
     else:
-        estado["fuera_de_tema_seguidos"] = int(estado.get("fuera_de_tema_seguidos") or 0) + 1
-    extra = {"rag_estado": estado, "extracted": out["extracted"], "rag_meta": meta}
-
-    if out["falta_dato"]:
-        return _silent("нет данных в базе знаний", **extra)
-    if out["accion"] == "silent":
-        return _silent("модель решила передать Ане", **extra)
-    silent_ids = {f["id"] for f in fichas if f.get("accion") == "silent_escalate"}
-    if silent_ids & set(out["fuentes"]):
-        return _silent(f"политика молчания ({', '.join(sorted(silent_ids & set(out['fuentes'])))})",
-                       **extra)
-    if not out["en_tema"]:
-        if estado["fuera_de_tema_seguidos"] >= 3 or int(estado.get("regresos") or 0) >= 2:
-            return _silent("лид третий раз подряд не по теме", **extra)
-        estado["regresos"] = int(estado.get("regresos") or 0) + 1
-
-    # Фильтры по данным, названным в этом сообщении: дословно №7/№8/№9 и блок.
-    merged = {**lead, **out["extracted"]}
-    age = merged.get("age")
-    if isinstance(age, str) and age.strip().isdigit():
-        age = int(age.strip())
-    if isinstance(age, int) and not (MIN_AGE <= age <= MAX_AGE):
-        reply = await _scenario_reply(7 if age < MIN_AGE else 8) or _result(
-            list(ai._AGE_OUT_OF_RANGE_BUBBLES), "block")
-        reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
-        return reply
-    if out["extracted"].get("is_single") is False:
-        reply = await _scenario_reply(9) or _result([NOT_SINGLE_FALLBACK], "block")
-        reply.update(extracted=out["extracted"], rag_estado=estado, rag_meta=meta)
-        return reply
-
-    # Купить хотел раньше, имя и «холост ли» пришли сейчас — ссылка сразу после его ответа.
-    if mem["compra_pendiente"] and not (lead.get("name") and lead.get("is_single") is True) \
-            and "[фото одобрено" not in (user_text or ""):
-        compra = venta_por_compra(merged, mem, user_text)
-        if compra:
-            compra.update(extracted=out["extracted"], rag_estado=estado)
-            return await _venta_por_compra_lista(compra, lead, meta)
-
-    bubbles, reason, notes = revisar(out, mem, lead, merged, user_text, fichas)
-    meta["notas"] = notes
-    if reason:
-        return _silent(reason, silent_detail=reason if "числа" in reason else None, **extra)
-    if any(_NO_DATA_RE.search(x) for x in bubbles):
-        return _silent("нет данных в базе (модель ответила отпиской)", **extra)
-    # Спросил, когда заканчивается, а в ответе про окончание ничего (времени конца в базе нет) —
-    # уклонение вроде «La hora de inicio es…»: молча Ане (прогон 2026-10-22).
-    if _END_TIME_Q_RE.search(user_text or "") and not _END_TIME_A_RE.search(" ".join(bubbles)):
-        return _silent("спросил время окончания — в базе его нет", **extra)
-
-    try:
-        claims = await verify_claims(bubbles, recs, card, mem["lead_texts"], cost, settings,
-                                     merged.get("name") or ai._plausible_name(lead.get("whatsapp_name")))
-    except Exception:
-        logger.exception("rag: проверка второй моделью упала → silent")
-        return _silent("проверка утверждений недоступна", **extra)
-    yn = yes_no_claim(user_text, bubbles)
-    if yn:
-        sources = fact_sources(recs, card, settings)
-        hard = any(rx.search(yn) for rx in _HARD_FACT_RES)
-        if not (hard_fact_supported(yn, sources) if hard else sentence_supported(yn, sources)):
-            claims = list(claims) + [f"{yn} (вопрос да/нет: «{bubbles[0][:60]}»)"]
-    if claims and promesa_de_anya(claims, mem.get("historial") or []):
-        return _silent(f"policy_anya_promise: лид спрашивает о том, что обещала Аня, в базе "
-                       f"этого нет — реши сама ({claims})", **extra)
-    if claims:
-        return _silent(f"утверждения без источника: {claims}", silent_detail=f"«{claims[0]}»", **extra)
+        reason, detail = fallo
+        return _silent(reason, kind=VERIFICACION,
+                       silent_detail=(reason if detail is True else detail or None), **extra)
 
     # Токены: каждый должен подставиться (нет event_price_next в настройках → не отправляем).
     problem = await unrendered_tokens(bubbles)
     if problem:
         await _tech_alert(f"токен не подставился: {problem}", lead.get("phone"))
-        return _silent(f"токен не подставился ({problem}) — ответь сама", **extra)
+        return _silent(f"токен не подставился ({problem}) — ответь сама", kind=TECNICO, **extra)
 
     result = _result(bubbles, extracted=out["extracted"], funnel_stage=out["funnel_stage"],
                      rag_estado=estado, rag_meta=meta)

@@ -162,27 +162,30 @@ def _retry_after(r: httpx.Response) -> float | None:
     return min(val, OPENAI_MAX_RETRY_AFTER)
 
 
-async def _openai_post(url: str, payload: dict, timeout: float) -> httpx.Response:
+async def _openai_post(url: str, payload: dict, timeout: float,
+                       max_retries: int | None = None) -> httpx.Response:
     """POST к OpenAI с ретраями на 429/5xx и сетевые сбои. Возвращает успешный Response.
 
     После OPENAI_MAX_RETRIES безуспешных попыток пробрасывает исключение — вызывающий
     (generate_reply) уводит в fallback, фото-ветка в manual.
     """
     headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
-    for attempt in range(OPENAI_MAX_RETRIES + 1):
+    # max_retries=0 — без своих ретраев: режим rag повторяет сам и с запасной моделью
+    retries = OPENAI_MAX_RETRIES if max_retries is None else max_retries
+    for attempt in range(retries + 1):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 r = await client.post(url, headers=headers, json=payload)
         except (httpx.TimeoutException, httpx.TransportError) as e:
-            if attempt >= OPENAI_MAX_RETRIES:
+            if attempt >= retries:
                 raise
-            logger.warning("OpenAI сеть %r — ретрай %d/%d", e, attempt + 1, OPENAI_MAX_RETRIES)
+            logger.warning("OpenAI сеть %r — ретрай %d/%d", e, attempt + 1, retries)
             await asyncio.sleep(_backoff(attempt))
             continue
-        if r.status_code in OPENAI_RETRY_STATUSES and attempt < OPENAI_MAX_RETRIES:
+        if r.status_code in OPENAI_RETRY_STATUSES and attempt < retries:
             delay = _retry_after(r) or _backoff(attempt)
             logger.warning("OpenAI %d — ретрай %d/%d через %.1fs",
-                           r.status_code, attempt + 1, OPENAI_MAX_RETRIES, delay)
+                           r.status_code, attempt + 1, retries, delay)
             await asyncio.sleep(delay)
             continue
         r.raise_for_status()

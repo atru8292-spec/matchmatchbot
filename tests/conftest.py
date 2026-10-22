@@ -22,3 +22,16 @@ os.environ["WAZZUP_TOKEN"] = ""
 # settings упал бы ValidationError; а локально в URL тестов подставлялся бы реальный
 # прод-секрет. setdefault не перетирает, если переменная уже задана в окружении.
 os.environ.setdefault("WAZZUP_WEBHOOK_SECRET", "test-secret-stub")
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_rag_retry_pauses(monkeypatch):
+    """Паузы между повторами OpenAI в режиме rag (2–5 с) в тестах не ждём."""
+    import ai_conversation
+
+    async def nop(*a, **k):
+        return None
+    monkeypatch.setattr(ai_conversation, "_sleep", nop)

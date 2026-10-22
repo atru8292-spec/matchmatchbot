@@ -179,7 +179,9 @@ def test_unconfirmed_numbers_not_served():
                            "agency_clients_countries", "agency_social_followers",
                            "pair_end_time"}
     for r in RECORDS:
-        if r["confirmado"] and r["id"] not in ("event_attendees", "pair_attendees"):
+        # 2026-10-23: «30 mujeres» и «180 parejas» — в тексте владелицы на «está muy caro»
+        if r["confirmado"] and r["id"] not in ("event_attendees", "pair_attendees", "obj_event_price",
+                                               "event_owner_facts_2026_10_23"):
             for t in _lead_facing(r) + [r["como_responder"] or ""]:
                 assert not re.search(r"30\s+(?:mujeres|hombres)|30\s+y\s+30|[uú]nico\s+en\s+Am[eé]rica|"
                                      r"medianoche|24\s+y\s+40|seguidores|6\s+meses|28\s+eventos",
@@ -202,7 +204,8 @@ def test_site_facts_2026_10_21():
     for r in RECORDS:
         for t in _model_facing(r):
             assert "Slavic Latino Night" not in t and "entrantes" not in t, r["id"]
-    for rid in ("event_includes", "obj_event_price"):
+    # obj_event_price с 2026-10-23 — текст владелицы (без botanas)
+    for rid in ("event_includes",):
         assert "botanas" in by_id[rid]["contenido_es"], rid
     # предпродажа с зачёркнутой старой ценой (автоответ владелицы 2026-10-22)
     assert by_id["event_price"]["contenido_es"] == \
@@ -230,7 +233,9 @@ def test_objections_without_praise():
     assert by_id["obj_service_price"]["contenido_es"] == \
         "Cada mujer la elijo a mano pensando en ti, y te acompaño en todo el proceso."
     assert "vale la pena" not in by_id["obj_price_increase"]["contenido_es"]
-    assert by_id["obj_event_price"]["contenido_es"].startswith("Te entiendo, no es poco.")
+    # 2026-10-23: утверждённый текст владелицы вместо «Te entiendo, no es poco.»
+    assert by_id["obj_event_price"]["contenido_es"].startswith("Te entiendo 🤍 Mira, no es solo una entrada")
+    assert by_id["obj_event_price"]["literal"] is True
 
 
 def test_greeting_service_asks_directly():

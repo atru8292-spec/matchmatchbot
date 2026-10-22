@@ -497,7 +497,8 @@ class TestPipeline:
 
     async def test_second_model_rejects_unsourced_claim(self, monkeypatch):
         p = Pipe(monkeypatch)
-        p.chat_replies = [reply(["Hay valet parking en el lugar."], fuentes=[])]
+        # 2026-10-23: проверка не прошла → одна повторная попытка (модель отвечает так же)
+        p.chat_replies = [reply(["Hay valet parking en el lugar."], fuentes=[])] * 2
         p.verify = {"sin_fuente": ["hay valet parking"]}
         r = await rag.generate_reply(p.lead, [], "¿hay valet?")
         assert r["action"] == "silent" and "без источника" in r["silent_reason"]
@@ -563,7 +564,8 @@ class TestPipeline:
         monkeypatch.setattr(ai.escalation, "notify_error", alert)
         r = await rag.generate_reply(p.lead, [], "¿dónde es?")
         # сбой нового режима: старый ответ не уходит — молчание, Аня и техалерт (2026-10-22)
-        assert r["action"] == "silent" and r["messages"] == [] and "сбой" in r["silent_reason"]
+        # 2026-10-23: после повторов и запасной модели — молчание с причиной «техническая ошибка»
+        assert r["action"] == "silent" and r["messages"] == [] and "техническая ошибка" in r["silent_reason"]
         alert.assert_awaited()
 
 
@@ -1655,7 +1657,9 @@ class TestConversationLogic:
                  msg("anna", "¿Cómo te llamas y estás soltero?", 4)]
         b, _, _ = revisar(["¡Gracias, Luis! 😊"], "Luis", {"interest": "agency"}, prior,
                           extracted={"name": "Luis"})
-        assert b == ["¡Gracias, Luis! 😊", "¿Estás soltero?"]
+        # 2026-10-23: вопрос задаётся один раз — «¿Estás soltero?» сразу не переспрашиваем
+        # (повтор — через три хода после ответа лида на другую тему)
+        assert b == ["¡Gracias, Luis! 😊"]
 
     def test_after_age_photo_request(self):
         prior = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 10)]
@@ -1757,12 +1761,12 @@ class TestVentaTrasFoto:
         assert r["after_media"] == []
 
     async def test_photo_after_age_question_still_asks_once_more(self, monkeypatch):
-        """2026-10-22: фото в ответ на вопрос о возрасте — ответ лида, не игнор: вопрос
-        последним пузырём. Но после двух попыток — больше не спрашиваем."""
+        """2026-10-23 (было 2026-10-22: переспрашивали): вопрос о возрасте задан ходом раньше —
+        после фото его не повторяем; после двух попыток — тем более."""
         history = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 5)]
         p = Pipe(monkeypatch, history=history, lead_extra={**CARLOS, "photo_received": True})
         r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
-        assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
+        assert r["after_media"] == []
         twice = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 8),
                              msg("lead", "ok", 7),
                              msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 5)]
@@ -2047,9 +2051,9 @@ class TestCompraDirecta:
 
     async def test_service_lead_not_affected(self, monkeypatch):
         p = Pipe(monkeypatch, lead_extra={"name": "Luis", "is_single": True, "interest": "agency"})
-        p.chat_replies = [reply(["La inversión es desde $10,000 USD."])]
+        p.chat_replies = [reply(["La inversión es desde $10,000 USD."])] * 2   # + повторная попытка
         await rag.generate_reply(p.lead, [], "¿cómo pago el servicio?")
-        assert len(p.model_calls()) == 1
+        assert len(p.model_calls()) >= 1      # в модель, а не готовым ходом покупки
 
     async def test_old_payment_question_does_not_trigger_link(self, monkeypatch):
         p = Pipe(monkeypatch, history=OLD_LIES, lead_extra={"name": "Carlos", "is_single": True,
@@ -2278,7 +2282,7 @@ class TestYesNoAndDomain:
     @pytest.mark.asyncio
     async def test_pipeline_short_yes_on_parking_silent(self, monkeypatch):
         p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
-        p.chat_replies = [reply(["Sí, hay."])]
+        p.chat_replies = [reply(["Sí, hay."])] * 2       # повторная попытка (2026-10-23)
         p.verify = {"afirmaciones": []}
         r = await rag.generate_reply(p.lead, RUN2_BASE, "¿Hay estacionamiento?")
         assert r["action"] == "silent" and "вопрос да/нет" in r["silent_reason"]
@@ -2353,17 +2357,17 @@ def test_still_a_purchase(text):
 @pytest.mark.asyncio
 async def test_service_payment_without_interest_goes_to_model(monkeypatch):
     p = Pipe(monkeypatch, lead_extra={"name": "Luis", "is_single": True})
-    p.chat_replies = [reply(["La inversión es desde $10,000 USD."])]
+    p.chat_replies = [reply(["La inversión es desde $10,000 USD."])] * 2   # + повторная попытка (2026-10-23)
     r = await rag.generate_reply(p.lead, [], "¿Cómo se paga el servicio?")
-    assert len(p.model_calls()) == 1 and not any("[event_link]" in m for m in r["messages"])
+    assert len(p.model_calls()) >= 1 and not any("[event_link]" in m for m in r["messages"])
 
 
 @pytest.mark.asyncio
 async def test_purchase_plus_other_question_goes_to_model(monkeypatch):
     p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
-    p.chat_replies = [reply(["Van 30 mujeres eslavas solteras y 30 hombres solteros."])]
+    p.chat_replies = [reply(["Van 30 mujeres eslavas solteras y 30 hombres solteros."])] * 2   # + повторная попытка (2026-10-23)
     await rag.generate_reply(p.lead, RUN2_BASE, "¿Cómo pago? ¿Y cuántas mujeres van?")
-    assert len(p.model_calls()) == 1
+    assert len(p.model_calls()) >= 1
 
 
 @pytest.mark.asyncio
@@ -2371,7 +2375,9 @@ async def test_objection_with_ir_not_link(monkeypatch):
     p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
     p.chat_replies = [reply(["Te entiendo, no es poco."])]
     r = await rag.generate_reply(p.lead, RUN2_BASE, "Me gustaría ir pero está muy caro")
-    assert len(p.model_calls()) == 1 and not any("[event_link]" in m for m in r["messages"])
+    # 2026-10-23: первое возражение по цене — утверждённый текст владелицы без модели
+    assert len(p.model_calls()) == 0 and r["messages"][0].startswith("Te entiendo 🤍 Mira")
+    assert not any("[event_link]" in m for m in r["messages"])
 
 
 # ───────── ревью 2026-10-22: 4.11 купил по текущему ивенту, 4.12 токены, 4.13 лимит ─────────
@@ -2603,8 +2609,11 @@ def test_silent_alert_causes_cover_all_reasons():
     for r in reasons:
         phrase = rag.silent_alert("Режим rag: " + r)
         assert phrase and not re.search(r"rag|режим|стади|policy|fuentes", phrase, re.IGNORECASE), r
-    assert rag.silent_alert("Режим rag: утверждения без источника: ['x']") == rag.UNVERIFIED
-    assert rag.silent_alert("Режим rag: сбой OpenAI или ответа модели (RuntimeError)") == rag.FAILURE
+    # 2026-10-23: алерт начинается с вида молчания (техническая ошибка / проверка / вне базы)
+    assert rag.silent_alert("Режим rag: утверждения без источника: ['x']") == \
+        "Проверка не пройдена: " + rag.UNVERIFIED
+    assert rag.silent_alert("Режим rag: сбой OpenAI или ответа модели (RuntimeError)").startswith(
+        "Техническая ошибка")
     assert "скидку" in rag.silent_alert("Режим rag: скидка, способ оплаты или возврат (решение владелицы)")
 
 

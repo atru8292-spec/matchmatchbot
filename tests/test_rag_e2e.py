@@ -157,7 +157,8 @@ async def test_a_event_path_photo_turn(monkeypatch):
     assert m[1].startswith("Te espero el [event_date] a las [event_start] en [event_address]")
     assert m[2] == "Aquí puedes apartar tu lugar: [event_link]"
     assert r["send_event_video"] is True and r["send_event_photo"] is True
-    assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
+    # возраст и профессию спросили ходом раньше — не повторяем (решение 2026-10-23)
+    assert r["after_media"] == []
     assert not any("foto tuya" in x for x in all_text(r))
 
 
@@ -228,7 +229,8 @@ async def test_c_service_path(monkeypatch):
     assert all_text(r)[-1] == "¿Cuántos años tienes y a qué te dedicas?"
     d.models["tengo 41"] = model(["¡Gracias! 😊"], extracted={"age": 41})
     r = await d.say("tengo 41")
-    assert all_text(r)[-1] == "¿A qué te dedicas?"
+    # профессию спросили вместе с возрастом ходом раньше — сразу не переспрашиваем (2026-10-23)
+    assert all_text(r) == ["¡Gracias! 😊"]
     d.models["soy abogado"] = model(["¡Gracias! 😊"], extracted={"profession": "abogado"})
     r = await d.say("soy abogado")
     assert all_text(r)[-1] == "¿Me mandas una foto tuya?"

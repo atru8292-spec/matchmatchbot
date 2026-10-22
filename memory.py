@@ -39,8 +39,24 @@ EVENT_KEYS = ["event_active", "event_date", "event_start", "event_address",
 _SYSTEM_TEXT_RE = re.compile(r"^\s*\[[^\]]+\]\s*$")
 _EVENT_TALK_RE = re.compile(r"evento|boleto|mxn|rusaencdmx|slavic", re.IGNORECASE)
 _SERVICE_PRICE_RE = re.compile(r"\b10[.,]?000\b|\b10\s*mil\b|\$?\s*10\s*k\b", re.IGNORECASE)
-_PRICE_OBJECTION_RE = re.compile(r"\bcar[oa]\b|no\s+me\s+alcanza|es\s+mucho|muy\s+costos",
-                                 re.IGNORECASE)
+PRICE_OBJECTION_RE = re.compile(r"\bcar[oa]\b|no\s+me\s+alcanza|es\s+mucho|muy\s+costos|\bcostos[oa]\b|"
+                                r"se\s+me\s+hace\s+mucho|no\s+tengo\s+(?:tanto|ese|el)\s+dinero|"
+                                r"fuera\s+de\s+mi\s+presupuesto|est[aá]\s+(?:muy\s+)?elevado",
+                                re.IGNORECASE)
+_NOT_OBJECTION_RE = re.compile(r"\b(?:no\s+(?:es|est[aá]|se\s+me\s+hace)\s+(?:tan\s+|muy\s+)?(?:car[oa]|mucho|costos[oa])|"
+                               r"(?:soy|me\s+llamo|mi\s+nombre\s+es)\s+car[oa]\b)", re.IGNORECASE)
+
+
+def es_objecion_precio(text: str | None) -> bool:
+    """Возражение по цене. Не возражение: «no es caro», имя «Caro» («soy Caro», одно слово
+    «Caro» с большой буквы) — ревью 2026-10-23."""
+    text = text or ""
+    if re.fullmatch(r"\W*Car[oa]\W*", text.strip()):
+        return False
+    return bool(PRICE_OBJECTION_RE.search(_NOT_OBJECTION_RE.sub(" ", text)))
+
+
+_PRICE_OBJECTION_RE = PRICE_OBJECTION_RE
 _HESITATION_RE = re.compile(r"\bpensar(?:lo|[eé])?\b|\bno\s+s[eé]\b|\btal\s+vez\b|"
                             r"\bquiz[aá]s?\b|\bluego\s+(?:te\s+)?(?:aviso|digo)\b", re.IGNORECASE)
 _FAREWELL_RE = re.compile(r"\b(?:adi[oó]s|bye|nos\s+vemos|hasta\s+luego|buenas\s+noches|"
@@ -77,6 +93,66 @@ REQUIRED = {"evento": ["name", "is_single", "photo"],
             "sin_definir": ["name", "is_single", "photo"]}
 OPTIONAL = {"evento": ["age", "profession"], "servicio": [], "sin_definir": ["age", "profession"]}
 MAX_SLOT_TRIES = 2
+# Повтор вопроса без ответа — не раньше, чем через столько ходов бота после него (решение
+# Арины 2026-10-23: «не чаще раза за три хода»; ход, в котором спросили, — первый).
+REASK_AFTER_TURNS = 3
+TURN_GAP_MIN = 30
+
+# Ответ лида на вопрос по слоту, который модель могла не извлечь («35, abogado», «Luis»).
+# По истории — только в сообщениях лида после вопроса по этому слоту.
+_FILLER_RE = re.compile(r"\b(?:s[ií]|no|ok|okay|va|vale|jaja\w*|jeje\w*|hola|gracias|claro|bueno|buenas|"
+                        r"buenos|buen|d[ií]as|tardes|noches|info\w*|precio|quiero|me\s+interesa\w*|"
+                        r"evento|boletos?|perfecto|genial|excelente|entiendo|dale|sale|"
+                        r"ya\s+te\s+(?:lo\s+)?dije|perd[oó]n|mmm+|ah+|oh+)\b", re.IGNORECASE)
+_AGE_ANSWER_RE = re.compile(r"(?<![\d:.,$])\b([2-9]\d)\b(?!\s*(?:mujeres|hombres|personas|mxn|pesos|"
+                            r"d[oó]lares|usd|%|:\d|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|"
+                            r"agosto|septiembre|octubre|noviembre|diciembre)))", re.IGNORECASE)
+_AGE_EXPLICIT_RE = re.compile(r"\b(?:tengo\s+)?([2-9]\d)\s*a[ñn]os\b|\btengo\s+([2-9]\d)\b", re.IGNORECASE)
+_NAME_EXPLICIT_RE = re.compile(r"\b(?:me\s+llamo|mi\s+nombre\s+es)\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+", re.IGNORECASE)
+_SINGLE_ANSWER_RE = re.compile(r"\bsolter|\bdivorciad|\bseparad|\bviud", re.IGNORECASE)
+_PROFESSION_EXPLICIT_RE = re.compile(r"\bme\s+dedico\b|\btrabajo\s+(?:en|como|de)\b|\bsoy\s+(?:ingenier|abogad|"
+                                     r"doctor|m[eé]dic|contador|arquitect|empresari|maestr|profesor|"
+                                     r"dentista|piloto|programador|dise[ñn]ador|vendedor|gerente|director|"
+                                     r"licenciad|consultor|due[ñn]o|chef|militar|polic|enfermer)", re.IGNORECASE)
+_NOT_PROFESSION_WORDS = {"tengo", "soy", "edad", "estoy", "pues", "este", "esta", "como", "que",
+                         "son", "los", "las", "una", "uno", "por", "para", "con", "muy", "bien",
+                         "aqu\u00ed", "aqui", "solo", "nada", "todo", "eso", "esto", "verdad", "cierto",
+                         "soltero", "casado", "divorciado", "separado", "llamo", "nombre"}
+YA_TE_DIJE_RE = re.compile(r"\bya\s+te\s+(?:lo\s+)?(?:dije|coment[eé]|respond[ií]|contest[eé]|escrib[ií]|"
+                           r"mand[eé]|pas[eé])\b|\bte\s+lo\s+acabo\s+de\s+decir\b|\barriba\s+te\s+(?:lo\s+)?dije",
+                           re.IGNORECASE)
+
+
+def responde_slot(slot: str, text: str, tras_pregunta: bool) -> bool:
+    """В сообщении лида ответ по слоту. tras_pregunta — сообщение пришло после вопроса по этому
+    слоту (тогда «35» или «Luis» — ответ; без вопроса — только явные формы «35 años», «me llamo»)."""
+    text = (text or "").strip()
+    if not text or _SYSTEM_TEXT_RE.match(text):
+        return False
+    if slot == "age":
+        return bool(_AGE_EXPLICIT_RE.search(text) or (tras_pregunta and _AGE_ANSWER_RE.search(text)))
+    if slot == "is_single":
+        return bool(_SINGLE_ANSWER_RE.search(text)) or (
+            tras_pregunta and bool(re.match(r"^\W*s[ií]\b", text, re.IGNORECASE)))
+    if slot == "name":
+        if _NAME_EXPLICIT_RE.search(text):
+            return True
+        if not tras_pregunta or "?" in text:
+            return False
+        first = re.split(r"[,.;!\n]", text)[0]
+        first = re.sub(r"^\W*(?:hola|soy|yo\s+soy)\s+", "", first, flags=re.IGNORECASE).strip()
+        return bool(re.match(r"^[A-ZÁÉÍÓÚÑa-záéíóúñ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?$", first)) \
+            and not _FILLER_RE.fullmatch(first)
+    if slot == "profession":
+        if _PROFESSION_EXPLICIT_RE.search(text):
+            return True
+        if not tras_pregunta or "?" in text:
+            return False
+        rest = _FILLER_RE.sub(" ", re.sub(r"\d+|a[ñn]os", " ", text))
+        words = [w for w in re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}", rest.lower())
+                 if w not in _NOT_PROFESSION_WORDS]
+        return bool(words)
+    return False
 
 
 # ───────────────────────── сообщения ─────────────────────────
@@ -212,6 +288,9 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
                             else lead.get("funnel_stage") == "event_attended"),
         "llamada_agendada": None, "ana_escribio_a_mano": None, "pasado": [],
         "hechos_dichos": [], "auto_saludo": None,
+        # Вопросы по слотам по ходам бота (решение 2026-10-23): ход последнего вопроса, писал ли
+        # лид после него, есть ли в его сообщениях после вопроса ответ по слоту.
+        "turnos_bot": 0, "pregunta_turno": {}, "lead_escribio_tras": {}, "respondido": {},
     }
     link = (settings.get("event_link") or "").strip()
     price = settings.get("event_price_nonmember") or ""
@@ -220,8 +299,19 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
     video_marker = db.media_marker("video", ev_date) if ev_date else None
     photo_marker = db.media_marker("image", ev_date) if ev_date else None
 
+    prev_out, prev_ts = False, None
     for idx, m in enumerate(prior):
         who, text = autor(m), m.get("text") or ""
+        if who in ("anna_bot", "anya_manual"):
+            # ход бота — исходящие подряд; пауза больше TURN_GAP — уже другой ход (напоминание)
+            ts = m.get("created_at")
+            gap = (isinstance(ts, datetime) and isinstance(prev_ts, datetime)
+                   and (_aware(ts) - _aware(prev_ts)).total_seconds() > TURN_GAP_MIN * 60)
+            if not prev_out or gap:
+                out["turnos_bot"] += 1
+            prev_out, prev_ts = True, ts
+        elif who == "lead":
+            prev_out = False
         ts = m.get("created_at")
         when = fecha(ts) if isinstance(ts, datetime) else None
         current = not (evento_desde and isinstance(ts, datetime)
@@ -236,8 +326,17 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
                 out["foto_enviada"] = when
             continue
         if who == "lead":
-            if _PRICE_OBJECTION_RE.search(text):
-                out["objeciones"].append({"tipo": "precio", "fecha": when})
+            for slot in out["pregunta_turno"]:
+                # «35», «Luis» — ответ, только если это первое сообщение лида после вопроса
+                if responde_slot(slot, text, not out["lead_escribio_tras"].get(slot)):
+                    out["respondido"][slot] = when or True
+                out["lead_escribio_tras"][slot] = True
+            for slot in ("age", "name", "is_single", "profession"):
+                if slot not in out["pregunta_turno"] and responde_slot(slot, text, False):
+                    out["respondido"][slot] = when or True
+            if es_objecion_precio(text):
+                # тип «actual» — по текущему ивенту (возражение год назад «второй раз» не делает)
+                out["objeciones"].append({"tipo": "precio", "fecha": when, "actual": current})
             elif _HESITATION_RE.search(text):
                 out["objeciones"].append({"tipo": "lo_pensara", "fecha": when})
             nxt = prior[idx + 1] if idx + 1 < len(prior) else None
@@ -254,7 +353,11 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
             # Фото считаем только по текущему ивенту: старого лида, которого дважды просили
             # фото год назад, не отправляем к Ане с первого сообщения (code-review 2026-10-22).
             if pregunta_slot(slot, text) and (slot != "photo" or current):
-                out["preguntas_calificacion"][slot] += 1
+                # вопрос в двух пузырях одного хода — одна попытка (ревью 2026-10-23)
+                if out["pregunta_turno"].get(slot) != out["turnos_bot"]:
+                    out["preguntas_calificacion"][slot] += 1
+                out["pregunta_turno"][slot] = out["turnos_bot"]
+                out["lead_escribio_tras"][slot] = False
         if not current:
             if _EVENT_TALK_RE.search(text):
                 out["pasado"].append({"fecha": when, "texto": text[:160]})
@@ -356,17 +459,48 @@ def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None
     тогда возраст и профессию не спрашиваем, следующий вопрос — сразу фото."""
     r = ruta(lead, user_text)
     tries = ya["preguntas_calificacion"]
+    turno = ya.get("pregunta_turno") or {}
+    # Ответ уже есть: в профиле, в истории после вопроса (модель могла не извлечь), в этом
+    # сообщении (в любом порядке) или лид пишет «ya te dije» на последний вопрос.
+    ya_dije = bool(YA_TE_DIJE_RE.search(user_text or ""))
+    ultimo_turno = max(turno.values()) if turno else None
+
+    def respondio(slot):
+        if slot in ("photo", "email"):
+            return False
+        if (ya.get("respondido") or {}).get(slot):
+            return True
+        asked = slot in turno
+        if responde_slot(slot, user_text, asked and not (ya.get("lead_escribio_tras") or {}).get(slot)):
+            return True
+        return ya_dije and asked and turno[slot] == ultimo_turno
+
+    def have(slot):
+        return _have(lead, slot, user_text) or respondio(slot)
+
     tenemos = {s: (lead.get("is_single") if s == "is_single" else
                    _have(lead, s, user_text) if s == "photo" else lead.get(s))
                for s in ("name", "is_single", "age", "profession", "photo", "email")}
+    for s in ("name", "is_single", "age", "profession"):
+        if not tenemos.get(s) and respondio(s):
+            tenemos[s] = True if s == "is_single" else "(respondido)"
 
     def agotado(slot):
         return tries.get(slot, 0) >= MAX_SLOT_TRIES
 
+    def puede_repreguntar(slot):
+        """Вопрос по слоту без ответа — снова не раньше чем через REASK_AFTER_TURNS ходов и
+        только если лид после него что-то написал (этот ход тоже его сообщение)."""
+        if slot not in turno:
+            return True
+        turnos_desde = ya.get("turnos_bot", 0) - turno[slot]
+        escribio = (ya.get("lead_escribio_tras") or {}).get(slot) or bool((user_text or "").strip())
+        return turnos_desde + 1 >= REASK_AFTER_TURNS and escribio
+
     order = [s for s in ORDER if not (compra and s in OPTIONAL[r])]
-    siguiente, pasar_a_llamada = None, False
+    siguiente, pasar_a_llamada, bloqueado = None, False, None
     for slot in order:
-        if _have(lead, slot, user_text):
+        if have(slot):
             continue
         if agotado(slot):
             if r == "servicio" and slot in REQUIRED[r]:
@@ -374,10 +508,14 @@ def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None
                 break
             continue                     # больше не спрашиваем
         siguiente = slot
+        if not puede_repreguntar(slot):
+            # спрашивали недавно и без ответа: ждём (порядок слотов не обходим), вопрос — через
+            # три хода после ответа лида на другую тему
+            bloqueado = slot
         break
     # Чего не хватает до этапа venta. Ивент: имя и «холост ли» после 2 попыток пропускаем
     # (как раньше), а фото — нет: без одобренного фото ссылки нет.
-    falta = [s for s in REQUIRED[r] if not _have(lead, s, user_text)
+    falta = [s for s in REQUIRED[r] if not have(s)
              and not (r != "servicio" and s != "photo" and agotado(s))]
     required_done = not falta
     # Ивент: две просьбы прислать фото без ответа — дальше решает Аня (ссылки без фото нет).
@@ -390,12 +528,13 @@ def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None
     else:
         etapa = "calificacion"
     asked_last = bool(siguiente and pregunta_slot(siguiente, last_outbound))
-    blocked = bool(_PRICE_OBJECTION_RE.search(user_text or "") or _HESITATION_RE.search(user_text or "")
+    blocked = bool(es_objecion_precio(user_text) or _HESITATION_RE.search(user_text or "")
                    or _FAREWELL_RE.search(user_text or ""))
     return {
         "ruta": r, "tenemos": tenemos, "siguiente": siguiente,
         "preguntado_en_ultimo_mensaje": asked_last,
-        "puede_preguntar": bool(siguiente) and not asked_last and not blocked,
+        "puede_preguntar": bool(siguiente) and siguiente != bloqueado and not asked_last
+                           and not blocked,
         "intentos": dict(tries), "etapa": etapa, "pasar_a_llamada": pasar_a_llamada,
         "foto_agotada": foto_agotada,
     }

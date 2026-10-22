@@ -54,7 +54,7 @@ async def test_silent_sets_manual_and_alerts_anya(monkeypatch, env):
     await main._run_ai(PHONE, LEAD, "¿hay estacionamiento?")
     env["fields"].assert_any_await(PHONE, mode="manual")
     # новый алерт простым текстом: причина одной фразой, старый «Клиент готов…» не шлётся
-    assert env["bot_silent"].await_args.args[2] == "На этот вопрос в базе нет ответа"
+    assert env["bot_silent"].await_args.args[2] == "Вопрос вне базы: На этот вопрос в базе нет ответа"
     env["escalation"].assert_not_awaited()
     env["send"].assert_not_awaited()
 

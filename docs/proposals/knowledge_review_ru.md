@@ -1,6 +1,6 @@
 # База знаний режима rag: ревью
 
-Источник: `knowledge/seed.json`, версия 2026-10-22b. Записей: 104, ждут Аню: 9.
+Источник: `knowledge/seed.json`, версия 2026-10-22b. Записей: 105, ждут Аню: 9.
 Документ собран скриптом `scripts/knowledge_review.py`, руками не править.
 
 - Записи с `confirmado=false` в ответы не подаются, пока Аня не подтвердит.
@@ -341,6 +341,19 @@
 - **Как отвечать (для модели):** Solo si el lead pregunta por esto; si ya se dijo (ya_hecho.hechos_dichos), no lo repitas salvo que pregunte otra vez. Sin testimonios ni historias inventadas.
 - **Флаги:** действие: ответить
 - **Источник:** сайт rusaencdmx.com
+
+### `event_owner_facts_2026_10_23` · Hechos del evento confirmados por la dueña (2026-10-23) · ✅ подтверждено
+
+**Текст (es):**
+
+> En el evento puedes platicar con cada una de las 30 mujeres. Si te da pena acercarte, nosotros mismos te presentamos. En la agencia ya llevamos más de 180 parejas formadas.
+
+**Перевод:** На ивенте можно поговорить с каждой из 30 девушек. Если стесняешься подойти — мы сами познакомим. В агентстве уже больше 180 пар.
+
+- **Когда:** cómo es el evento, voy a poder hablar con todas, me da pena, no sé cómo acercarme, cuántas parejas
+- **Как отвечать (для модели):** Solo si el lead pregunta por esto. Sin testimonios inventados.
+- **Флаги:** действие: ответить
+- **Источник:** владелица 2026-10-23
 
 
 ## Частые вопросы
@@ -742,14 +755,14 @@
 
 **Текст (es):**
 
-> Te entiendo, no es poco. Es una noche pensada para conocer en persona a mujeres eslavas solteras que buscan algo serio, con bebida de bienvenida y botanas incluidas.
+> Te entiendo 🤍 Mira, no es solo una entrada: es una noche para conocer en persona a 30 mujeres solteras y platicar con cada una de ellas. Si te da pena acercarte, nosotros mismos te presentamos. Y en la agencia ya llevamos más de 180 parejas formadas.
 
-**Перевод:** Понимаю, сумма немаленькая. Это вечер, задуманный, чтобы вживую познакомиться с одинокими славянками, которые ищут серьёзного; напиток и закуски включены.
+**Перевод:** Понимаю 🤍 Это не просто билет: это вечер, чтобы лично познакомиться с 30 свободными девушками и поговорить с каждой; если стесняешься подойти, мы сами познакомим; в агентстве уже больше 180 пар.
 
 - **Когда:** está caro, se me hace caro, es mucho, no me alcanza, uf caro
-- **Как отвечать (для модели):** Defiende el valor UNA vez, sin descuentos, sin testimonios. Si objeta el precio por segunda vez seguida: cursos en línea (service_courses). Si pide descuento: policy_discount.
-- **Флаги:** действие: ответить
-- **Источник:** стартовая пара 6
+- **Как отвечать (для модели):** Primera objeción de precio en el diálogo: este texto tal cual (el código lo envía sin modelo). Segunda objeción de precio: no respondas, pasa a Anna en silencio. Sin descuentos, sin testimonios, sin seguridad, sin 'muchos encontraron pareja', sin presión y sin ofrecer videollamada.
+- **Флаги:** действие: ответить; можно почти дословно
+- **Источник:** владелица 2026-10-23 (было: стартовая пара 6, «Te entiendo, no es poco.»)
 
 ### `obj_event_think` · «Lo voy a pensar» (evento) · ✅ подтверждено
 
