@@ -598,6 +598,30 @@ def slot_question(cal: dict) -> str | None:
     return _SLOT_QUESTIONS.get(missing or (nxt,))
 
 
+_SLOT_PAIR = {"name": ("name", "is_single"), "is_single": ("name", "is_single"),
+              "age": ("age", "profession"), "profession": ("age", "profession")}
+
+
+def slots_permitidos(cal: dict) -> frozenset:
+    """О каких слотах сейчас можно спросить: следующий (с парой), если вопрос сейчас уместен."""
+    nxt = cal.get("siguiente")
+    if not nxt or not cal.get("puede_preguntar"):
+        return frozenset()
+    return frozenset(_SLOT_PAIR.get(nxt, (nxt,)))
+
+
+def drop_out_of_order_slot_questions(bubbles: list[str], permitidos: frozenset) -> list[str]:
+    """Вопрос по слоту не по порядку («¿te gustaría mandarme una foto tuya?», когда очередь
+    возраста, а вопрос о возрасте только что остался без ответа) — убираем. Порядок: имя
+    и «холост ли», возраст и профессия, фото (прогон 4, Д3)."""
+    def wrong(sent):
+        asked = {slot for slot in memory.SLOT_QUESTION_RE if memory.pregunta_slot(slot, sent)}
+        return bool(asked) and not asked <= permitidos
+    out = [_drop_sentences(b, wrong) for b in bubbles]
+    out = [b for b in out if b.strip() and _words(b)]
+    return out or bubbles
+
+
 def paso_extra_ok(paso: dict, cal: dict) -> str | None:
     """Дополнительный шаг модели — только вопрос по слоту, который сейчас можно задать.
     Факт или другой вопрос «вдогонку» не берём."""
@@ -646,7 +670,8 @@ def drop_dangling(bubbles: list[str]) -> list[str]:
 def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict,
                 user_text: str, dio_algo: bool = True,
                 answered: set[str] | frozenset = frozenset(),
-                pregunta_siguiente: str | None = None) -> tuple[list[str], str | None, list[str]]:
+                pregunta_siguiente: str | None = None,
+                permitidos: frozenset | None = None) -> tuple[list[str], str | None, list[str]]:
     """Проверки кодом. Возвращает (пузыри, причина silent или None, список правок)."""
     notes: list[str] = []
     settings, ya, cal = mem["settings"], mem["ya_hecho"], mem["calificacion"]
@@ -710,6 +735,11 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
         if new != trimmed:
             notes.append("добавила вопрос по следующему слоту")
         bubbles = new
+    if permitidos is not None:
+        new = drop_out_of_order_slot_questions(bubbles, permitidos)
+        if new != bubbles:
+            notes.append("убрала вопрос по слоту не по порядку")
+            bubbles = new
     new = drop_repeated_slot_question(bubbles, mem.get("ultimo_mensaje_anna"), answered)
     if new != bubbles:
         notes.append("убрала повтор вопроса по слоту")
@@ -1245,7 +1275,8 @@ def revisar(out: dict, mem: dict, lead: dict, merged: dict, user_text: str,
     bubbles, reason, notes = check_reply(bubbles, mem=mem, fichas=fichas, lead=merged,
                                          user_text=user_text,
                                          dio_algo=lead_dio_algo(user_text, out["extracted"], lead),
-                                         answered=answered, pregunta_siguiente=slot_question(cal_next))
+                                         answered=answered, pregunta_siguiente=slot_question(cal_next),
+                                         permitidos=slots_permitidos(cal_next))
     if (out.get("paso_extra") or {}).get("texto") and not paso:
         notes.append("paso_extra не вопрос по слоту — убран")
     return bubbles, reason, notes

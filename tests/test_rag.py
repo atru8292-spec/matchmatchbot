@@ -1818,3 +1818,43 @@ async def test_main_sends_video_photos_then_question(monkeypatch):
         "photo_caption": "Así fue el evento pasado.", "after_media": ["¿Cuántos años tienes?"]})
     assert order == [("video", "v"), ("photos", "Así fue el evento pasado."),
                      ("text", ("¿Cuántos años tienes?",))]
+
+
+class TestSlotOrderRun4:
+    def test_d3_photo_question_out_of_order_removed(self):
+        """Прогон 4, Д3 ход 2: вопрос о возрасте проигнорирован, модель перескочила на фото."""
+        prior = RUN2_BASE + [msg("lead", "¿viste el partido del América ayer?", 10),
+                             msg("anna", "Jaja, no lo vi, pero seguro estuvo emocionante.", 9),
+                             msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 9)]
+        b, reason, notes = revisar(
+            ["La verdad no le voy a ningún equipo, pero me divierte ver cómo se emocionan todos. "
+             "Volviendo al evento, ¿te gustaría mandarme una foto tuya?"],
+            "jaja sí, estuvo buenísimo, ¿tú le vas a alguien?", CARLOS, prior)
+        assert reason is None
+        assert b == ["La verdad no le voy a ningún equipo, pero me divierte ver cómo se emocionan todos."]
+        assert "убрала вопрос по слоту не по порядку" in notes
+
+    def test_next_slot_question_kept(self):
+        b, _, _ = revisar(["Incluye bebida de bienvenida y botanas. ¿Cuántos años tienes y a qué te dedicas?"],
+                          "¿qué incluye?", CARLOS, RUN2_BASE)
+        assert b == ["Incluye bebida de bienvenida y botanas. ¿Cuántos años tienes y a qué te dedicas?"]
+
+    def test_photo_question_when_age_known(self):
+        lead = {**CARLOS, "age": 40, "profession": "médico"}
+        b, _, _ = revisar(["Incluye bebida de bienvenida y botanas.", "¿Me mandas una foto tuya?"],
+                          "¿qué incluye?", lead, RUN2_BASE)
+        assert b[-1] == "¿Me mandas una foto tuya?"
+
+    def test_buy_before_photo_still_asks_photo(self):
+        """Покупка до фото: возраст пропускаем, просьба фото остаётся (compra)."""
+        mem_prior = RUN2_BASE
+        ya = memory.ya_hecho(mem_prior, CARLOS, SETTINGS, EVENT_DESDE, NOW)
+        last = memory.ultima_respuesta(mem_prior)
+        mem = {"settings": SETTINGS, "ya_hecho": ya, "regreso": None,
+               "calificacion": memory.calificacion(CARLOS, ya, "¿cómo compro?", last, compra=True),
+               "ultimo_mensaje_anna": last, "lead_texts": ["¿cómo compro el boleto?"], "historial": [],
+               "resumen": None, "compra_pendiente": True}
+        out = {"bubbles": ["El pago se hace en la página.", "¿Me mandas una foto tuya?"], "extracted": {},
+               "paso_extra": {"tipo": None, "texto": ""}}
+        b, _, _ = rag.revisar(out, mem, CARLOS, CARLOS, "¿cómo compro el boleto?", list(BY_ID.values()))
+        assert b[-1] == "¿Me mandas una foto tuya?"
