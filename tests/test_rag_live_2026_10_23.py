@@ -353,3 +353,26 @@ def test_gpt5_payload():
     assert b["max_completion_tokens"] >= 700 and b["reasoning_effort"] == rag.GPT5_REASONING_EFFORT
     b = rag.chat_payload("gpt-4.1", "S", "U", 700, 0.3)
     assert b["temperature"] == 0.3 and b["max_tokens"] == 700 and "reasoning_effort" not in b
+
+
+# ───────────────────────── прогон 2026-10-23: вне базы до модели ─────────────────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["¿es seguro?", "¿quedan lugares?", "¿tienen testimonios?",
+                                  "¿cualquiera puede entrar?"])
+async def test_out_of_base_silent_before_model(monkeypatch, text):
+    d = Dialog(monkeypatch, lead={"name": "Luis", "is_single": True, "interest": "event"})
+    r = await d.say(text)                      # модели на этот текст нет — вызов упал бы
+    assert r["action"] == "silent" and r["messages"] == []
+    assert rag.silent_alert(r["silent_reason"]).startswith("Вопрос вне базы")
+
+
+@pytest.mark.parametrize("text", ["estoy seguro", "trabajo en seguridad. ¿Cuánto cuesta?", "¿dónde es?",
+                                  "¿cuántas mujeres van?"])
+def test_out_of_base_not_on_mentions(text):
+    assert rag.tema_fuera_de_base(text) is None
+
+
+def test_offer_other_question_dropped():
+    assert rag.drop_offer_more(["Ya hemos formado más de 180 parejas.",
+                                "¿Tienes alguna otra duda sobre el evento?"]) == ["Ya hemos formado más de 180 parejas."]

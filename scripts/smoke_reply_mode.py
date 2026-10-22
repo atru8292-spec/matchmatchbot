@@ -457,6 +457,20 @@ def install_db(leads_by_phone: dict) -> None:
     escalation._send_telegram = no_write
 
 
+def install_seed_overlay(ids: list[str]) -> None:
+    """Записи seed поверх таблицы knowledge — в памяти (запись в БД — только import_knowledge)."""
+    seed = {r["id"]: r for r in knowledge.load_seed() if r["id"] in ids}
+    missing = set(ids) - set(seed)
+    if missing:
+        raise SystemExit(f"нет в seed: {sorted(missing)}")
+    real = knowledge._load_from_db
+
+    async def overlay():
+        rows = await real() or []
+        return [r for r in rows if r["id"] not in seed] + [dict(r, _embedding=None) for r in seed.values()]
+    knowledge._load_from_db = overlay
+
+
 class WriteBlocked(BaseException):
     """Попытка записи в прод-БД из смоука. BaseException: не глотается try/except в коде бота."""
 
@@ -514,6 +528,8 @@ async def amain(args) -> None:
     from config import settings
     if not args.dry and not (settings.openai_api_key or "").startswith("sk-"):
         raise SystemExit("нет OPENAI_API_KEY в окружении процесса")
+    if args.seed_overlay:
+        install_seed_overlay([x.strip() for x in args.seed_overlay.split(",") if x.strip()])
     if args.rag_model:
         rag.MODEL = args.rag_model
         rag.FALLBACK_MODEL = "gpt-4.1" if args.rag_model.startswith("gpt-5") else rag.FALLBACK_MODEL
@@ -609,6 +625,9 @@ if __name__ == "__main__":
     ap.add_argument("--modes", choices=["both", "rag"], default="both")
     # только эти диалоги по номеру: --part dialogs --only 1,3,11
     ap.add_argument("--only", default="")
+    ap.add_argument("--seed-overlay", default="",
+                    help="id записей базы знаний через запятую: взять из knowledge/seed.json поверх БД "
+                         "(только в памяти процесса — как будет после импорта)")
     ap.add_argument("--rag-model", default="",
                     help="основная модель режима rag на этот прогон (например gpt-5); по умолчанию как в коде")
     asyncio.run(amain(ap.parse_args()))

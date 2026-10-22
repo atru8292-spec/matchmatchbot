@@ -883,7 +883,7 @@ _OFFER_MORE_RE = re.compile(r"¿\s*(?:te\s+gustar[ií]a|quieres|te\s+interesa)\s
                             r"(?:algo\s+)?m[aá]s\b|"
                             # «¿Tienes alguna duda sobre el evento o necesitas ayuda para comprar tu
                             # boleto?» — вопрос-предложение, о чём лид не спрашивал (прогон 2026-10-22)
-                            r"¿\s*tienes\s+(?:alguna\s+|otra\s+)?(?:duda|pregunta)|"
+                            r"¿\s*tienes\s+(?:alguna\s+)?(?:otra\s+)?(?:duda|pregunta)|"
                             r"¿[^?]*\bnecesitas\s+ayuda\s+(?:para|con)\b", re.IGNORECASE)
 _DANGLING_RE = re.compile(r"[,:;—–-]\s*$")
 
@@ -1798,6 +1798,40 @@ _OBJ_OTHER_Q_RE = re.compile(r"\b(?:cu[aá]nd[oa]|d[oó]nde|c[oó]mo|cu[aá]l|cu
                              r"hay\s+descuento|incluye)\b", re.IGNORECASE)
 
 
+# Вопрос (не любое упоминание: «estoy seguro», «trabajo en seguridad») о том, чего нет в базе.
+_ASK_SENT_RE = re.compile(
+    r"[?¿]|^\s*(?:y\s+|oye,?\s+|hola,?\s+)?(?:qu[eé]|c[oó]mo|cu[aá]nt\w*|cu[aá]l\w*|d[oó]nde|"
+    r"qui[eé]n\w*|hay|es|son|quedan?|tienen|habr[aá]|puedo|se\s+puede)\b|"
+    r"\b(?:dime|cu[eé]ntame|plat[ií]came|expl[ií]came|(?:quisiera|quiero|me\s+gustar[ií]a)\s+saber)\b",
+    re.IGNORECASE)
+_PEOPLE = r"(?:invitad\w*|asistent\w*|participant\w*|gente|personas)"
+_FUERA_DE_BASE = [
+    ("безопасность", re.compile(r"\bes\s+segur[oa]\b|\bqu[eé]\s+tan\s+segur[oa]\b|\bseguridad\b|"
+                                r"\bpeligr\w*|\briesgos[oa]?\b", re.IGNORECASE)),
+    ("отзывы", re.compile(r"testimoni\w*|\brese[ñn]as?\b|\bopiniones\b|\breferencias\b|"
+                          r"\bqui[eé]n(?:es)?\s+(?:ya\s+)?(?:ha|han)\s+(?:ido|asistido)\b", re.IGNORECASE)),
+    ("отбор гостей", re.compile(r"\b(?:seleccion\w*|escog\w*|elig\w*|filtr\w*|verific\w*)\b[^.?!]{0,30}\b"
+                                + _PEOPLE + r"|\bcualquier(?:a|\s+persona)\s+puede\s+(?:ir|entrar|asistir)\b",
+                                re.IGNORECASE)),
+    ("остались ли места", re.compile(
+        r"\bquedan?\b[^.?!]{0,15}\b(?:lugar|lugares|boletos?|espacios?|cupos?|entradas?)\b|"
+        r"\bhay\s+(?:todav[ií]a\s+|a[uú]n\s+)?(?:lugar|lugares|cupo|espacio|boletos?|entradas?)\b|"
+        r"\bcupos?\b|\baforo\b|\b(?:lugares|boletos?)\s+disponibles\b|\bagotad[oa]s?\b|\bse\s+agot\w*|"
+        r"\bse\s+acabaron\s+(?:los\s+|las\s+)?(?:boletos|lugares|entradas)\b", re.IGNORECASE)),
+]
+
+
+def tema_fuera_de_base(text: str) -> str | None:
+    """Тема вопроса, на который в базе нет ответа (тема и вопрос — в одном предложении)."""
+    for sent in re.split(r"(?<=[.!?…])\s+|\n+|[,;]?\s+(?=¿)", (text or "").strip()):
+        if not _ASK_SENT_RE.search(sent):
+            continue
+        for tema, rx in _FUERA_DE_BASE:
+            if rx.search(sent):
+                return tema
+    return None
+
+
 def objecion_precio(lead: dict, mem: dict, user_text: str, by_id: dict) -> list[str] | str | None:
     """Возражение по цене ивента: первое в диалоге — пузыри утверждённого текста
     obj_event_price (дословно, без модели), второе — "segunda" (молча Ане). None — не наш случай:
@@ -2077,6 +2111,12 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
     if _SILENT_TOPIC_RE.search(user_text or ""):
         return _silent("скидка, способ оплаты или возврат (решение владелицы)",
                        rag_meta={**meta, "fuentes": ["policy_silent_topic"]})
+    # 2.51. Безопасность, отзывы, отбор гостей, остались ли места — в базе этого нет: молча Ане
+    # до модели (прогон 2026-10-23: модель уходила от «¿es seguro?» и выдумывала «sí, hay lugares»).
+    tema = tema_fuera_de_base(user_text)
+    if tema:
+        return _silent(f"нет данных в базе знаний: {tema}", kind=FUERA_DE_BASE,
+                       rag_meta={**meta, "fuentes": ["policy_fuera_de_base"]})
 
     # 2.52. «Está muy caro» (ивент): первый раз — утверждённый текст владелицы дословно, второй —
     # молча Ане (решение 2026-10-23). Возражение плюс другой вопрос — модель.
