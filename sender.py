@@ -138,7 +138,9 @@ _EVENT_VAR_KEYS = ("event_address", "event_date", "event_time",
                    # следующая ступень цены (сайт: 6000 → 7000 → 8000), режим rag
                    "event_price_next",
                    # предпродажа до даты, день недели ивента, зачёркнутая цена (2026-10-22)
-                   "event_presale_until", "event_weekday", "event_promo")
+                   "event_presale_until", "event_weekday", "event_promo",
+                   # тема ивента («Esta vez es temática de Halloween 🎃»); пусто → без фразы
+                   "event_theme_phrase")
 
 # Испанские месяцы для человекочитаемой даты в сообщениях лиду.
 _ES_MONTHS = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
@@ -180,6 +182,9 @@ def event_token_value(key: str, settings: dict, today=None) -> str | None:
     if key == "event_promo":
         old = (settings.get("event_price_old") or "").strip()
         return f" ~{old} MXN~" if old else ""
+    if key == "event_theme_phrase":
+        # необязательная фраза: пусто или нет ключа — пустая строка, пузырь не выпадает
+        return (settings.get("event_theme_phrase") or "").strip()
     if key == "event_weekday":
         d = _iso_date(settings.get("event_date"))
         return _ES_WEEKDAYS[d.weekday()] if d else None
@@ -226,6 +231,10 @@ async def _fill_event_vars(text: str) -> str | None:
         return None
     for k, v in values.items():
         text = text.replace(f"[{k}]", v)
+    if "event_theme_phrase" in values and not values["event_theme_phrase"]:
+        # пустой токен не оставляет лишних пробелов: «…seria. [event_theme_phrase]» → «…seria.»
+        text = re.sub(r"[ \t]+(\n|$)", r"\1", text)
+        text = re.sub(r"[ \t]{2,}", " ", text)
     return text
 
 

@@ -11,6 +11,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import ai
+import sender
 
 
 # ---------------------------------------------------------------------------
@@ -2928,3 +2929,112 @@ class TestEventQualifyBubbleAfterAnnaWrote:
         out = await ai._enforce_event_qualification_followup(
             result, history, _make_scenario(id=2), _make_lead(), "Carlos, si soltero")
         assert out["messages"] == [ai._EVENT_AGE_PROFESSION_BUBBLE]
+
+
+# ---------------------------------------------------------------------------
+# №2 дословно на первое сообщение про ивент (решение Арины 2026-10-22)
+# ---------------------------------------------------------------------------
+
+_S2_TEMPLATE = ("Hola, soy Anna, fundadora de Match Match Agency 🤍\n"
+                "El [event_date] tenemos Slavic-Latino Connect Night en [event_address]: una noche para "
+                "conocer en persona a mujeres eslavas solteras que buscan una relación seria. "
+                "[event_theme_phrase]\n\n¿Cómo te llamas y estás soltero?")
+
+
+class TestEventGreetingScenario2:
+    def _s2(self):
+        return _make_scenario(id=2, ai_allowed=False, score=0.8, mode="bot_auto", blocks_lead=False,
+                              template_es=_S2_TEMPLATE)
+
+    async def test_first_message_verbatim_two_messages(self, lead):
+        with patch("ai.search_scenarios", new=AsyncMock(return_value=[self._s2()])), \
+             patch("ai._call_openai", new=AsyncMock()) as mock_openai:
+            r = await ai.generate_reply(lead, [{"sender": "lead", "text": "Hola, me interesa el evento"}],
+                                        "Hola, me interesa el evento")
+        mock_openai.assert_not_awaited()
+        assert r["messages"] == _S2_TEMPLATE.split("\n\n")     # токены подставит sender
+        assert r["extracted"].get("interest") == "event"
+
+    async def test_after_auto_greeting_still_first_contact(self, lead):
+        hist = [{"sender": "lead", "text": "Hola"},
+                {"sender": "anna", "text": "👉 ¡Bienvenido a Match Match Agency!", "meta": '{"source": "auto_greeting"}'},
+                {"sender": "lead", "text": "me interesa el evento"}]
+        with patch("ai.search_scenarios", new=AsyncMock(return_value=[self._s2()])), \
+             patch("ai._call_openai", new=AsyncMock()) as mock_openai:
+            r = await ai.generate_reply(lead, hist, "me interesa el evento")
+        mock_openai.assert_not_awaited()
+        assert r["messages"][1] == "¿Cómo te llamas y estás soltero?"
+
+    async def test_mid_conversation_goes_to_model(self, lead):
+        """Бот уже писал (например, приветствие на «hola») — №2 дословно не шлём."""
+        hist = [{"sender": "lead", "text": "hola"}, {"sender": "anna", "text": "¡Hola! 🤍"},
+                {"sender": "lead", "text": "Me interesa el evento"}]
+        with patch("ai.search_scenarios", new=AsyncMock(return_value=[self._s2()])), \
+             patch("ai._call_openai", new=AsyncMock(return_value=_VALID_AI_RESPONSE)) as mock_openai:
+            await ai.generate_reply(lead, hist, "Me interesa el evento")
+        mock_openai.assert_awaited()
+
+    @pytest.mark.parametrize("text", ["Hola, me interesa el evento, ¿cuánto cuesta?",
+                                      "me interesa el evento, pásame el link",
+                                      "info del evento, cuánto cuesta"])
+    async def test_question_or_request_goes_to_model(self, lead, text):
+        with patch("ai.search_scenarios", new=AsyncMock(return_value=[self._s2()])), \
+             patch("ai._call_openai", new=AsyncMock(return_value=_VALID_AI_RESPONSE)) as mock_openai:
+            await ai.generate_reply(lead, [{"sender": "lead", "text": text}], text)
+        mock_openai.assert_awaited()
+
+    @pytest.mark.parametrize("text,beyond", [("Hola, me interesa el evento", False),
+                                             ("quiero ir al evento", False), ("info del evento", False),
+                                             ("hola, ¿cuándo es el evento?", True), ("pásame el link", True)])
+    def test_beyond_event_interest(self, text, beyond):
+        assert ai._beyond_event_interest(text) is beyond
+
+    def test_bot_wrote_before(self):
+        assert not ai._bot_wrote_before([{"sender": "lead", "text": "hola"}])
+        assert not ai._bot_wrote_before([{"sender": "anna", "text": "x", "meta": {"source": "auto_greeting"}}])
+        assert ai._bot_wrote_before([{"sender": "anna", "text": "¡Hola! 🤍", "meta": {}}])
+        assert ai._bot_wrote_before([{"sender": "bot", "text": "Hola!"}])
+
+    def test_no_halloween_logic_in_code(self):
+        assert not hasattr(ai, "_HALLOWEEN_PHRASE") and not hasattr(ai, "_halloween_active")
+
+
+class TestEventThemePhraseToken:
+    S = {"event_active": "1", "event_date": "2026-11-18", "event_address": "Roma Norte, CDMX"}
+    MSG1 = _S2_TEMPLATE.split("\n\n")[0]
+
+    @pytest.mark.parametrize("value,expected_end", [
+        ("Esta vez es temática de Halloween 🎃", "relación seria. Esta vez es temática de Halloween 🎃"),
+        ("", "relación seria."),
+        (None, "relación seria."),
+        ("  Esta vez es temática de Halloween 🎃  ", "relación seria. Esta vez es temática de Halloween 🎃"),
+    ])
+    async def test_fill(self, value, expected_end):
+        s = dict(self.S)
+        if value is not None:
+            s["event_theme_phrase"] = value
+        with patch("sender.db.get_settings", new=AsyncMock(return_value=s)):
+            out = await sender._fill_event_vars(self.MSG1)
+        assert out is not None and out.endswith(expected_end)
+        assert "  " not in out and " \n" not in out and "[" not in out
+        assert "2026" not in out and "El 18 de noviembre tenemos" in out
+
+    async def test_inactive_event_still_drops_bubble(self):
+        with patch("sender.db.get_settings", new=AsyncMock(return_value={**self.S, "event_active": "0"})):
+            assert await sender._fill_event_vars(self.MSG1) is None
+
+
+def test_patch_scenario2_text_matches_greeting_event():
+    """Текст №2 = knowledge.greeting_event: первые два пузыря одним сообщением, фраза про
+    Хеллоуин — токеном [event_theme_phrase]; остальное посимвольно."""
+    import json, pathlib
+    from scripts import patch_scenario2_event_greeting_2026_10 as p2
+    seed = {r["id"]: r for r in json.loads((pathlib.Path(__file__).resolve().parent.parent
+                                            / "knowledge/seed.json").read_text("utf-8"))["records"]}
+    ge = seed["greeting_event"]["contenido_es"].split("\n\n")
+    msg1, msg2 = p2.NEW.split("\n\n")
+    assert msg2 == ge[2] == "¿Cómo te llamas y estás soltero?"
+    line1, line2 = msg1.split("\n")
+    assert line1 == ge[0]
+    assert line2 == ge[1].replace("Esta vez es temática de Halloween.", "[event_theme_phrase]")
+    assert p2.NEW == _S2_TEMPLATE

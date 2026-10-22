@@ -261,6 +261,41 @@ _EVENT_INTEREST_SCENARIOS = _EVENT_DETAIL_SCENARIOS | {2}
 # _tag_event_interest).
 _NURTURE_SCENARIOS = {10, 17}
 
+# №2 — приветствие на первое сообщение про ивент (решение Арины 2026-10-22): дословно, без
+# модели, только при первом контакте (бот ещё ничего не писал; автоприветствие WhatsApp не
+# считается). Позже триггеры №2 («quiero ir al evento», «cuándo es el evento») совпадают и
+# посреди разговора — тогда отвечает модель, иначе бот заново здоровался бы и спрашивал имя.
+_EVENT_GREETING_SCENARIO = 2
+# Тема ивента («Esta vez es temática de Halloween 🎃») — токен [event_theme_phrase] в тексте №2,
+# значение в app_settings.event_theme_phrase; после ивента Арина очищает его в мини-CRM.
+# Вопрос или просьба сверх интереса к ивенту («…, ¿cuánto cuesta?», «pásame el link») —
+# дословный №2 не шлём, отвечает модель.
+_BEYOND_INTEREST_RE = re.compile(
+    r"\?|¿|\b(?:cu[aá]nto|c[oó]mo|d[oó]nde|cu[aá]ndo|qu[eé]|qui[eé]n|cu[aá]l|puedo|se\s+puede)\b|"
+    r"\b(?:precio|cuesta|costo|link|enlace|boletos?|compr|pag|direcci[oó]n|ubicaci[oó]n|hora)\w*|"
+    r"\b(?:p[aá]same|m[aá]ndame|env[ií]ame|dame)\b", re.IGNORECASE)
+
+
+def _beyond_event_interest(text: str) -> bool:
+    return bool(_BEYOND_INTEREST_RE.search(text or ""))
+
+
+def _bot_wrote_before(history: list[dict] | None) -> bool:
+    """В переписке уже есть сообщение бота или Ани (кроме автоприветствия WhatsApp)."""
+    for m in history or []:
+        if m.get("sender") == "lead" or m.get("direction") == "inbound":
+            continue
+        meta = m.get("meta") or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except ValueError:
+                meta = {}
+        if meta.get("source") != "auto_greeting":
+            return True
+    return False
+
+
 # Анонс explainer-видео (Аня лично отвечает на частые вопросы про ивент) — идёт как
 # ПОДПИСЬ к самому видео (не отдельный текстовый баббл), только когда видео реально
 # уйдёт (не слали + пул не пуст). Так текст не обещает видео, которого не будет
@@ -2002,6 +2037,11 @@ async def _generate_reply_legacy(lead: dict, history: list[dict], user_text: str
     # Ветка 1: фиксированный сценарий (ai_allowed=false) → template дословно, без OpenAI.
     # Порог зависит от необратимости: блокировка требует высокой уверенности (0.60),
     # обычный фикс-ответ — ниже (0.45). Ниже порога → уходим в AI.
+    if top and top.get("id") == _EVENT_GREETING_SCENARIO and not top.get("ai_allowed") \
+            and (_bot_wrote_before(history) or _beyond_event_interest(user_text)):
+        logger.info("№2: не первый контакт или в сообщении вопрос/просьба — отвечает модель")
+        top = {**top, "ai_allowed": True}
+        scenarios = [top] + scenarios[1:]
     if top and not top.get("ai_allowed"):
         is_block = top.get("mode") == "bot_then_block" or top.get("blocks_lead")
         threshold = FIXED_BLOCK_SCORE if is_block else FIXED_SCORE
