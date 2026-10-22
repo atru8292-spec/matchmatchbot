@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import conversation_rules
+import cuestionario
 import db
 import sender
 
@@ -32,7 +33,7 @@ GAP_HOURS = 6
 REGRESO_LARGO_DAYS = 3
 NOTES_LIMIT = 5
 
-EVENT_KEYS = ["event_active", "event_date", "event_start", "event_address",
+EVENT_KEYS = ["event_active", "event_seats_available", "event_date", "event_start", "event_address",
               "event_price_nonmember", "event_price_next", "event_link",
               "event_price_old", "event_presale_until"]
 
@@ -291,6 +292,9 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
         # Вопросы по слотам по ходам бота (решение 2026-10-23): ход последнего вопроса, писал ли
         # лид после него, есть ли в его сообщениях после вопроса ответ по слоту.
         "turnos_bot": 0, "pregunta_turno": {}, "lead_escribio_tras": {}, "respondido": {},
+        # Анкета одним сообщением (cuestionario, 2026-10-23): ход, когда задали; путь (ивент
+        # или услуга); ход, когда спросили недостающее.
+        "cuestionario": None, "cuestionario_ruta": None, "faltante": None,
     }
     link = (settings.get("event_link") or "").strip()
     price = settings.get("event_price_nonmember") or ""
@@ -349,6 +353,11 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
             out["ana_escribio_a_mano"] = when
         if _SERVICE_PRICE_RE.search(text):
             out["precio_servicio_dado"] = when
+        if cuestionario.es_compuesta(text):
+            out["cuestionario"] = out["turnos_bot"]
+            out["cuestionario_ruta"] = "evento" if "Rusia" in text else "servicio"
+        if cuestionario.es_faltante(text):
+            out["faltante"] = out["turnos_bot"]
         for slot in SLOT_QUESTION_RE:
             # Фото считаем только по текущему ивенту: старого лида, которого дважды просили
             # фото год назад, не отправляем к Ане с первого сообщения (code-review 2026-10-22).

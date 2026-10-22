@@ -3033,8 +3033,11 @@ def test_patch_scenario2_text_matches_greeting_event():
                                             / "knowledge/seed.json").read_text("utf-8"))["records"]}
     ge = seed["greeting_event"]["contenido_es"].split("\n\n")
     msg1, msg2 = p2.NEW.split("\n\n")
-    assert msg2 == ge[2] == "¿Cómo te llamas y estás soltero?"
+    # 2026-10-23: в новом режиме третий пузырь — анкета одним сообщением; №2 (старый режим)
+    # не меняли — описание по-прежнему совпадает посимвольно.
+    assert msg2 == "¿Cómo te llamas y estás soltero?"
+    assert ge[2].startswith("Platícame de ti:")
     line1, line2 = msg1.split("\n")
     assert line1 == ge[0]
-    assert line2 == ge[1].replace("Esta vez es temática de Halloween.", "[event_theme_phrase]")
+    assert line2 == ge[1]
     assert p2.NEW == _S2_TEMPLATE

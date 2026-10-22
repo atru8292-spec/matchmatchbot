@@ -30,13 +30,15 @@ logger = logging.getLogger("matchmatch.debounce")
 
 class _PhoneState:
     """Состояние склейки одного номера."""
-    __slots__ = ("timer", "first_ts", "flushing", "re_trigger")
+    __slots__ = ("timer", "first_ts", "flushing", "re_trigger", "delay", "max_wait")
 
     def __init__(self, first_ts: float):
         self.timer: asyncio.Task | None = None
         self.first_ts = first_ts        # время первого сообщения бурста (для max_wait)
         self.flushing = False           # идёт ли on_flush прямо сейчас
         self.re_trigger = False         # пришло ли новое сообщение во время on_flush
+        self.delay: float | None = None     # окно тишины последнего сообщения (фото — дольше)
+        self.max_wait: float | None = None  # потолок ожидания от начала бурста
 
 
 class Debouncer:
@@ -55,18 +57,28 @@ class Debouncer:
         self._active_flushes: set[asyncio.Task] = set()   # идущие on_flush (для shutdown)
         self._shutting_down = False
 
-    async def trigger(self, phone: str) -> None:
-        """Зарегистрировать входящее сообщение номера и (пере)запустить таймер."""
+    def has_new(self, phone: str) -> bool:
+        """Во время идущей обработки номера пришло новое сообщение (ответ уже устарел)."""
+        state = self._states.get(phone)
+        return bool(state and state.flushing and state.re_trigger)
+
+    async def trigger(self, phone: str, delay: float | None = None,
+                      max_wait: float | None = None) -> None:
+        """Зарегистрировать входящее сообщение номера и (пере)запустить таймер.
+        delay / max_wait — окно тишины и потолок для этого сообщения (скользящее окно: каждое
+        новое сообщение перезапускает отсчёт; последнее фото — окно дольше). None — по умолчанию."""
         now = asyncio.get_running_loop().time()
         state = self._states.get(phone)
 
         if state is None:
             # новый бурст
             state = _PhoneState(first_ts=now)
+            state.delay, state.max_wait = delay, max_wait
             self._states[phone] = state
             self._start_timer(phone, state)
             return
 
+        state.delay, state.max_wait = delay, max_wait
         if state.flushing:
             # флаш этого номера уже идёт — не стартуем второй, пометим на добор
             state.re_trigger = True
@@ -85,8 +97,10 @@ class Debouncer:
         """Подождать delay (но не дольше max_wait от начала бурста) и флашнуть."""
         try:
             now = asyncio.get_running_loop().time()
-            remaining_cap = self._max_wait - (now - state.first_ts)
-            sleep_for = min(self._delay, remaining_cap)
+            delay = state.delay if state.delay is not None else self._delay
+            max_wait = state.max_wait if state.max_wait is not None else self._max_wait
+            remaining_cap = max_wait - (now - state.first_ts)
+            sleep_for = min(delay, remaining_cap)
             if sleep_for > 0:
                 await asyncio.sleep(sleep_for)
         except asyncio.CancelledError:
@@ -118,7 +132,8 @@ class Debouncer:
         finally:
             self._active_flushes.discard(task)
             if state.re_trigger and not self._shutting_down:
-                # за время обработки пришли новые сообщения → новый бурст
+                # за время обработки пришли новые сообщения → новый бурст (тот же скользящий
+                # отсчёт: лид мог ещё дописывать)
                 state.re_trigger = False
                 state.flushing = False
                 state.first_ts = asyncio.get_running_loop().time()

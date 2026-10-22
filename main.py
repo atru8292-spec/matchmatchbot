@@ -63,14 +63,52 @@ debouncer: Debouncer | None = None
 scheduler_task = None
 
 
+# Ожидание перед ответом (решение владелицы 2026-10-23): скользящее окно тишины после
+# последнего сообщения лида и потолок от первого сообщения серии. Последнее — фото: ждём дольше
+# (вдруг пришлёт ещё), потом все фото пачки разбираются вместе и ответ один.
+REPLY_DEBOUNCE_KEY = "reply_debounce_seconds"
+PHOTO_DEBOUNCE_KEY = "photo_debounce_seconds"
+REPLY_DEBOUNCE_DEFAULT = 60.0
+PHOTO_DEBOUNCE_DEFAULT = 90.0
+REPLY_MAX_WAIT = 180.0
+PHOTO_MAX_WAIT = 240.0
+
+# Одна обработка на лида одновременно: вторая ждёт (кроме debounce-сериализации — на случай
+# других путей запуска разбора).
+_burst_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _debounce_window(content_type: str | None) -> tuple[float, float]:
+    """(окно тишины, потолок) для входящего: фото — photo_debounce_seconds/240,
+    остальное — reply_debounce_seconds/180. Нет ключа, мусор или сбой — по умолчанию."""
+    photo = content_type == "photo"
+    key = PHOTO_DEBOUNCE_KEY if photo else REPLY_DEBOUNCE_KEY
+    default = PHOTO_DEBOUNCE_DEFAULT if photo else REPLY_DEBOUNCE_DEFAULT
+    cap = PHOTO_MAX_WAIT if photo else REPLY_MAX_WAIT
+    try:
+        raw = (await db.get_settings([key])).get(key)
+        value = float(raw) if raw not in (None, "") else default
+    except Exception:
+        value = default
+    if value <= 0:
+        value = default
+    return min(value, cap), cap
+
+
 async def _process_burst(phone: str) -> None:
     """on_flush для debounce. Обёртка: любое непойманное исключение → лог + алерт,
-    чтобы сбой не ушёл в debounce молча (debounce намеренно не зависит от escalation)."""
-    try:
-        await _process_burst_impl(phone)
-    except Exception as e:
-        logger.exception("_process_burst упал [%s]", phone)
-        await escalation.notify_error("main._process_burst", repr(e), phone)
+    чтобы сбой не ушёл в debounce молча (debounce намеренно не зависит от escalation).
+    Пока идёт разбор, новое сообщение лида прерывает отправку устаревшего ответа (sender
+    проверяет перед каждым пузырём); его разберёт следующий проход вместе с историей."""
+    lock = _burst_locks.setdefault(phone, asyncio.Lock())
+    async with lock:
+        sender.set_interrupt_check(
+            (lambda: debouncer.has_new(phone)) if debouncer is not None else None)
+        try:
+            await _process_burst_impl(phone)
+        except Exception as e:
+            logger.exception("_process_burst упал [%s]", phone)
+            await escalation.notify_error("main._process_burst", repr(e), phone)
 
 
 # Защита от старых входящих: после простоя канала Wazzup может дослать сообщения
@@ -664,6 +702,12 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
 
     sent = await sender.send(phone, messages,  # messages лиду
                              allow_repeat_links=sender._is_link_request(combined))
+    if sender.interrupted():
+        # Лид написал ещё раз, пока бот отвечал: остаток ответа и медиа не шлём — новое
+        # сообщение разберёт следующий проход с полной историей (уже ушедшее в ней есть).
+        logger.info("ответ прерван новым сообщением [%s]: ушло %d из %d, медиа не шлю",
+                    phone, sent, len(messages))
+        return
     if sent == 0:
         # ИСПРАВЛЕНО (2026-08-06, аудит): если render_bubbles дропнул ВСЕ бабблы (напр.
         # AI вписал [course_link]/[event_link] внутрь фразы вместо отдельного сообщения,
@@ -742,17 +786,19 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
 async def _send_rag_media_and_tail(phone: str, result: dict) -> None:
     """Режим rag: видео ивента, фото прошлых ивентов, потом after_media (вопрос последним).
     Сбой медиа не мешает вопросу; сбой вопроса не роняет уже отправленный ответ."""
-    if result.get("send_event_video"):
+    if result.get("send_event_video") and not sender.interrupted():
         try:
             await actions.send_event_video(phone, caption=result.get("video_caption"))
         except Exception:
             logger.exception("send_event_video упал [%s] (ответ лиду уже отправлен)", phone)
-    if result.get("send_event_photo"):
+    if result.get("send_event_photo") and not sender.interrupted():
         try:
             await actions.send_event_photos(phone, caption=result.get("photo_caption"))
         except Exception:
             logger.exception("send_event_photos упал [%s] (ответ лиду уже отправлен)", phone)
     tail = [m for m in (result.get("after_media") or []) if m]
+    if sender.interrupted():
+        tail = []
     if tail:
         try:
             await sender.send(phone, tail)
@@ -833,7 +879,7 @@ async def lifespan(app: FastAPI):
     # даём лиду до полутора минут тишины дописать мысль ПОЛНОСТЬЮ (несколько сообщений подряд,
     # не только короткая раздражённая серия), прежде чем AI вообще увидит текст и ответит.
     # 120.0 max_wait — потолок для непрерывно печатающего лида (не ждём бесконечно).
-    debouncer = Debouncer(_process_burst, delay=90.0, max_wait=120.0)
+    debouncer = Debouncer(_process_burst, delay=REPLY_DEBOUNCE_DEFAULT, max_wait=REPLY_MAX_WAIT)
     # Startup-sweep: debounce-таймеры теряются при рестарте — прогоняем лидов с
     # непроцессенными inbound заново, чтобы их сообщения не зависли (blocks 12).
     if db.is_ready():
@@ -1071,7 +1117,8 @@ async def _handle_incoming(msg) -> None:
         )
 
         if inserted and debouncer is not None:
-            await debouncer.trigger(nm.phone)
+            delay, cap = await _debounce_window(nm.content_type)
+            await debouncer.trigger(nm.phone, delay, cap)
 
     except Exception:
         logger.exception("Webhook: ошибка обработки сообщения")

@@ -688,16 +688,16 @@
 
 > Hola, soy Anna, fundadora de Match Match Agency 🤍
 >
-> El [event_date] tenemos Slavic-Latino Connect Night en [event_address]: una noche para conocer en persona a mujeres eslavas solteras que buscan una relación seria. Esta vez es temática de Halloween.
+> El [event_date] tenemos Slavic-Latino Connect Night en [event_address]: una noche para conocer en persona a mujeres eslavas solteras que buscan una relación seria. [event_theme_phrase]
 >
-> ¿Cómo te llamas y estás soltero?
+> Platícame de ti: ¿eres soltero y buscas una relación seria con una mujer de Rusia, Ucrania o Bielorrusia que viva en CDMX? ¿Cómo te llamas, cuántos años tienes y a qué te dedicas? Y por último, mándame 2 o 3 fotos tuyas, por favor 🤍
 
 **Перевод:** «Привет, я Анна, основательница Match Match Agency» / «[Дата] у нас Slavic-Latino Connect Night в [место]: вечер, чтобы вживую познакомиться с одинокими славянками, которые ищут серьёзных отношений. В этот раз тема Хеллоуин.» / «Как тебя зовут и ты холост?»
 
 - **Когда:** hola, vi el evento; info del evento; quiero ir al evento; me interesa el evento; novia rusa
 - **Как отвечать (для модели):** DOSLOVNO solo si el primer mensaje no tiene ninguna pregunta. Si hay cualquier pregunta, responde el modelo y usa este texto solo como tono.
 - **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["event"]}`; действует до 2026-11-18
-- **Источник:** №2 (первый абзац), название с сайта, решение владелицы: дословно только без вопроса
+- **Источник:** №2 (первый абзац), название с сайта, решение владелицы: дословно только без вопроса; 2026-10-23: тема из настройки [event_theme_phrase], анкета одним сообщением (как пишет Аня)
 
 ### `greeting_service` · Primer mensaje con interés en mujeres eslavas o el servicio · ✅ подтверждено
 
@@ -707,14 +707,14 @@
 >
 > Justo a eso me dedico: como matchmaker personal, te presento a mujeres eslavas (rusas, ucranianas o bielorrusas) que también buscan una relación seria, y te acompaño durante todo el proceso. ✨
 >
-> ¿Cómo te llamas y estás soltero?
+> Platícame de ti: ¿eres soltero? ¿Cómo te llamas, cuántos años tienes y a qué te dedicas? Y por último, mándame 2 o 3 fotos tuyas, por favor 🤍
 
 **Перевод:** «Привет, я Анна, основательница Match Match Agency» / «Именно этим я и занимаюсь: как личный матчмейкер знакомлю тебя со славянками (русскими, украинками или белорусками), которые тоже ищут серьёзных отношений, и сопровождаю весь процесс.» / «Как тебя зовут и ты холост?»
 
 - **Когда:** quiero conocer rusas, me gustan las eslavas, mujeres rusas, ucranianas, busco pareja eslava
 - **Как отвечать (для модели):** DOSLOVNO solo si se cumple la situación; en otro caso, referencia de tono.
 - **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["agency"]}`
-- **Источник:** №3 (убраны «Gracias por tu interés!», «platicarte», «Antes de contarte más»; вопрос возраста перенесён в слоты)
+- **Источник:** №3 (убраны «Gracias por tu interés!», «platicarte», «Antes de contarte más»; вопрос возраста перенесён в слоты); 2026-10-23: анкета одним сообщением (как пишет Аня)
 
 ### `service_pitch` · Pitch del servicio con precio (después de la foto) · ✅ подтверждено
 

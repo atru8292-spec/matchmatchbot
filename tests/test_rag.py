@@ -437,7 +437,8 @@ class TestPipeline:
     async def test_vi_el_evento_literal(self, monkeypatch):
         p = Pipe(monkeypatch)
         r = await rag.generate_reply(p.lead, [], "hola, vi el evento")
-        assert r["messages"][-1] == "¿Cómo te llamas y estás soltero?"
+        # 2026-10-23: анкета одним сообщением
+        assert r["messages"][-1] == rag.cuestionario.COMPOUND_EVENT
         assert r["extracted"] == {"interest": "event"}
         assert p.model_calls() == []
 
@@ -1114,7 +1115,8 @@ class TestOwnerRisks:
         assert r["action"] == "silent" and r["messages"] == []
         # «cómo se paga» с 2026-10-22 — прямой вопрос о покупке: ссылка, OXXO не подтверждаем
         r = await rag.generate_reply(p.lead, OLD_LIES, "¿entonces cómo se paga al final?")
-        assert r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
+        # 2026-10-23: на «¿cómo se paga?» — «¿tarjeta o transferencia?» (решение владелицы)
+        assert r["messages"] == [rag.PAYMENT_QUESTION]
 
     async def test_anya_promise_goes_to_anya(self, monkeypatch):
         hist = [msg("anna", "Te guardo un lugar hasta el viernes si me confirmas hoy.", 30, manual=True)]
@@ -1492,7 +1494,14 @@ class TestLiveRun2Fixes:
 
 # ───────── логика разговора (решение владелицы 2026-10-22, тексты живого прогона 2) ─────────
 
-GREETING_EVENT = BY_ID["greeting_event"]["contenido_es"].split("\n\n")
+# Приветствие ивента ДО анкеты одним сообщением (до 2026-10-23): у лидов, начавших переписку
+# раньше, в истории именно оно — логика слотов по одному вопросу для них остаётся.
+GREETING_EVENT = ["Hola, soy Anna, fundadora de Match Match Agency 🤍",
+                  "El [event_date] tenemos Slavic-Latino Connect Night en [event_address]: una noche "
+                  "para conocer en persona a mujeres eslavas solteras que buscan una relación seria. "
+                  "Esta vez es temática de Halloween.",
+                  "¿Cómo te llamas y estás soltero?"]
+GREETING_EVENT_NEW = BY_ID["greeting_event"]["contenido_es"].split("\n\n")
 RUN2_BASE = ([msg("lead", "hola, vi el evento", 30)] + [msg("anna", b, 29) for b in GREETING_EVENT]
              + [msg("lead", "Me llamo Carlos y sí, estoy soltero", 25),
                 msg("anna", "¡Qué bien, Carlos! ¿Tienes alguna duda sobre el evento?", 24)])
@@ -1726,7 +1735,9 @@ class TestVentaTrasFoto:
         assert p.model_calls() == []
         assert r["action"] == "respond"
         # сводка одной фразой; Хеллоуин уже был в приветствии — его не добавляем
-        assert r["messages"] == ["¡Gracias por tu foto, Carlos! 😊",
+        # 2026-10-23: благодарность по очереди, как у Ани
+        assert r["messages"][0] in ("¡Muchas gracias! 😊", "¡Gracias, Carlos! 😊", "¡Qué bien, gracias! 😊")
+        assert r["messages"][1:] == [
                                  "Te espero el [event_date] a las [event_start] en [event_address], con bebida de bienvenida y botanas.",
                                  "Aquí puedes apartar tu lugar: [event_link]"]
         assert not any("?" in m for m in r["messages"])
@@ -1740,7 +1751,8 @@ class TestVentaTrasFoto:
         assert p.model_calls() == []
         # прогон 4: было только «Empieza a las 8:30 PM.» — теперь сводка целиком, без повтора
         # Хеллоуина (он был в приветствии), хотя дата, место и «что входит» уже звучали
-        assert r["messages"] == ["¡Gracias por tu foto, Javier! 😊",
+        assert r["messages"][0] in ("¡Muchas gracias! 😊", "¡Gracias, Javier! 😊", "¡Qué bien, gracias! 😊")
+        assert r["messages"][1:] == [
                                  "Te espero el [event_date] a las [event_start] en [event_address], con bebida de bienvenida y botanas.",
                                  "Aquí puedes apartar tu lugar: [event_link]"]
         assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
@@ -2071,7 +2083,8 @@ async def test_run9_d12_como_se_paga_is_purchase(monkeypatch):
                                                         "interest": "event"})
     r = await rag.generate_reply(p.lead, OLD_LIES, "¿y cómo se paga el boleto, como me dijiste?")
     assert p.model_calls() == []
-    assert r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
+    # 2026-10-23: сначала «¿tarjeta o transferencia?», ссылка — после выбора карты
+    assert r["messages"] == [rag.PAYMENT_QUESTION]
     assert "OXXO" not in " ".join(r["messages"])
     assert rag.wants_to_buy("¿cómo se paga?", None)
 
@@ -2290,7 +2303,8 @@ class TestYesNoAndDomain:
     async def test_pipeline_card_in_tarjeta_question_silent_before_model(self, monkeypatch):
         p = Pipe(monkeypatch, history=RUN2_BASE, lead_extra=CARLOS)
         r = await rag.generate_reply(p.lead, RUN2_BASE, "¿Aceptan tarjeta?")
-        assert r["action"] == "silent" and p.model_calls() == []
+        # 2026-10-23: «¿tarjeta o transferencia?» без модели (решение владелицы)
+        assert r["messages"] == [rag.PAYMENT_QUESTION] and p.model_calls() == []
 
     @pytest.mark.asyncio
     async def test_pipeline_confirmed_yes_passes(self, monkeypatch):

@@ -128,67 +128,52 @@ def all_text(r):
 
 @pytest.mark.asyncio
 async def test_a_event_path_photo_turn(monkeypatch):
-    """(а) «hola» → «Me interesa el evento» → имя и «soltero» → фото одобрено → шаг после фото
-    целиком, без модели и без повторной просьбы о фото."""
+    """(а) «hola» → «Me interesa el evento» → анкета одним сообщением → «Me llamo Luis, soy
+    soltero» → недостающее одним сообщением → фото одобрено → шаг к покупке (2026-10-23)."""
     d = Dialog(monkeypatch)
     r = await d.say("hola")
     assert r["messages"][0] == S1[0] and d.model_calls == []
 
-    # модель не извлекла interest (как в проде) — код определяет и сохраняет его сам
-    d.models["Me interesa el evento"] = model(
-        ["Es una noche para conocer en persona a mujeres eslavas solteras que buscan una relación seria."],
-        paso="¿Cómo te llamas y estás soltero?")
     r = await d.say("Me interesa el evento")
-    assert d.lead.get("interest") == "event"
-    assert all_text(r)[-1] == "¿Cómo te llamas y estás soltero?"
+    assert d.model_calls == [] and d.lead.get("interest") == "event"
+    assert all_text(r)[-1] == rag.cuestionario.COMPOUND_EVENT
 
-    d.models["Me llamo Luis, soy soltero"] = model(["¡Gracias, Luis! 😊"],
-                                                   extracted={"name": "Luis", "is_single": True})
     r = await d.say("Me llamo Luis, soy soltero")
+    assert d.model_calls == []
     assert d.lead["name"] == "Luis" and d.lead["is_single"] is True
-    assert all_text(r) == ["¡Gracias, Luis! 😊", "¿Cuántos años tienes y a qué te dedicas?"]
+    t = all_text(r)
+    assert len(t) == 1 and "Me falta saber cuántos años tienes y a qué te dedicas" in t[0]
+    assert "buscas una relación seria" in t[0] and "2 o 3 fotos" in t[0]
 
     calls = len(d.model_calls)
     r = await d.say("", photo=True)
     assert len(d.model_calls) == calls, "шаг после фото — без модели"
-    assert r["rag_meta"]["fuentes"] == ["venta_tras_foto"]
     m = r["messages"]
-    assert m[0] == "¡Gracias por tu foto, Luis! 😊"
+    assert m[0] in ("¡Muchas gracias! 😊", "¡Gracias, Luis! 😊", "¡Qué bien, gracias! 😊")
     assert m[1].startswith("Te espero el [event_date] a las [event_start] en [event_address]")
     assert m[2] == "Aquí puedes apartar tu lugar: [event_link]"
     assert r["send_event_video"] is True and r["send_event_photo"] is True
-    # возраст и профессию спросили ходом раньше — не повторяем (решение 2026-10-23)
     assert r["after_media"] == []
     assert not any("foto tuya" in x for x in all_text(r))
 
-
 @pytest.mark.asyncio
 async def test_a2_prod_order_age_before_photo(monkeypatch):
-    """Порядок как у Арины в проде: имя → возраст и профессия → фото. Интерес назван один раз."""
+    """Анкета одним сообщением; данные частями: имя и «холост» → недостающее один раз →
+    возраст и профессия → только «спасибо», без повторных вопросов → фото → покупка."""
     d = Dialog(monkeypatch)
     await d.say("Hola")
-    d.models["Me interesa el evento"] = model(
-        ["Es una noche para conocer en persona a mujeres eslavas solteras que buscan una relación seria."],
-        paso="¿Cómo te llamas y estás soltero?")
     await d.say("Me interesa el evento")
-    d.models["Luis, sí soy soltero"] = model(["¡Gracias, Luis! 😊"], extracted={"name": "Luis", "is_single": True},
-                                             paso="¿Cuántos años tienes y a qué te dedicas?")
-    await d.say("Luis, sí soy soltero")
-    d.models["35, soy abogado"] = model(
-        ["¡Gracias, Luis! 😊", "Para apartar tu lugar solo falta una foto tuya, puede ser tipo selfie y reciente.",
-         "¿Podrías mandarme una foto tuya? Solo la reviso."],
-        extracted={"age": "35", "profession": "abogado"})
+    r = await d.say("Luis, sí soy soltero")
+    assert "Me falta saber" in all_text(r)[0]
     r = await d.say("35, soy abogado")
-    assert d.lead["age"] == 35
-    assert all_text(r) == ["¡Gracias, Luis! 😊", "¿Podrías mandarme una foto tuya?"]
-
+    assert d.lead["age"] == 35 and d.lead["profession"] == "abogado"
+    assert len(all_text(r)) == 1 and "?" not in all_text(r)[0] and "falta" not in all_text(r)[0]
     calls = len(d.model_calls)
     r = await d.say("", photo=True)
-    assert len(d.model_calls) == calls and r["rag_meta"]["fuentes"] == ["venta_tras_foto"]
+    assert len(d.model_calls) == calls
     assert "Aquí puedes apartar tu lugar: [event_link]" in r["messages"]
-    assert r["after_media"] == []                      # возраст и профессия уже есть
+    assert r["after_media"] == []
     assert not any("foto tuya" in x for x in all_text(r))
-
 
 @pytest.mark.asyncio
 async def test_b_buy_without_photo_link_at_once(monkeypatch):
@@ -216,29 +201,24 @@ async def test_b2_buy_without_name(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_c_service_path(monkeypatch):
-    """(в) услуга: «hola» → «quiero conocer mujeres» → имя → возраст → профессия → фото → цена."""
+    """(в) услуга: «hola» → «quiero conocer mujeres rusas» → описание услуги и анкета одним
+    сообщением (без фразы про Россию/Украину) → данные → фото → питч с ценой (2026-10-23)."""
     d = Dialog(monkeypatch)
     await d.say("hola")
-    d.models["quiero conocer mujeres rusas"] = model(
-        ["Como matchmaker personal, te presento a mujeres eslavas que buscan una relación seria."],
-        paso="¿Cómo te llamas y estás soltero?")
     r = await d.say("quiero conocer mujeres rusas")
     assert d.lead.get("interest") == "agency"
-    d.models["Luis, soy soltero"] = model(["¡Gracias, Luis! 😊"], extracted={"name": "Luis", "is_single": True})
+    assert all_text(r)[-1] == rag.cuestionario.COMPOUND_SERVICE
     r = await d.say("Luis, soy soltero")
-    assert all_text(r)[-1] == "¿Cuántos años tienes y a qué te dedicas?"
-    d.models["tengo 41"] = model(["¡Gracias! 😊"], extracted={"age": 41})
-    r = await d.say("tengo 41")
-    # ответил только возрастом — недостающую часть один раз сразу и коротко (2026-10-23)
-    assert all_text(r) == ["¡Gracias! 😊", "¿Y a qué te dedicas?"]
-    d.models["soy abogado"] = model(["¡Gracias! 😊"], extracted={"profession": "abogado"})
-    r = await d.say("soy abogado")
-    assert all_text(r)[-1] == "¿Me mandas una foto tuya?"
+    t = all_text(r)
+    assert len(t) == 1 and "Me falta saber cuántos años tienes y a qué te dedicas" in t[0]
+    assert "relación seria" not in t[0]
+    r = await d.say("tengo 41, soy abogado")
+    assert d.lead["age"] == 41 and d.lead["profession"] == "abogado"
+    assert "?" not in all_text(r)[0]
     r = await d.say("", photo=True)
     assert r["rag_meta"]["fuentes"] == ["service_pitch"]
     assert any("10,000 USD" in x for x in r["messages"])
     assert not any("[event_link]" in x for x in all_text(r))
-
 
 @pytest.mark.asyncio
 async def test_d_age_profession_answer(monkeypatch):

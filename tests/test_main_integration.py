@@ -152,7 +152,8 @@ class TestHandleIncoming:
         assert args.kwargs["external_message_id"] == "wa_msg-001"
         assert args.kwargs["meta"] == {"content_type": "text"}
 
-        mock_debouncer.trigger.assert_awaited_once_with("wa_521234567890")
+        # 2026-10-23: окно 60 с, потолок 180 (текст)
+        mock_debouncer.trigger.assert_awaited_once_with("wa_521234567890", 60.0, 180.0)
 
     async def test_duplicate_insert_false_no_trigger(
         self, monkeypatch, mock_debouncer, mock_upsert_lead, mock_touch_inbound
@@ -271,7 +272,8 @@ class TestHandleIncoming:
         insert_mock.assert_awaited_once()
         meta_arg = insert_mock.call_args.kwargs["meta"]
         assert meta_arg == {"content_type": "photo", "content_uri": "https://cdn.wazzup24.com/media/photo.jpg"}
-        mock_debouncer.trigger.assert_awaited_once_with("wa_529998887777")
+        # 2026-10-23: фото — окно 90 с, потолок 240
+        mock_debouncer.trigger.assert_awaited_once_with("wa_529998887777", 90.0, 240.0)
 
     # --- Новые тесты: FK-регрессия и порядок вызовов ---
 

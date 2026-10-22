@@ -28,7 +28,9 @@ TIPOS = {"event", "service", "tariff", "faq", "objection", "policy", "style", "s
 TOKENS = {"[event_date]", "[event_start]", "[event_address]", "[event_price_nonmember]",
           "[event_price_next]", "[event_link]", "[course_link]", "[horario_llamada]",
           # 2026-10-22: зачёркнутая старая цена, срок предпродажи, день недели ивента
-          "[event_promo]", "[event_presale_until]", "[event_weekday]"}
+          "[event_promo]", "[event_presale_until]", "[event_weekday]",
+          # 2026-10-23: фраза темы ивента из настроек (пусто — без фразы)
+          "[event_theme_phrase]"}
 # Любая ссылка: токен билета, http(s), www., домен .com/.mx (code-review: www.… проходил мимо).
 LINK_RE = re.compile(r"\[event_link\]|https?://|\bwww\.|\b[\w-]+\.(?:com|mx)\b", re.IGNORECASE)
 EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
@@ -78,7 +80,10 @@ def test_emoji_limits(r):
     Исключение — greeting_hola: сценарий №1 дословно с 🤍 😉 ❤️ (решение владелицы 2026-10-22)."""
     if r["id"] == "greeting_hola":
         return
+    import cuestionario
     for t in _lead_facing(r):
+        # 2026-10-23: 🤍 анкеты одним сообщением — утверждённое исключение из лимита
+        t = "\n\n".join(b for b in t.split("\n\n") if not cuestionario.es_compuesta(b))
         assert len(EMOJI_RE.findall(t)) <= 2, f"{r['id']}: {t}"
         for bubble in t.split("\n\n"):
             assert len(EMOJI_RE.findall(bubble)) <= 1, f"{r['id']}: {bubble}"
@@ -240,7 +245,9 @@ def test_objections_without_praise():
 
 def test_greeting_service_asks_directly():
     t = next(r for r in RECORDS if r["id"] == "greeting_service")["contenido_es"]
-    assert t.split("\n\n")[-1] == "¿Cómo te llamas y estás soltero?"
+    import cuestionario
+    # 2026-10-23: анкета одним сообщением (как пишет Аня), без вопроса про Россию/Украину
+    assert t.split("\n\n")[-1] == cuestionario.COMPOUND_SERVICE
 
 
 def test_end_time_only_approximate():

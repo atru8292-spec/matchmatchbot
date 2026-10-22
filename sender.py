@@ -12,6 +12,7 @@ typing-статуса у Wazzup нет — только задержка. Усп
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import random
 import re
@@ -417,6 +418,34 @@ def service_text_reason(text: str) -> str | None:
     return None
 
 
+# Проверка «лид написал ещё раз, пока бот отвечает» для текущей обработки (ставит main на время
+# разбора залпа; вне разбора — всегда False). ContextVar: у каждой обработки своя.
+_interrupt_check: contextvars.ContextVar = contextvars.ContextVar("interrupt_check", default=None)
+_interrupt_hit: contextvars.ContextVar = contextvars.ContextVar("interrupt_hit", default=None)
+
+
+def set_interrupt_check(fn) -> None:
+    """Включить проверку прерывания для текущей обработки (fn() → True: пришло новое)."""
+    _interrupt_check.set(fn)
+    _interrupt_hit.set([False])
+
+
+def interrupted() -> bool:
+    """Пришло новое сообщение лида во время текущей обработки (и запомнить это)."""
+    hit = _interrupt_hit.get()
+    if hit and hit[0]:
+        return True
+    fn = _interrupt_check.get()
+    try:
+        now = bool(fn and fn())
+    except Exception:
+        logger.exception("sender: проверка прерывания упала — продолжаю отправку")
+        now = False
+    if now and hit is not None:
+        hit[0] = True
+    return now
+
+
 async def send(phone: str, messages: list, allow_repeat_links: bool = False) -> int:
     """Отправить бабблы лиду последовательно с задержками. Вернуть число отправленных.
 
@@ -440,8 +469,14 @@ async def send(phone: str, messages: list, allow_repeat_links: bool = False) -> 
         clean.append(text)
     bubbles = clean
     sent = 0
-    for text in bubbles:
+    for i, text in enumerate(bubbles):
         await asyncio.sleep(compute_delay(text))
+        # Лид написал ещё раз, пока бот отвечал: устаревшие пузыри не шлём, уже ушедшие —
+        # в истории; новый разбор возьмёт их в память (решение владелицы 2026-10-23).
+        if interrupted():
+            logger.info("отправка прервана [%s]: пришло новое сообщение лида — не шлю %d из %d",
+                        phone, len(bubbles) - i, len(bubbles))
+            break
         ok = await send_one(chat_id, text)
         if ok:
             sent += 1

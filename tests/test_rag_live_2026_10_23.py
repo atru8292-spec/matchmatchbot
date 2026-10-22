@@ -40,12 +40,13 @@ def no_sleep(monkeypatch):
 
 
 async def _to_name_question(d):
+    """Переписка, начатая до анкеты одним сообщением (2026-10-23): бот спросил имя отдельно —
+    правила «один вопрос один раз» для таких лидов остаются."""
     await d.say("hola")
-    d.models["Me interesa el evento"] = model(
-        ["Es una noche para conocer en persona a mujeres eslavas solteras que buscan una relación seria."],
-        paso=NAME_Q)
-    r = await d.say("Me interesa el evento")
-    assert all_text(r)[-1] == NAME_Q
+    d._add("lead", "Me interesa el evento")
+    d._add("anna", "Es una noche para conocer en persona a mujeres eslavas solteras que buscan una relación seria.")
+    d._add("anna", NAME_Q)
+    d.lead["interest"] = "event"
 
 
 # ───────────────────────── 1. вопрос один раз ─────────────────────────
