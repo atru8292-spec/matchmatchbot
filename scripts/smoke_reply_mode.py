@@ -46,12 +46,13 @@ NOW = datetime.now(timezone.utc)
 LINK = "https://www.rusaencdmx.com/18-11-26-slavic-latino-night-halloween"
 EVENT_SETTINGS = {
     "event_active": "1", "event_date": "2026-11-18", "event_time": "8:30 PM",
-    "event_start": "8:30 PM", "event_end": "12:00 AM", "event_address": "Polanco, CDMX",
-    "event_price_member": "", "event_price_nonmember": "6000", "event_price_next": "7000",
-    "event_price_old": "", "event_link": LINK, "bot_paused": "0",
+    "event_start": "8:30 PM", "event_end": "12:00 AM", "event_address": "Roma Norte, CDMX",
+    "event_price_member": "", "event_price_nonmember": "6000", "event_price_next": "",
+    # автоответ владелицы 2026-10-22: preventa 6,000, зачёркнутая 9,000, без лестницы цен
+    "event_price_old": "9,000", "event_link": LINK, "bot_paused": "0",
 }
 ANNOUNCED = "2026-10-20T17:45:22+00:00"
-# Настройки конкретного диалога поверх EVENT_SETTINGS (диалог 15: пустая следующая цена).
+# Настройки конкретного диалога поверх EVENT_SETTINGS (диалог 15: без зачёркнутой цены).
 OVERRIDE: dict = {}
 # Сбой OpenAI посреди диалога (диалог 14): сколько следующих вызовов чата rag уронить.
 FAIL_NEXT = {"n": 0}
@@ -65,14 +66,14 @@ GREETING_EVENT = [b for b in knowledge.load_seed()
                   if b["id"] == "greeting_event"][0]["contenido_es"].split("\n\n")
 
 
-def M(sender_, text, minutes_ago, manual=False):
+def M(sender_, text, minutes_ago, manual=False, meta=None):
     return {"sender": sender_, "direction": "inbound" if sender_ == "lead" else "outbound",
             "text": text, "created_at": NOW - timedelta(minutes=minutes_ago),
-            "meta": {"manual": True} if manual else {}}
+            "meta": meta or ({"manual": True} if manual else {})}
 
 
 def _rendered(bubbles):
-    return [b.replace("[event_date]", "18 de noviembre de 2026").replace("[event_address]", "Polanco, CDMX")
+    return [b.replace("[event_date]", "18 de noviembre").replace("[event_address]", "Roma Norte, CDMX")
             for b in bubbles]
 
 
@@ -95,6 +96,11 @@ MESSAGES = [
 DAY = 24 * 60
 # Как в main.py: фото прошло проверку → photo_received=True и маркер в тексте для AI.
 PHOTO_OK = "[фото одобрено]"
+# Фото с подписью: main.py сначала прогоняет подпись через filters.decide и темы «молча Ане».
+PHOTO_CAPTION = "[фото с подписью] "
+AUTO_GREETING = ("👉 ¡Bienvenido a Match Match Agency! ✨\n\nEstamos organizando un evento exclusivo "
+                 "para solteros: SLAVIC LATINO CONNECT NIGHT, Miércoles 18 de Noviembre, $6,000 MXN "
+                 "PREVENTA, Roma Norte, CDMX.")
 DIALOGS = [
     # Ссылка на ивент — только после одобренного фото (решение владелицы 2026-10-22).
     ("1. Ивент с нуля: покупка до фото, потом фото", [], {}, [
@@ -142,16 +148,26 @@ DIALOGS = [
      BASE_LEAD, ["¿al final cuántas mujeres van?", "¿y cómo se paga el boleto, como me dijiste?"]),
     ("13. Без фото после двух просьб, хочет купить",
      BASE_EVENT + [M("anna", "¿Me mandas una foto tuya?", 20), M("lead", "¿dónde es?", 15),
-                   M("anna", "Es en Polanco, CDMX. ¿Me mandas una foto tuya?", 14)],
+                   M("anna", "Es en Roma Norte, CDMX. ¿Me mandas una foto tuya?", 14)],
      {**BASE_LEAD, "age": 38, "profession": "ingeniero"}, ["¿cómo compro el boleto?"]),
     ("14. Сбой OpenAI посреди диалога", BASE_EVENT, BASE_LEAD,
      ["¿qué incluye?", FAIL_MARK + "¿a qué hora empieza?", "¿hay que ir disfrazado?"]),
-    ("15. Пустая следующая ступень цены", BASE_EVENT, BASE_LEAD, ["¿cuánto cuesta?"],
-     {"event_price_next": ""}),
+    ("15. Без зачёркнутой старой цены", BASE_EVENT, BASE_LEAD, ["¿cuánto cuesta?"],
+     {"event_price_old": ""}),
     ("16. Игнорирует вопрос о возрасте, три вопроса подряд",
-     BASE_EVENT + [M("anna", "Es en Polanco, CDMX.", 10),
+     BASE_EVENT + [M("anna", "Es en Roma Norte, CDMX.", 10),
                    M("anna", "¿Cuántos años tienes y a qué te dedicas?", 10)],
      BASE_LEAD, ["¿qué incluye?", "¿hay que ir disfrazado?", "¿a qué hora empieza?"]),
+    # Решения владелицы 2026-10-22: новое приветствие, автоприветствие, факты из автоответа.
+    ("17. Голое «Hola» → ивент → имя", [], {}, ["Hola", "el evento", "me llamo Pedro, sí soltero"]),
+    ("18. «Hola» после автоприветствия WhatsApp",
+     [M("anna", AUTO_GREETING, 1, meta={"source": "auto_greeting"})], {}, ["Hola", "el evento"]),
+    ("19. Сколько людей и сколько стоит", BASE_EVENT, BASE_LEAD,
+     ["¿cuántas personas van?", "¿cuánto cuesta?"]),
+    ("20. Фото с подписью «voy con mi novia»", BASE_EVENT, BASE_LEAD,
+     [PHOTO_CAPTION + "voy con mi novia"]),
+    ("21. Оплата картой", BASE_EVENT, BASE_LEAD, ["¿Aceptan tarjeta?"]),
+    ("22. Хочет пойти, но дорого", BASE_EVENT, BASE_LEAD, ["Me gustaría ir pero está muy caro"]),
 ]
 
 # ───────────────────────── бюджет и заглушки ─────────────────────────
@@ -261,13 +277,14 @@ def judge(bubbles: list[str], lead_text: str, presented_before: bool,
         out.append("повторная презентация")
     if re.search(r"medianoche|12:00|único", text, re.I):
         out.append("неподтверждённый факт")
-    if re.search(r"~|(?<!\d)8,?000(?!\d)", text):
-        out.append("зачёркнутая/8000")
+    # лестницы цен нет; зачёркнутая — только «~9,000 MXN~» (автоответ владелицы 2026-10-22)
+    if re.search(r"(?<!\d)[78],?000(?!\d)", text):
+        out.append("старая лестница цен")
+    if "~" in text.replace(f"~{ev().get('event_price_old')} MXN~", ""):
+        out.append("зачёркнутая не та")
     for slot in memory.SLOT_QUESTION_RE:
         if memory.pregunta_slot(slot, prev_reply) and memory.pregunta_slot(slot, text):
             out.append(f"вопрос слота подряд: {slot}")
-    if re.search(r"(?<!\d)7,?000(?!\d)", text) and "Más adelante el precio sube a" not in text:
-        out.append("следующая цена обрывком")
     if re.search(r"\[[a-z_]+\]", text):
         out.append("неподставленный токен")
     # Факт про ивент без вопроса лида (кроме приветствия, хода с фото и ответа со ссылкой).
@@ -308,7 +325,15 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
     link_before = any(LINK in (m["text"] or "") for m in L.history if m["sender"] == "anna")
     buying = bool(_PURCHASE.search(text)) or (not link_before and any(
         _PURCHASE.search(m["text"] or "") for m in L.history if m["sender"] == "lead"))
-    if text == PHOTO_OK:
+    if text.startswith(PHOTO_CAPTION):
+        caption = text[len(PHOTO_CAPTION):]
+        d = filters.decide(L.lead, False, caption, L.phone, frozenset(), bot_paused=False)
+        if d.action != "needs_ai" or rag._SILENT_TOPIC_RE.search(caption):
+            L.history.append(M("lead", caption, 0))
+            return {"decision": d.action if d.action != "needs_ai" else "silent_topic",
+                    "bubbles": [], "violations": [], "usd": 0.0}
+        text = f"{caption}\n\n{PHOTO_OK}"
+    if text.endswith(PHOTO_OK):
         L.lead["photo_received"] = True          # main.py ставит флаг до вызова AI
         # фото одобрено, имя и «холост ли» есть — ход сразу ведёт к покупке (решение 2026-10-22)
         buying = buying or bool(L.lead.get("name") and L.lead.get("is_single") is True)
@@ -328,7 +353,8 @@ async def one_turn(mode: str, L: Lead, text: str, spend: Spend) -> dict:
     FAIL_NEXT["n"] = 0
     bubbles = await sender.render_bubbles(r.get("messages") or [], None, True)
     after = await sender.render_bubbles(r.get("after_media") or [], None, True)
-    presented = any(m["sender"] == "anna" for m in L.history[:-1])
+    presented = any(m["sender"] == "anna" and (m.get("meta") or {}).get("source") != "auto_greeting"
+                    for m in L.history[:-1])
     for b in bubbles:
         L.history.append(M("anna", b, 0))
     # Порядок, как шлёт main.py: rag — текст, видео, фото, вопрос; legacy — текст, фото, видео.

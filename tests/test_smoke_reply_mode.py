@@ -14,9 +14,11 @@ def test_judge_flags():
 
 
 def test_plan_sizes():
-    assert len(s.MESSAGES) == 13 and len(s.DIALOGS) == 16
-    assert s.EVENT_SETTINGS["event_price_old"] == ""      # без зачёркнутой «было»
-    assert s.EVENT_SETTINGS["event_price_next"] == "7000"
+    assert len(s.MESSAGES) == 13 and len(s.DIALOGS) == 22
+    # автоответ владелицы 2026-10-22: зачёркнутая 9,000, лестницы цен нет, Roma Norte
+    assert s.EVENT_SETTINGS["event_price_old"] == "9,000"
+    assert s.EVENT_SETTINGS["event_price_next"] == ""
+    assert s.EVENT_SETTINGS["event_address"] == "Roma Norte, CDMX"
 
 
 def test_budget_is_base_exception():
@@ -27,7 +29,7 @@ def test_budget_is_base_exception():
 
 def test_judge_page_word_is_not_purchase_and_big_numbers():
     assert "ссылка без вопроса о покупке" in s.judge([s.LINK], "¿qué hay en la página?", False)
-    assert "зачёркнутая/8000" not in s.judge(["Son 18,000 personas"], "x", False)
+    assert "старая лестница цен" not in s.judge(["Son 18,000 personas"], "x", False)
 
 
 def test_judge_photo_gate():
@@ -48,15 +50,20 @@ def test_judge_owner_rules_2026_10_22():
     prev = "Es en Roma Norte.\n\n¿Cuántos años tienes y a qué te dedicas?"
     assert "вопрос слота подряд: age" in s.judge(["Incluye botanas.", "¿Cuántos años tienes?"],
                                                  "¿qué incluye?", True, prev_reply=prev)
-    assert "следующая цена обрывком" in s.judge(["La siguiente es de 7000 MXN."], "¿cuánto?", True)
-    assert s.judge(["Ahora cuesta 6000 MXN. Más adelante el precio sube a 7000 MXN."], "¿cuánto?", True) == []
+    assert "старая лестница цен" in s.judge(["La siguiente es de 7000 MXN."], "¿cuánto?", True)
+    assert s.judge(["El precio de preventa es de 6000 MXN ~9,000 MXN~."], "¿cuánto?", True) == []
+    assert "зачёркнутая не та" in s.judge(["Ahora 6000 MXN ~8,500 MXN~."], "¿cuánto?", True)
     assert "неподставленный токен" in s.judge(["sube a [event_price_next] MXN"], "x", True)
 
 
 def test_new_dialogs_present():
     titles = [d[0] for d in s.DIALOGS]
     assert any("выдумками" in t for t in titles) and any("Сбой OpenAI" in t for t in titles)
-    assert [d for d in s.DIALOGS if d[0].startswith("15.")][0][4] == {"event_price_next": ""}
+    assert [d for d in s.DIALOGS if d[0].startswith("15.")][0][4] == {"event_price_old": ""}
+    titles = " ".join(d[0] for d in s.DIALOGS)
+    for need in ("Голое «Hola»", "автоприветствия", "Сколько людей", "voy con mi novia",
+                 "картой", "дорого"):
+        assert need in titles, need
     assert any(t.startswith(s.FAIL_MARK) for d in s.DIALOGS for t in d[3])
 
 
