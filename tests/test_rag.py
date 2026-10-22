@@ -1756,10 +1756,18 @@ class TestVentaTrasFoto:
         r = await rag.generate_reply(p.lead, RUN2_BASE, "[фото одобрено]")
         assert r["after_media"] == []
 
-    async def test_no_question_when_ignored_last_time(self, monkeypatch):
+    async def test_photo_after_age_question_still_asks_once_more(self, monkeypatch):
+        """2026-10-22: фото в ответ на вопрос о возрасте — ответ лида, не игнор: вопрос
+        последним пузырём. Но после двух попыток — больше не спрашиваем."""
         history = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 5)]
         p = Pipe(monkeypatch, history=history, lead_extra={**CARLOS, "photo_received": True})
         r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
+        assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
+        twice = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 8),
+                             msg("lead", "ok", 7),
+                             msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 5)]
+        p = Pipe(monkeypatch, history=twice, lead_extra={**CARLOS, "photo_received": True})
+        r = await rag.generate_reply(p.lead, twice, "[фото одобрено]")
         assert r["after_media"] == []
 
     async def test_media_not_repeated(self, monkeypatch):

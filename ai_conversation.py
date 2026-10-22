@@ -253,6 +253,20 @@ def has_question(text: str) -> bool:
     return "?" in text or "¿" in text or bool(_QUESTION_WORD_RE.search(text))
 
 
+def interes_en_extracted(result: dict, lead: dict, user_text: str) -> None:
+    """Интерес лида (ивент или услуга), названный в сообщении, сохраняется кодом во всех
+    путях ответа — готовых ходах, модели, молчании (main пишет extracted в лида). Модель его
+    извлекает не всегда: прод 2026-10-22, «Me interesa el evento» не сохранилось, и после фото
+    бот не понял, что лид про ивент."""
+    if lead.get("interest"):
+        return
+    ex = result.get("extracted")
+    if not isinstance(ex, dict):
+        ex = result["extracted"] = {}
+    if not ex.get("interest") and interes_de(user_text) in ("event", "agency"):
+        ex["interest"] = interes_de(user_text)
+
+
 def interes_de(text: str) -> str:
     if _EVENT_INTEREST_RE.search(text or ""):
         return "event"
@@ -1619,8 +1633,9 @@ def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict 
     if not caption_only_self_data(rest):
         return None             # в подписи вопрос или что-то кроме данных о себе — модель
     ruta = memory.ruta(lead, user_text)
+    desde_historia = False
     if ruta == "sin_definir" and any(interes_de(t) == "event" for t in (mem.get("lead_texts") or [])[-10:]):
-        ruta = "evento"     # интерес к ивенту назван раньше, но не сохранился (прод 2026-10-22)
+        ruta, desde_historia = "evento", True   # назван раньше, но не сохранился (прод 2026-10-22)
     if ruta != "evento" or ya.get("enlace_enviado") \
             or ya.get("boleto_comprado") or settings.get("event_active") != "1" \
             or not (settings.get("event_link") or "").strip():
@@ -1633,10 +1648,13 @@ def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict 
     if story:
         bubbles.append(story)
     bubbles.append(CTA_LINK)
-    # Вопрос — только возраст/профессия, если их нет и он не остался без ответа в прошлый раз.
-    cal = memory.calificacion(lead, ya, user_text, mem.get("ultimo_mensaje_anna"))
+    # Вопрос — возраст/профессия, если их нет. Фото в ответ на вопрос о возрасте — это ответ
+    # лида, а не игнор: спрашиваем последним пузырём (решение 2026-10-22). Больше двух раз
+    # одно и то же не спросим — это держит счётчик попыток в calificacion.
+    cal = memory.calificacion(lead, ya, user_text, None)
     question = slot_question(cal) if cal.get("siguiente") in ("age", "profession") else None
     return _result(bubbles, funnel_stage="qualified",
+                   extracted={"interest": "event"} if desde_historia else {},
                    send_event_video=not ya.get("video_enviado"),
                    send_event_photo=not ya.get("foto_enviada") and media_fits(mem),
                    after_media=[question] if question else [])
@@ -1785,6 +1803,7 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
         result = _silent(f"сбой режима rag ({type(e).__name__}) — ответь сама")
     finally:
         await _record_daily_cost(cost)
+    interes_en_extracted(result, lead, user_text)
     meta = result.setdefault("rag_meta", {})
     meta["usd"] = round(cost.usd, 5)
     meta["tokens"] = dict(cost.tokens)
@@ -1917,11 +1936,6 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
                        rag_meta=meta)
 
     meta["fuentes"] = out["fuentes"]
-    # Интерес назван в сообщении («me interesa el evento»), а модель его не извлекла — отмечаем
-    # кодом, иначе маршрут остаётся «не определён» (прод 2026-10-22).
-    if not lead.get("interest") and not out["extracted"].get("interest") \
-            and interes_de(user_text) in ("event", "agency"):
-        out["extracted"]["interest"] = interes_de(user_text)
     estado = dict(lead.get("rag_estado") or {})
     if out["en_tema"]:
         estado["fuera_de_tema_seguidos"] = 0
