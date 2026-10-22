@@ -140,6 +140,10 @@ ssh root@2.26.71.254 'systemctl is-active matchmatch-bot; curl -s http://127.0.0
 - [ ] (е) Аня выключает автоприветствие WhatsApp Business (в нём зачёркнутая 9000 и ссылка
   fillout). Бот его узнаёт и в ручной режим лида не переводит, но лид получает два приветствия.
 
+- [ ] (ж) После 18.11 фраза про Хэллоуин в приветствии на «hola» отключается сама по
+  `event_date` (дата по Мехико, `ai_conversation.halloween_activo`); проверить, что так и есть:
+  19.11 на «hola» уходит сценарий №1 без «Esta vez es temática de Halloween 🎃».
+
 Откат тестовых настроек ивента одним запросом:
 ```sql
 UPDATE app_settings SET value = CASE key WHEN 'event_active' THEN '0' ELSE '' END,
