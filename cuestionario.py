@@ -49,8 +49,10 @@ _SERIA_YES_RE = re.compile(r"relaci[oó]n\s+seria|algo\s+serio|eso\s+busco|eso\s
 # Явный отказ от серьёзных отношений — молча Ане (решение владелицы 2026-10-23).
 _SERIA_NO_RE = re.compile(r"no\s+busco\s+(?:nada\s+|una\s+|algo\s+)?(?:serio|relaci)|"
                           r"no\s+quiero\s+(?:nada\s+|una\s+|algo\s+)?(?:serio|relaci)|"
-                          r"nada\s+serio|algo\s+casual|\bcasual\b|sin\s+compromiso|"
+                          r"nada\s+serio|algo\s+casual|\bcasual\b|"
                           r"solo\s+(?:quiero\s+)?(?:sexo|algo\s+casual|una\s+noche)", re.IGNORECASE)
+# «no busco nada casual», «no quiero algo casual» — это «да» серьёзным отношениям
+_SERIA_NEG_CASUAL_RE = re.compile(r"\bno\s+(?:busco|quiero)\s+(?:nada|algo)?\s*casual", re.IGNORECASE)
 # Неясно («solo curiosidad», «no sé», «tal vez», голое «no»): тёплый ответ, информация об ивенте
 # и один мягкий возврат к анкете — не молчим (решение владелицы 2026-10-23).
 _SERIA_DUDA_RE = re.compile(r"curiosidad|\bno\s+s[eé]\b|tal\s+vez|quiz[aá]s?|depende|a\s+ver\s+qu[eé]|"
@@ -62,9 +64,20 @@ _SERIA_DUDA_RE = re.compile(r"curiosidad|\bno\s+s[eé]\b|tal\s+vez|quiz[aá]s?|d
 _SINGLE_YES_RE = re.compile(r"\bsolter|\bdivorciad|\bseparad|\bviud", re.IGNORECASE)
 _SINGLE_NO_RE = re.compile(r"\bcasado\b|tengo\s+(?:novia|esposa|pareja)|no\s+soy\s+soltero|"
                            r"comprometido|\bjuntado\b", re.IGNORECASE)
-_NAME_RE = re.compile(r"\b(?:me\s+llamo|mi\s+nombre\s+es|soy)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)", re.IGNORECASE)
-_AGE_RE = re.compile(r"(?<![\d$:.,])\b([2-9]\d)\b(?!\s*(?:mxn|pesos|usd|d[oó]lares|%|:\d|mujeres|personas))",
-                     re.IGNORECASE)
+# отрицание: «no tengo novia», «no estoy casado», «no soy casado» — холост (ревью 2026-10-23)
+_SINGLE_NEG_RE = re.compile(r"\bno\s+(?:tengo\s+(?:novia|esposa|pareja)|(?:estoy|soy)\s+(?:casado|"
+                            r"comprometido|juntado))", re.IGNORECASE)
+# Имя: «me llamo luis», «mi nombre es Luis», «soy Luis» (после «soy» — только с заглавной:
+# «soy mexicano», «soy muy serio» — не имя).
+_NAME_RE = re.compile(r"\b(?:(?i:me\s+llamo|mi\s+nombre\s+es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)|"
+                      r"(?i:soy)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+))")
+# Возраст — только явно: «tengo 35», «35 años» или число отдельной частью ответа («Luis, 35, …»);
+# не даты и не время («el 25 de octubre», «a las 20 hrs»).
+_AGE_EXPLICIT_RE = re.compile(r"\btengo\s+([2-9]\d)\b|\b([2-9]\d)\s*a[ñn]os\b", re.IGNORECASE)
+_AGE_PART_RE = re.compile(r"^\s*([2-9]\d)\s*$")
+# Профессия фразой: «trabajo en ventas», «me dedico a la construcción», «trabajo como chofer»
+_PROF_PHRASE_RE = re.compile(r"\b(?:trabajo\s+(?:en|como|de)|me\s+dedico\s+a)\s+(?:la\s+|el\s+|los\s+|las\s+)?"
+                             r"([a-záéíóúñ][a-záéíóúñ ]{2,40})", re.IGNORECASE)
 _PROFESSIONS = {
     "abogado", "abogada", "ingeniero", "ingeniera", "doctor", "doctora", "medico", "médico",
     "contador", "contadora", "arquitecto", "arquitecta", "empresario", "empresaria", "maestro",
@@ -77,14 +90,15 @@ _PROFESSIONS = {
     "plomero", "fotógrafo", "fotografo", "músico", "musico", "actor", "periodista", "publicista",
     "banquero", "financiero", "auditor", "estudiante", "jubilado", "pensionado", "independiente",
 }
-_PROFESSION_SUFFIX_RE = re.compile(r"(?:ero|era|ista|ólogo|ologo|óloga|ador|adora|ente|ario|aria|"
-                                   r"ico|ica|tor|tora)$", re.IGNORECASE)
+
 _STOP = {"sí", "si", "no", "eso", "busco", "claro", "soy", "tengo", "años", "anos", "y", "de", "en",
          "soltero", "divorciado", "separado", "viudo", "hola", "gracias", "también", "tambien",
          "bueno", "ok", "pues", "me", "llamo", "mi", "nombre", "es", "trabajo", "como", "un", "una",
          "relación", "relacion", "seria", "serio", "algo", "busco", "edad", "a", "dedico", "aquí",
          "aqui", "va", "listo", "perfecto", "casado", "comprometido", "viudo", "evento",
-         "interesa", "información", "informacion"}
+         "interesa", "información", "informacion", "que", "pero", "bien", "muy", "mucho",
+         "gusto", "quiero", "ir", "obviamente", "claramente", "totalmente", "actualmente",
+         "porque", "ahorita", "ahora", "igual", "todo", "nada"}
 
 
 def _parts(text: str) -> list[str]:
@@ -92,48 +106,70 @@ def _parts(text: str) -> list[str]:
 
 
 def _is_profession(word: str) -> bool:
-    w = word.lower()
-    return w in _PROFESSIONS or (w == word and bool(_PROFESSION_SUFFIX_RE.search(w)) and len(w) > 4)
+    return word.lower() in _PROFESSIONS
 
 
-def analizar(text: str) -> dict:
+def analizar(text: str, responde_cuestionario: bool = True) -> dict:
     """Что лид ответил на анкету. Ключи (None — не ответил):
-    is_single True/False, seria 'si'/'no'/'duda', name, age (int), profession."""
+    is_single True/False, seria 'si'/'no'/'duda', name, age (int), profession.
+    responde_cuestionario — последнее сообщение бота было анкетой или «Me falta saber»: тогда
+    «Sí, …» в начале — ответ на неё (иначе «sí» могло отвечать на другое)."""
     text = re.sub(r"\[фото[^\]]*\]", " ", text or "").strip()
     out: dict = {"is_single": None, "seria": None, "name": None, "age": None, "profession": None}
     if not text:
         return out
-    if _SINGLE_NO_RE.search(text):
-        out["is_single"] = False
-    elif _SINGLE_YES_RE.search(text) or _YES_START_RE.search(text):
+    yes_start = responde_cuestionario and bool(_YES_START_RE.search(text))
+    if _SINGLE_NEG_RE.search(text) or _SINGLE_YES_RE.search(text):
         out["is_single"] = True
-    if _SERIA_NO_RE.search(text):
+    elif _SINGLE_NO_RE.search(text):
+        out["is_single"] = False
+    elif yes_start:
+        out["is_single"] = True
+    if _SERIA_NEG_CASUAL_RE.search(text):
+        out["seria"] = "si"
+    elif _SERIA_NO_RE.search(text):
         out["seria"] = "no"
     elif _SERIA_DUDA_RE.search(text):
         out["seria"] = "duda"
-    elif _SERIA_YES_RE.search(text) or _YES_START_RE.search(text):
+    elif _SERIA_YES_RE.search(text) or yes_start:
         out["seria"] = "si"
-    m = _AGE_RE.search(text)
+    m = _AGE_EXPLICIT_RE.search(text)
     if m:
-        out["age"] = int(m.group(1))
+        out["age"] = int(m.group(1) or m.group(2))
     m = _NAME_RE.search(text)
-    if m and not _is_profession(m.group(1)) and m.group(1).lower() not in _STOP:
-        out["name"] = m.group(1).capitalize()
-    for part in _parts(text):
+    if m:
+        cand = m.group(1) or m.group(2)
+        if not _is_profession(cand) and cand.lower() not in _STOP:
+            out["name"] = cand.capitalize()
+    m = _PROF_PHRASE_RE.search(text)
+    if m:
+        out["profession"] = re.split(r"[,.;!?]| y ", m.group(1))[0].strip()
+    parts = _parts(text)
+    for idx, part in enumerate(parts):
+        if out["age"] is None and _AGE_PART_RE.match(part):
+            out["age"] = int(_AGE_PART_RE.match(part).group(1))
+            continue
+        if _PROF_PHRASE_RE.search(part) or _NAME_RE.search(part):
+            continue
+        # часть про «холост» или серьёзные отношения — не имя («no tengo novia», «nada serio»)
+        if any(rx.search(part) for rx in (_SINGLE_NEG_RE, _SINGLE_YES_RE, _SINGLE_NO_RE,
+                                          _SERIA_NO_RE, _SERIA_DUDA_RE, _SERIA_YES_RE)):
+            continue
         words = [w for w in re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]+", part)
-                 if w.lower() not in _STOP and not re.fullmatch(r"\d+", w)]
+                 if w.lower() not in _STOP]
         if not words:
             continue
         prof = [w for w in words if _is_profession(w)]
         if prof and not out["profession"]:
             out["profession"] = " ".join(words) if len(words) <= 3 else prof[0]
             continue
-        if not out["name"] and len(words) == 1 and words[0][0].isupper() and len(words[0]) > 1:
-            out["name"] = words[0]
+        if out["name"] or len(words) != 1 or prof:
             continue
-        if not out["name"] and len(words) == 1 and len(_parts(text)) >= 2 and words[0].isalpha() \
-                and not _is_profession(words[0]):
-            out["name"] = words[0].capitalize()      # «luis, 35, abogado»
+        w = words[0]
+        if w[0].isupper() and len(w) > 1:
+            out["name"] = w                          # «Luis», «Pedro»
+        elif idx == 0 and len(parts) >= 2 and len(w) > 2:
+            out["name"] = w.capitalize()             # «luis, 35, abogado»
     return out
 
 

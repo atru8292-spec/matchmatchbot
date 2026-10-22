@@ -101,7 +101,16 @@ async def _process_burst(phone: str) -> None:
     Пока идёт разбор, новое сообщение лида прерывает отправку устаревшего ответа (sender
     проверяет перед каждым пузырём); его разберёт следующий проход вместе с историей."""
     # ключ с циклом событий: asyncio.Lock на 3.9 привязан к циклу, где создан
-    lock = _burst_locks.setdefault((id(asyncio.get_running_loop()), phone), asyncio.Lock())
+    key = (id(asyncio.get_running_loop()), phone)
+    lock = _burst_locks.setdefault(key, asyncio.Lock())
+    try:
+        await _process_burst_locked(phone, lock)
+    finally:
+        if not lock.locked():
+            _burst_locks.pop(key, None)      # никто не ждёт — не копим блокировки
+
+
+async def _process_burst_locked(phone: str, lock: asyncio.Lock) -> None:
     async with lock:
         sender.set_interrupt_check(
             (lambda: debouncer.has_new(phone)) if debouncer is not None else None)
@@ -706,8 +715,16 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
     if sender.interrupted():
         # Лид написал ещё раз, пока бот отвечал: остаток ответа и медиа не шлём — новое
         # сообщение разберёт следующий проход с полной историей (уже ушедшее в ней есть).
+        # Передачу Ане (escalate) не теряем (ревью 2026-10-23).
         logger.info("ответ прерван новым сообщением [%s]: ушло %d из %d, медиа не шлю",
                     phone, sent, len(messages))
+        if action == "escalate" or result.get("needs_escalation"):
+            try:
+                await db.update_lead_fields(phone, mode="manual")
+            except Exception:
+                logger.exception("не смог поставить manual после эскалации [%s]", phone)
+            title = await db.get_scenario_title(result.get("used_scenario_id"))
+            await escalation.notify_escalation(lead, title or "Нужна твоя помощь", combined)
         return
     if sent == 0:
         # ИСПРАВЛЕНО (2026-08-06, аудит): если render_bubbles дропнул ВСЕ бабблы (напр.

@@ -2007,7 +2007,8 @@ _PAY_ASK_RE = re.compile(r"\btarjeta|transferencia|c[oó]mo\s+(?:te\s+|les\s+)?(
                          r"d[oó]nde\s+(?:pago|deposito)", re.IGNORECASE)
 _SERVICE_WORD_RE = re.compile(r"\bservicio|\bpaquete|membres[ií]a|\bcontrato", re.IGNORECASE)
 _PAY_CARD_RE = re.compile(r"\btarjeta|cr[eé]dito|d[eé]bito|\bcard\b", re.IGNORECASE)
-_PAY_TRANSFER_RE = re.compile(r"transferencia|transfer|dep[oó]sito|depositar|\bspei\b", re.IGNORECASE)
+_PAY_TRANSFER_RE = re.compile(r"transferencia|transfer|depositar|por\s+dep[oó]sito|"
+                              r"hacer\s+(?:un\s+|el\s+)?dep[oó]sito|\bspei\b", re.IGNORECASE)
 
 
 def pago_paso(lead: dict, mem: dict, user_text: str) -> dict | str | None:
@@ -2026,11 +2027,18 @@ def pago_paso(lead: dict, mem: dict, user_text: str) -> dict | str | None:
         return "transfer"               # перевод (и вопрос «¿puedo hacer transferencia?») — Ане
     if asked or not has_question(text):
         if card and not transfer and (asked or re.search(r"pag|compr|quiero|prefiero|con\s+tarjeta", text, re.IGNORECASE)):
-            settings, ya = mem["settings"], mem["ya_hecho"]
-            if memory.ruta(lead, text) == "servicio" or settings.get("event_active") != "1" \
-                    or not (settings.get("event_link") or "").strip():
-                return "transfer"          # услуга или нет ссылки — решает Аня
-            return _result([BUY_LINK, BUY_PAGE], send_event_video=not ya.get("video_enviado"))
+            settings = mem["settings"]
+            if settings.get("event_active") != "1" or not (settings.get("event_link") or "").strip():
+                return "transfer"          # нет ссылки — решает Аня
+            # ссылка — по тем же правилам, что «¿cómo compro?»: нужны имя и «холост»
+            compra = venta_por_compra({**lead, "interest": lead.get("interest") or "event"}, mem,
+                                      text + " boleto")
+            if compra:
+                return compra
+            ya = mem["ya_hecho"]
+            extra = [] if ya.get("cuestionario") is not None else [
+                cuestionario.pregunta_compuesta("evento", _foto(lead, text))]
+            return _result([BUY_ONLINE_SENTENCE] + extra)
     if has_question(text) and _PAY_ASK_RE.search(text):
         return _result([PAYMENT_QUESTION])
     return None
@@ -2093,7 +2101,8 @@ async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
         return None
     ruta = ya.get("cuestionario_ruta") or "evento"
     estado = dict(lead.get("rag_estado") or {})
-    r = cuestionario.analizar(user_text)
+    last = mem.get("ultimo_mensaje_anna") or ""
+    r = cuestionario.analizar(user_text, cuestionario.es_compuesta(last) or cuestionario.es_faltante(last))
     if r.get("seria"):
         estado["relacion_seria"] = r["seria"]
     extracted = {k: r[k] for k in ("name", "age", "profession", "is_single")
@@ -2166,8 +2175,12 @@ async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
                 return venta
     if falta and ya.get("faltante") is None:
         bubbles = [cuestionario.mensaje_faltante(falta, ruta, thanks)]
+    elif extracted or r.get("seria"):
+        bubbles = [thanks + " 😊"]           # дал новые данные — коротко спасибо
     else:
-        bubbles = [thanks + " 😊"]
+        # ничего нового («ok», «jaja»): не крутим «gracias», отвечает модель (без вопросов анкеты)
+        mem["cuestionario_modo"] = {"ruta": ruta, "falta": falta, "extra": extra, "pedir": False}
+        return None
     literal = _result(bubbles, funnel_stage="qualifying",
                       rag_meta={**meta, "fuentes": ["cuestionario"], "literal": True}, **extra)
     return await _literal_checked(literal, lead, "cuestionario", meta)

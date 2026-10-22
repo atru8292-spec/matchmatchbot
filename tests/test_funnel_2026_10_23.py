@@ -310,3 +310,60 @@ async def test_three_photos_one_answer(monkeypatch):
     await main._process_burst_impl("wa_1")
     photos.assert_awaited_once()
     assert photos.await_args.args[2] == ["https://x/1.jpg", "https://x/2.jpg", "https://x/3.jpg"]
+
+
+# ───────────────────────── ревью 2026-10-23 ─────────────────────────
+
+@pytest.mark.parametrize("text,want", [
+    ("no tengo novia, Luis, 35, abogado", {"is_single": True, "name": "Luis", "age": 35, "profession": "abogado"}),
+    ("no estoy casado", {"is_single": True}),
+    ("no busco nada casual", {"seria": "si"}),
+    ("soltero, sin compromisos", {"is_single": True, "seria": None}),
+    ("Sí, quiero", {"profession": None}),
+    ("¿es el 25 de octubre?", {"age": None}),
+    ("a las 20 hrs", {"age": None}),
+    ("Soltero, 45, trabajo en ventas", {"name": None, "profession": "ventas", "age": 45}),
+    ("Sí, claro que sí, Luis", {"name": "Luis"}),
+    ("soy mexicano", {"name": None}),
+    ("soy muy serio", {"name": None}),
+])
+def test_parser_review_cases(text, want):
+    got = cq.analizar(text)
+    for k, v in want.items():
+        assert got[k] == v, (text, k, got)
+
+
+def test_yes_only_counts_after_questionnaire():
+    assert cq.analizar("Sí, claro", responde_cuestionario=False)["seria"] is None
+
+
+@pytest.mark.asyncio
+async def test_card_without_data_no_link(monkeypatch):
+    d = Dialog(monkeypatch, {"interest": "event"}, settings=EV)
+    d._add("anna", rag.PAYMENT_QUESTION)
+    r = await d.say("con tarjeta")
+    assert rag.BUY_LINK not in r["messages"] and r["messages"][0] == rag.BUY_ONLINE_SENTENCE
+
+
+@pytest.mark.asyncio
+async def test_deposit_question_not_transfer(monkeypatch):
+    assert rag.pago_paso({"interest": "event"}, {"ultimo_mensaje_anna": "", "settings": EV,
+                                                 "ya_hecho": {}}, "¿cuánto es el depósito?") is None
+
+
+@pytest.mark.asyncio
+async def test_no_endless_thanks(monkeypatch):
+    d = Dialog(monkeypatch, settings=EV)
+    await first_contact(d)
+    await d.say("Pedro, 40")                         # недостающее спросили
+    d.models["ok"] = model(["Perfecto, aquí estoy si tienes dudas."])
+    r = await d.say("ok")                            # ничего нового — модель, не «gracias» по кругу
+    assert d.model_calls[-1] == "ok"
+    assert not any(cq.MARK in x or "falta" in x for x in all_text(r))
+
+
+@pytest.mark.asyncio
+async def test_lock_dict_cleaned(monkeypatch):
+    monkeypatch.setattr(main, "_process_burst_impl", AsyncMock())
+    await main._process_burst("wa_9")
+    assert not any(k[1] == "wa_9" for k in main._burst_locks)

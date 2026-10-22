@@ -198,6 +198,19 @@ DIALOGS = [
         "¿y tú cómo estás?", "ya te dije"]),
     ("33. Шутка, интерес, имя, возраст", [], {}, [
         "jaja qué onda", "Me interesa el evento", "Pedro", "35"]),
+    # Воронка как у Ани (2026-10-23): анкета одним сообщением.
+    ("34. Анкета: всё одним ответом, 3 фото, цена, дорого, покупка, бот?", [], {}, [
+        "Hola, me interesa el evento", "sí, eso busco. Luis, 35, abogado", PHOTO_OK,
+        "¿cuánto cuesta?", "está muy caro", "¿cómo compro?", "¿eres un bot?"]),
+    ("35. Анкета: solo curiosidad", [], {}, ["Hola, me interesa el evento", "solo curiosidad"]),
+    ("36. Анкета: частично, потом профессия, фото", [], {}, [
+        "Hola, me interesa el evento", "Pedro, 40", "ingeniero", PHOTO_OK]),
+    ("37. Анкета: вопрос вместо ответа", [], {}, [
+        "Hola, me interesa el evento", "¿cuánto cuesta?", "sí busco, Pedro, 40, ingeniero"]),
+    ("38. Фото первым сообщением", [], {}, [PHOTO_OK, "me interesa el evento"]),
+    ("39. «ya te dije» после полной анкеты", [], {}, [
+        "Hola, me interesa el evento", "sí, eso busco. Luis, 35, abogado", PHOTO_OK, "ya te dije"]),
+    ("40. Путь услуги", [], {}, ["Hola, busco conocer una mujer eslava para algo serio"]),
 ]
 
 # ───────────────────────── бюджет и заглушки ─────────────────────────
