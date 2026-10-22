@@ -2047,3 +2047,30 @@ async def test_run9_d12_como_se_paga_is_purchase(monkeypatch):
     assert r["messages"] == [rag.BUY_LINK, rag.BUY_PAGE]
     assert "OXXO" not in " ".join(r["messages"])
     assert rag.wants_to_buy("¿cómo se paga?", None)
+
+
+# ───────── автоприветствие WhatsApp в памяти режима rag ─────────
+
+AUTO_GREETING_MSG = {"id": "ag", "sender": "anna", "direction": "outbound",
+                     "text": "👉 ¡Bienvenido a Match Match Agency! ✨ Van 30 mujeres y 30 hombres. "
+                             "Precio 9000 MXN, se paga en OXXO.",
+                     "created_at": NOW - timedelta(minutes=1), "meta": {"source": "auto_greeting"}}
+
+
+class TestAutoGreetingMemory:
+    def test_not_anna_not_bot_and_marked(self):
+        assert memory.autor(AUTO_GREETING_MSG) == "auto_saludo"
+        ya = memory.ya_hecho([msg("lead", "Hola", 2), AUTO_GREETING_MSG], {}, SETTINGS, EVENT_DESDE, NOW)
+        assert ya["auto_saludo"] and ya["presentacion"] is False and ya["hechos_dichos"] == []
+        assert ya["ana_escribio_a_mano"] is None
+        assert memory.ultima_respuesta([msg("lead", "Hola", 2), AUTO_GREETING_MSG]) is None
+
+    def test_text_hidden_from_model(self):
+        h = memory.historial([msg("lead", "Hola", 2), AUTO_GREETING_MSG])
+        assert h[-1]["autor"] == "auto_saludo" and "OXXO" not in h[-1]["texto"]
+
+    def test_not_a_fact_source(self):
+        """Факты сверяются только с записями базы и карточкой — автоприветствия там нет."""
+        sources = rag.fact_sources(knowledge.usable(SEED, SETTINGS, "2026-10-21"),
+                                   memory.evento_actual(SETTINGS), SETTINGS)
+        assert not any("OXXO" in s or "Bienvenido" in s for s in sources)

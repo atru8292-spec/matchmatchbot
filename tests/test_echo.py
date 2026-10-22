@@ -162,3 +162,52 @@ class TestOldEcho:
         msg = _echo(); msg["dateTime"] = datetime.now(timezone.utc).isoformat()
         await main._handle_incoming(msg)
         set_manual.assert_awaited_once()
+
+
+# ───────── автоприветствие WhatsApp Business (решение владелицы 2026-10-22) ─────────
+
+AUTO_GREETING = ("👉 ¡Bienvenido a Match Match Agency! ✨\n\nEstamos organizando un evento exclusivo "
+                 "para solteros: SLAVIC LATINO CONNECT NIGHT…")
+
+
+class TestAutoGreetingEcho:
+    async def test_auto_greeting_after_hola_keeps_mode(self, echo_db, monkeypatch):
+        """Прод 2026-10-22 03:18: «Hola» и в ту же минуту автоприветствие — лид ушёл в manual.
+        Теперь режим не меняется, эхо сохраняется как служебное."""
+        set_manual, ins = echo_db
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={}))
+        await main._handle_incoming(_echo(text=AUTO_GREETING))
+        set_manual.assert_not_awaited()
+        args, kwargs = ins.await_args
+        assert args[:3] == (PHONE, "outbound", "anna")
+        assert kwargs["meta"]["source"] == "auto_greeting" and "manual" not in kwargs["meta"]
+
+    async def test_configured_text_matches_normalized(self, echo_db, monkeypatch):
+        set_manual, ins = echo_db
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "auto_greeting_texts": '["¡Gracias por escribir! En breve te respondemos."]'}))
+        await main._handle_incoming(_echo(text="gracias por escribir  en breve te respondemos"))
+        set_manual.assert_not_awaited()
+        assert ins.await_args.kwargs["meta"]["source"] == "auto_greeting"
+
+    async def test_ordinary_echo_still_manual(self, echo_db, monkeypatch):
+        set_manual, ins = echo_db
+        monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={
+            "auto_greeting_texts": "¡Gracias por escribir! En breve te respondemos."}))
+        await main._handle_incoming(_echo(text="Hola Carlos, te escribo yo. ¿Vienes el miércoles?"))
+        set_manual.assert_awaited_once_with(PHONE)
+        assert ins.await_args.kwargs["meta"]["source"] == "echo"
+
+    async def test_settings_failure_still_detects_prefix(self, echo_db, monkeypatch):
+        set_manual, _ = echo_db
+        monkeypatch.setattr(db, "get_settings", AsyncMock(side_effect=RuntimeError("db")))
+        await main._handle_incoming(_echo(text=AUTO_GREETING))
+        set_manual.assert_not_awaited()
+
+
+def test_parse_auto_greeting_texts():
+    import filters
+    assert filters.parse_auto_greeting_texts('["a", "b"]') == ["a", "b"]
+    assert filters.parse_auto_greeting_texts("uno\ndos\n") == ["uno", "dos"]
+    assert filters.parse_auto_greeting_texts("") == []
+    assert not filters.is_auto_greeting("Bienvenido, Carlos")

@@ -933,6 +933,22 @@ async def _handle_echo(echo) -> None:
     if sender.was_sent_recently(phone, echo.text) or await db.outbound_text_recent(phone, echo.text):
         logger.debug("эхо [%s]: наше исходящее — пропуск", phone)
         return
+    # Автоприветствие WhatsApp Business — не ответ Ани: режим не меняем, сохраняем как
+    # служебное (бот видит, что приветствие ушло, но фактов из него не берёт).
+    try:
+        configured = filters.parse_auto_greeting_texts(
+            (await db.get_settings(["auto_greeting_texts"])).get("auto_greeting_texts"))
+    except Exception:
+        logger.exception("эхо [%s]: не прочитала auto_greeting_texts — проверяю по началу", phone)
+        configured = []
+    if filters.is_auto_greeting(echo.text, configured):
+        await db.upsert_lead(phone)
+        await db.insert_message(phone, "outbound", "anna", echo.text,
+                                external_message_id=echo.external_message_id,
+                                meta={"source": "auto_greeting", "received_at": echo.received_at},
+                                processed=True)
+        logger.info("эхо [%s]: автоприветствие WhatsApp — режим не меняю", phone)
+        return
     # Ответ человека. Лид мог ещё не существовать (Аня написала первой) — создаём,
     # иначе его ответ бот принял бы за нового лида.
     await db.upsert_lead(phone)

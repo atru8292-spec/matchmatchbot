@@ -86,6 +86,8 @@ def autor(msg: dict) -> str:
     if _SYSTEM_TEXT_RE.match(text):
         return "sistema"
     meta = msg.get("meta") or {}
+    if meta.get("source") == "auto_greeting":
+        return "auto_saludo"             # автоприветствие WhatsApp: не Аня и не бот
     if meta.get("manual") or meta.get("source") == "echo":
         return "anya_manual"
     return "anna_bot"
@@ -136,8 +138,11 @@ def historial(prior: list[dict]) -> list[dict]:
             gap = (_aware(ts) - _aware(prev)).total_seconds()
             if gap > GAP_HOURS * 3600:
                 out.append({"pausa": gap_text(gap)})
-        out.append({"fecha": fecha(ts) if isinstance(ts, datetime) else None,
-                    "autor": autor(m), "texto": m.get("text") or ""})
+        who = autor(m)
+        # текст автоприветствия модели не показываем: фактов из него не берём
+        out.append({"fecha": fecha(ts) if isinstance(ts, datetime) else None, "autor": who,
+                    "texto": "(saludo automático de WhatsApp)" if who == "auto_saludo"
+                    else m.get("text") or ""})
         if isinstance(ts, datetime):
             prev = ts
     return out
@@ -177,7 +182,7 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
         "objeciones": [], "preguntas_sin_respuesta": [],
         "boleto_comprado": lead.get("funnel_stage") == "event_attended",
         "llamada_agendada": None, "ana_escribio_a_mano": None, "pasado": [],
-        "hechos_dichos": [],
+        "hechos_dichos": [], "auto_saludo": None,
     }
     link = (settings.get("event_link") or "").strip()
     price = settings.get("event_price_nonmember") or ""
@@ -192,6 +197,9 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
         when = fecha(ts) if isinstance(ts, datetime) else None
         current = not (evento_desde and isinstance(ts, datetime)
                        and _aware(ts) < _aware(evento_desde))
+        if who == "auto_saludo":
+            out["auto_saludo"] = when
+            continue
         if who == "sistema":
             if video_marker and text.strip() == video_marker:
                 out["video_enviado"] = when
@@ -280,7 +288,7 @@ def ultima_respuesta(prior: list[dict]) -> str | None:
         who = autor(m)
         if who in ("anna_bot", "anya_manual"):
             group.append(m.get("text") or "")
-        elif who == "sistema":
+        elif who in ("sistema", "auto_saludo"):
             continue
         elif group:
             break

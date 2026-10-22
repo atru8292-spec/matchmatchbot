@@ -76,6 +76,44 @@ _SPANISH_STOPWORDS_RE = re.compile(
 )
 
 
+# ───────── автоприветствие WhatsApp Business (решение владелицы 2026-10-22) ─────────
+# Номер шлёт его сам в ту же минуту, что и входящее; Wazzup присылает как эхо с нашего номера.
+# Это не ответ Ани: лида в ручной режим не переводим. Тексты — app_settings.auto_greeting_texts
+# (список строк, JSON или по строке), плюс известное начало «👉 ¡Bienvenido a Match Match Agency!».
+AUTO_GREETING_PREFIX = "bienvenido a match match agency"
+
+
+def _norm_greeting(text: str) -> str:
+    t = (text or "").lower().translate(str.maketrans("áéíóúüñ", "aeiouun"))
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", t)).strip()
+
+
+def parse_auto_greeting_texts(raw: str | None) -> list[str]:
+    """app_settings.auto_greeting_texts → список строк (JSON-массив или по строке)."""
+    import json
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    try:
+        val = json.loads(raw)
+        if isinstance(val, list):
+            return [str(x) for x in val if str(x).strip()]
+        if isinstance(val, str):
+            return [val]
+    except ValueError:
+        pass
+    return [line for line in raw.splitlines() if line.strip()]
+
+
+def is_auto_greeting(text: str, configured: list[str] | None = None) -> bool:
+    norm = _norm_greeting(text)
+    if not norm:
+        return False
+    if norm.startswith(AUTO_GREETING_PREFIX):
+        return True
+    return any(norm == _norm_greeting(c) for c in configured or [] if _norm_greeting(c))
+
+
 def is_english(text: str) -> bool:
     """Detecta inglés con heurística conservadora — requiere >=2 señales en inglés Y
     CERO señales en español, para evitar falsos positivos en texto corto o mixto."""
