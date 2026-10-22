@@ -1865,3 +1865,27 @@ def test_photo_summary_without_includes_record():
     by_id = {k: v for k, v in BY_ID.items() if k != "event_includes"}
     assert rag._story_after_photo(by_id, {"halloween"}) == \
         "Te espero el [event_date] a las [event_start] en [event_address]."
+
+
+@pytest.mark.asyncio
+class TestVerifierSmallTalkRun5:
+    RECS = knowledge.usable(SEED, SETTINGS, "2026-10-21")
+
+    async def _verify(self, monkeypatch, texto):
+        async def chat(model, system, user, cost, **kw):
+            return {"afirmaciones": [{"texto": texto, "respaldo": None}]}
+        monkeypatch.setattr(rag, "_chat", chat)
+        return await rag.verify_claims([texto], self.RECS, memory.evento_actual(SETTINGS), [],
+                                       rag.Cost(), SETTINGS, "Carlos")
+
+    async def test_d3_personal_comment_not_a_claim(self, monkeypatch):
+        """Прогон 5, Д3 ход 2: ложное молчание на реплике про футбол."""
+        assert await self._verify(
+            monkeypatch, "La verdad no le voy a ningún equipo, pero disfruto ver los partidos importantes.") == []
+
+    @pytest.mark.parametrize("texto", [
+        "Van 30 mujeres y 30 hombres.", "La entrada es gratis.", "Termina a la medianoche.",
+        "Aquí nos enfocamos en ayudarte a conocer pareja.", "El evento tiene barra libre.",
+        "Las chicas son todas modelos."])
+    async def test_domain_claims_still_checked(self, monkeypatch, texto):
+        assert await self._verify(monkeypatch, texto) == [texto]

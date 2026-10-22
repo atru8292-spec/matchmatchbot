@@ -814,6 +814,17 @@ _HARD_FACT_RES = [re.compile(p, re.IGNORECASE) for p in (
     r"\btermina\b|\bacaba\b|hasta\s+las\b|medianoche", r"garant[ií]a", r"\bcupo\b|\blugares\b")]
 
 
+# Фраза касается агентства, ивента или услуги (или в ней число/токен). Личная реплика вроде
+# «no le voy a ningún equipo» — не утверждение о нас, даже если сверщик её занёс (прогон 5, Д3).
+_DOMAIN_RE = re.compile(
+    r"\d|\[[a-z_]+\]|evento|agencia|servicio|boleto|precio|cuest|costo|mxn|usd|d[oó]lar|\bpag|"
+    r"mujer|chica|hombre|persona|gente|pareja|matchmak|\bcita|noche|fiesta|polanco|cdmx|lugar|"
+    r"\bhora|fecha|inclu|bebida|botana|comida|cena|disfra|m[aá]scara|halloween|video|foto|llamada|"
+    r"garant|segur|selecci|contrato|reembolso|regist|p[aá]gina|correo|organiz|asist|invitad|"
+    r"slavic|eslav|rusa|ucrania|bielorrus|nosotr|aqu[ií]\s+nos|entrada|parking|valet|estaciona|"
+    r"descuent|promoci|gratis|cupo|reserv|apart", re.IGNORECASE)
+
+
 def _words(text: str) -> set[str]:
     t = (text or "").lower().translate(str.maketrans("áéíóúü", "aeiouu"))
     return {w for w in re.findall(r"[a-zñ]+", t) if len(w) >= 4}
@@ -982,6 +993,8 @@ async def verify_claims(bubbles: list[str], recs: list[dict], card: dict | None,
     for it in items:
         it = it if isinstance(it, dict) else {"texto": it, "respaldo": None}
         for sent in _fact_sentences(str(it.get("texto") or ""), name):
+            if not (_DOMAIN_RE.search(sent) or any(rx.search(sent) for rx in _HARD_FACT_RES)):
+                continue
             if not sentence_supported(sent, sources, it.get("respaldo")) and sent not in claims:
                 claims.append(sent)
     # Страховка кодом: «опасные» темы проверяем сами, независимо от списка модели.
