@@ -75,7 +75,7 @@ PHOTO_MAX_WAIT = 240.0
 
 # Одна обработка на лида одновременно: вторая ждёт (кроме debounce-сериализации — на случай
 # других путей запуска разбора).
-_burst_locks: dict[str, asyncio.Lock] = {}
+_burst_locks: dict[tuple, asyncio.Lock] = {}
 
 
 async def _debounce_window(content_type: str | None) -> tuple[float, float]:
@@ -100,7 +100,8 @@ async def _process_burst(phone: str) -> None:
     чтобы сбой не ушёл в debounce молча (debounce намеренно не зависит от escalation).
     Пока идёт разбор, новое сообщение лида прерывает отправку устаревшего ответа (sender
     проверяет перед каждым пузырём); его разберёт следующий проход вместе с историей."""
-    lock = _burst_locks.setdefault(phone, asyncio.Lock())
+    # ключ с циклом событий: asyncio.Lock на 3.9 привязан к циклу, где создан
+    lock = _burst_locks.setdefault((id(asyncio.get_running_loop()), phone), asyncio.Lock())
     async with lock:
         sender.set_interrupt_check(
             (lambda: debouncer.has_new(phone)) if debouncer is not None else None)

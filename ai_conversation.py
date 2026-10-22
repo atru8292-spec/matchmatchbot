@@ -1922,7 +1922,8 @@ def objecion_precio(lead: dict, mem: dict, user_text: str, by_id: dict) -> list[
     return keep_emojis(bubbles, per_bubble=MAX_EMOJI_TOTAL)
 
 
-def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict | None:
+def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str,
+                    requiere_datos: bool = True) -> dict | None:
     """Ответ на одобренное фото лида ивента, у которого есть имя и «холост ли»: сразу к
     покупке. None — случай не наш (другая ветка, ссылку уже давали, в сообщении есть вопрос)."""
     if "[фото одобрено" not in (user_text or ""):
@@ -1939,7 +1940,7 @@ def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str) -> dict 
             or ya.get("boleto_comprado") or settings.get("event_active") != "1" \
             or not (settings.get("event_link") or "").strip():
         return None
-    if not (lead.get("name") and lead.get("is_single") is True):
+    if requiere_datos and not (lead.get("name") and lead.get("is_single") is True):
         return None
     name = lead.get("name") or ai._plausible_name(lead.get("whatsapp_name"))
     # благодарность по очереди, как у Ани (решение 2026-10-23)
@@ -2137,7 +2138,12 @@ async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
     thanks = cuestionario.gracias(ya.get("turnos_bot", 0), datos.get("name"))
     # к покупке: холост, имя, фото. Про серьёзные отношения не ответил — не блок (спросили один
     # раз в «Me falta saber»); «no» или неясно — уже молчание выше.
-    if foto and datos.get("is_single") is True and datos.get("name"):
+    # как раньше для ивента: имя и «холост» после двух вопросов (анкета и «Me falta saber») не
+    # блокируют — «casado» уже молчание выше
+    tries = ya.get("preguntas_calificacion") or {}
+    single_ok = datos.get("is_single") is True or tries.get("is_single", 0) >= memory.MAX_SLOT_TRIES
+    name_ok = bool(datos.get("name")) or tries.get("name", 0) >= memory.MAX_SLOT_TRIES
+    if foto and single_ok and name_ok:
         if ruta == "servicio":
             rec = by_id.get("service_pitch")
             if rec and rec.get("literal"):
@@ -2147,7 +2153,7 @@ async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
         else:
             venta = venta_tras_foto({**merged, "photo_received": True}, mem, by_id,
                                     user_text if "[фото одобрено" in (user_text or "")
-                                    else "[фото одобрено]")
+                                    else "[фото одобрено]", requiere_datos=False)
             if venta:
                 venta["after_media"] = []           # анкету уже задали целиком — не переспрашиваем
                 venta.update(extra)

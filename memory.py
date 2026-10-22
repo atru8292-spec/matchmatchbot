@@ -358,6 +358,12 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
             out["cuestionario_ruta"] = "evento" if "Rusia" in text else "servicio"
         if cuestionario.es_faltante(text):
             out["faltante"] = out["turnos_bot"]
+            # «Me falta saber …» — утверждение, но это повторный вопрос по названным пунктам
+            for slot, rx in SLOT_QUESTION_RE.items():
+                if rx.search(text) and out["pregunta_turno"].get(slot) != out["turnos_bot"]:
+                    out["preguntas_calificacion"][slot] += 1
+                    out["pregunta_turno"][slot] = out["turnos_bot"]
+                    out["lead_escribio_tras"][slot] = False
         for slot in SLOT_QUESTION_RE:
             # Фото считаем только по текущему ивенту: старого лида, которого дважды просили
             # фото год назад, не отправляем к Ане с первого сообщения (code-review 2026-10-22).
