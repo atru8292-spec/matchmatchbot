@@ -609,7 +609,9 @@ class TestPauseDigest:
         monkeypatch.setattr(db, "inbound_since", inbound)
         monkeypatch.setattr(db, "bypass_phone_set", AsyncMock(return_value=bypass))
         setm = AsyncMock(); monkeypatch.setattr(db, "set_setting", setm)
-        notify = AsyncMock(); monkeypatch.setattr(scheduler.escalation, "notify_admins", notify)
+        notify = AsyncMock(); monkeypatch.setattr(scheduler.escalation, "notify_dev", notify)
+        admins = AsyncMock(); monkeypatch.setattr(scheduler.escalation, "notify_admins", admins)
+        self.admins = admins
         return inbound, setm, notify
 
     async def test_zero_messages_no_spam(self, monkeypatch):
@@ -629,6 +631,7 @@ class TestPauseDigest:
         assert "• Carlos +5215512345678 (2)" in text
         assert "• +5215587654321 (1)" in text
         setm.assert_awaited_once_with(scheduler.PAUSE_DIGEST_KEY, self.NOW.isoformat())
+        self.admins.assert_not_awaited()   # Ане сводка не уходит (решение 2026-10-23)
 
     async def test_not_more_than_once_per_hour(self, monkeypatch):
         last = (self.NOW - timedelta(minutes=59)).isoformat()
@@ -665,3 +668,21 @@ class TestPauseDigest:
         monkeypatch.setattr(scheduler, "_scheduler_enabled", AsyncMock(return_value=False))
         await scheduler.tick()
         digest.assert_not_awaited()
+
+
+class TestNotifyDev:
+    async def test_only_dev_chat(self, monkeypatch):
+        import escalation
+        send = AsyncMock(); monkeypatch.setattr(escalation, "_send_telegram", send)
+        monkeypatch.setattr(escalation.settings, "tg_alerts_chat_id", "111")
+        monkeypatch.setattr(escalation.settings, "tg_manager_admin_ids", "222,333")
+        await escalation.notify_dev("⏸ сводка")
+        send.assert_awaited_once()
+        assert send.call_args.args[1] == "111"
+
+    async def test_no_dev_chat_sends_nothing(self, monkeypatch):
+        import escalation
+        send = AsyncMock(); monkeypatch.setattr(escalation, "_send_telegram", send)
+        monkeypatch.setattr(escalation.settings, "tg_alerts_chat_id", "")
+        await escalation.notify_dev("⏸ сводка")
+        send.assert_not_awaited()

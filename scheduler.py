@@ -351,9 +351,10 @@ async def _scheduler_enabled() -> bool:
         return False
 
 
-# ===== D) Сводка «пауза» админам =====
+# ===== D) Сводка «пауза» =====
 # На паузе входящие сохраняются и помечаются обработанными: после снятия паузы бот на них
-# НЕ ответит. Раз в час шлём админам, кто писал, чтобы Аня открыла их вручную.
+# НЕ ответит. Раз в час шлём, кто писал. Пока только Арине (escalation.notify_dev), Ане нет:
+# решение 2026-10-23, сводки приходили слишком часто.
 PAUSE_DIGEST_KEY = "pause_digest_last_at"   # app_settings: время последней сводки (ISO, UTC)
 PAUSE_DIGEST_INTERVAL = timedelta(hours=1)
 PAUSE_DIGEST_MAX_LINES = 20
@@ -394,7 +395,7 @@ async def run_pause_digest(now: datetime | None = None) -> int:
     if len(rows) > PAUSE_DIGEST_MAX_LINES:
         lines.append(f"… и ещё {len(rows) - PAUSE_DIGEST_MAX_LINES}")
     lines.append("Открой их вручную в WhatsApp или в CRM.")
-    await escalation.notify_admins("\n".join(lines))
+    await escalation.notify_dev("\n".join(lines))
     await db.set_setting(PAUSE_DIGEST_KEY, now.isoformat())
     logger.info("pause digest: %d лидов, %d сообщений", len(rows), total)
     return len(rows)

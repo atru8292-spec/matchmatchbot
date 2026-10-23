@@ -375,6 +375,16 @@ async def notify_admins(text: str, exclude_id: int | None = None) -> None:
         await _send_telegram(settings.tg_manager_bot_token, str(admin_id), text)
 
 
+async def notify_dev(text: str) -> None:
+    """Только в личный чат разработки (TG_ALERTS_CHAT_ID) ботом «Лиды», Ане — нет.
+    Для сводки «пауза» (решение Арины 2026-10-23: Ане пока не слать, слишком часто)."""
+    chat_id = (settings.tg_alerts_chat_id or "").strip()
+    if not chat_id:
+        logger.warning("notify_dev: нет TG_ALERTS_CHAT_ID — не шлю: %s", text[:80])
+        return
+    await _send_telegram(settings.tg_manager_bot_token, chat_id, text)
+
+
 # ===== Technical (бот «Ошибки») =====
 
 async def notify_error(where: str, error: str, phone: str | None = None) -> None:
