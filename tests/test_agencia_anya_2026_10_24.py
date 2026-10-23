@@ -39,6 +39,11 @@ def no_sums(texts):
 
 # ───────────────────────── тексты ─────────────────────────
 
+def test_catalog_typo_fixed():
+    assert "perfiles que te pueden funcionar" in servicio.CATALOGO
+    assert not any("te puede funcionar" in t for t in servicio.TEXTOS)
+
+
 @pytest.mark.parametrize("text", servicio.TEXTOS)
 def test_texts_no_sums_no_invented_bits(text):
     assert no_sums([text])
@@ -452,7 +457,9 @@ async def test_no_invitation_after_refusal(monkeypatch):
 async def test_para_que_la_llamada(monkeypatch, text):
     d = started(Dialog(monkeypatch, lead=AGENCIA))
     r = await d.say(text)
-    assert all_text(r)[:2] == servicio.PARA_QUE_LLAMADA and r["action"] == "respond"
+    assert all_text(r)[:1] == servicio.PARA_QUE_LLAMADA and r["action"] == "respond"
+    assert servicio.PARA_QUE_LLAMADA == ["En la llamada vemos qué buscas, cómo sería el proceso para ti "
+                                         "y qué incluye, y te resuelvo todas tus dudas."]
 
 
 @pytest.mark.asyncio

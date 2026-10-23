@@ -2228,9 +2228,9 @@ def servicio_paso(lead: dict, mem: dict, user_text: str) -> dict | None:
             and not _bot_ya_dijo(mem, servicio.MIERCOLES[1]):
         return _result(con_invitacion(servicio.MIERCOLES, mem, servicio.MIERCOLES_LLAMADA))
 
-    # «¿Para qué la llamada?» — собрано из её фраз; короткое приглашение по счётчику.
+    # «¿Para qué la llamada?» — утверждённый вариант A; короткое приглашение по счётчику.
     if servicio.pregunta_para_que_llamada(text, invitacion_reciente(mem)):
-        if _bot_ya_dijo(mem, servicio.PARA_QUE_LLAMADA[1]):
+        if _bot_ya_dijo(mem, servicio.PARA_QUE_LLAMADA[0]):
             return _silent("лид снова спрашивает, зачем звонок — ответь сама", kind=FUERA_DE_BASE)
         return _result(con_invitacion(servicio.PARA_QUE_LLAMADA, mem, servicio.INVITACION_CORTA))
 

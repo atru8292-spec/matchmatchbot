@@ -41,11 +41,9 @@ GRACIAS = "Muchas gracias!"
 INVITACION = "tienes tiempo para una llamada y te platico en mas detalles como este funciona?"
 # Короткое приглашение — её же, когда причина уже сказана (ответ на «¿para qué la llamada?»).
 INVITACION_CORTA = "estas disponible para una breve llamada?"
-# «¿Para qué la llamada?» — собрано из её фраз: «nos gustaría conocerte un poco mejor» (приглашение
-# на звонок перед ивентом), «te platico en mas detalles como este funciona», «te enseño los perfiles
-# que te puede funcionar» (каталог).
-PARA_QUE_LLAMADA = ["nos gustaría conocerte un poco mejor",
-                    "te platico en mas detalles como este funciona y te enseño los perfiles que te puede funcionar"]
+# «¿Para qué la llamada?» — вариант A, утверждён Ариной 2026-10-24 (у Ани такой фразы нет).
+PARA_QUE_LLAMADA = ["En la llamada vemos qué buscas, cómo sería el proceso para ti y qué incluye, "
+                    "y te resuelvo todas tus dudas."]
 COMO_FUNCIONA = [
     "Cuando hacemos una busqueda personalizada buscamos parejas basado en tus necesidades y "
     "deseos, tus valores y estilo de vida. Te presentamos mujeres que cumplen con todo esto y "
@@ -65,7 +63,7 @@ MIERCOLES_LLAMADA = "tienes tiempo esta semana para una llamada y te platico en 
 FUERA_CIUDAD = "en {ciudad} te podemos ayudar con matchmaking personalizado"
 FUERA_SIN_CIUDAD = "te podemos ayudar con matchmaking personalizado"
 CATALOGO = ("no manejamos un catalogo de mujeres donde 'eliges' a una pareja. Que te parece si te "
-            "enseño los perfiles que te puede funcionar...")
+            "enseño los perfiles que te pueden funcionar...")
 CATALOGO_LLAMADA = "estas disponible para una video llamada?"
 TIPO = ["muchas!", "con mucho gusto te podemos presentar con una {tipo}"]
 TIPO_LLAMADA = "tienes tiempo para una llamada y platicamos?"
