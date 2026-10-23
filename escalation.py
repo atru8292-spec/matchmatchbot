@@ -82,10 +82,15 @@ def alert_recipients(phone: str | None) -> tuple[str, ...]:
 
 
 async def _send_business_alert(text: str, reply_markup: dict | None = None, *,
-                               phone: str | None = None) -> None:
+                               phone: str | None = None, also_dev: bool = False) -> None:
     """Business-алерт получателям alert_recipients(phone): команде или, по номеру разработки,
-    только ей. Каждая отправка независима (_send_telegram сама не бросает)."""
-    for chat_id in alert_recipients(phone):
+    только ей. also_dev — по реальному лиду ещё и в её личный чат (оплата, готов к созвону:
+    «Ане и мне», решение 2026-10-24). Каждая отправка независима (_send_telegram сама не бросает)."""
+    chats = list(alert_recipients(phone))
+    dev = (settings.tg_alerts_chat_id or "").strip()
+    if also_dev and dev and dev not in chats:
+        chats.append(dev)
+    for chat_id in chats:
         await _send_telegram(settings.tg_manager_bot_token, chat_id, text, reply_markup)
 
 
@@ -295,15 +300,34 @@ async def notify_photo_review(lead: dict, reason: str) -> None:
     await _send_business_alert(text, photo_action_kb(phone) if phone else None, phone=(lead or {}).get("phone"))
 
 
-async def notify_payment(lead: dict) -> None:
-    """Лид сообщил об оплате — Аня подтверждает вручную кнопкой (блок 13)."""
+async def notify_payment(lead: dict, posible: bool = False, detalle: str | None = None) -> None:
+    """Лид сообщил об оплате — Аня подтверждает вручную кнопкой (блок 13). posible — чек
+    (фото, документ, «te mando el comprobante») после ссылки на билет: «Возможно, оплатил».
+    Ане и Арине (2026-10-24)."""
+    head = "💰 Возможно, лид оплатил, проверь" if posible else "💰 Лид сообщил об оплате"
     text = (
-        "💰 Лид сообщил об оплате\n"
+        f"{head}\n"
         f"{_lead_name(lead)}\n"
-        f"👉 Проверь и подтверди: {_wa_link((lead or {}).get('phone', ''))}"
+        + (f"{detalle}\n" if detalle else "")
+        + f"👉 Проверь и подтверди: {_wa_link((lead or {}).get('phone', ''))}"
     )
     phone = (lead or {}).get("phone", "")
-    await _send_business_alert(text, payment_action_kb(phone) if phone else None, phone=(lead or {}).get("phone"))
+    await _send_business_alert(text, payment_action_kb(phone) if phone else None,
+                               phone=(lead or {}).get("phone"), also_dev=True)
+
+
+async def notify_call_ready(lead: dict, last_msg: str) -> None:
+    """Лид согласился на звонок про услугу — время назначает Аня (2026-10-24). Ане и Арине."""
+    phone = (lead or {}).get("phone", "")
+    digits = "+" + phone[3:] if phone.startswith("wa_") else phone
+    text = (
+        "📞 Лид готов к созвону\n"
+        f"{_lead_name(lead)} {digits}\n"
+        f"Последнее сообщение: «{(last_msg or '')[:200]}»\n"
+        f"👉 Напиши ему про время: {_wa_link(phone)}"
+    )
+    await _send_business_alert(text, lead_action_kb(phone) if phone else None,
+                               phone=phone, also_dev=True)
 
 
 async def notify_call_request(lead: dict, last_msg: str, manual_ok: bool = True) -> None:

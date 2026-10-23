@@ -44,6 +44,6 @@ def test_output_contract():
 
 def test_memory_and_tone_rules_present():
     for needle in ("anya_manual", "notas_internas", "pasado", "regreso", "puede_preguntar",
-                   "hasta 2 por respuesta", "como máximo 1 por burbuja", "ficha del tarifario",
+                   "hasta 2 por respuesta", "como máximo 1 por burbuja", "Nunca das el precio del servicio",
                    "[фото одобрено]"):
         assert needle in PROMPT, needle

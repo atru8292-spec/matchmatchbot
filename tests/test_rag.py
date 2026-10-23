@@ -270,6 +270,8 @@ class TestCheckReply:
 
     def test_number_without_source_silent(self):
         _, reason, _ = check(["Cuesta 5000 MXN."])
+        assert reason == rag.MONEY_REASON          # сумма не из карточки ивента
+        _, reason, _ = check(["Van 45 mujeres."])
         assert reason and "числа" in reason
 
     def test_numbers_from_card_and_lead_ok(self):
@@ -361,18 +363,22 @@ class TestCheckReply:
     def test_service_price_blocked_in_calificacion(self):
         ya = memory.ya_hecho([], {}, SETTINGS, None, NOW)
         cal = memory.calificacion({"interest": "agency"}, ya, "x", None)
-        b, _, _ = check(["Te presento a 15 mujeres. La inversión es desde $10,000 USD."],
-                        user_text="¿cómo funciona el servicio?", ya_hecho=ya, calificacion=cal,
-                        fichas=[BY_ID["service_what"], BY_ID["tariff_service"]])
-        assert b == ["Te presento a 15 mujeres."]
+        # 2026-10-24: сумма услуги — весь ответ не уходит (не вырезаем фразу)
+        b, reason, _ = check(["Te presento a 15 mujeres. La inversión es desde $10,000 USD."],
+                             user_text="¿cómo funciona el servicio?", ya_hecho=ya, calificacion=cal,
+                             fichas=[BY_ID["service_what"], BY_ID["tariff_service"]])
+        assert b == [] and reason == rag.MONEY_REASON
 
-    def test_service_price_on_direct_question_allowed(self):
-        """Вопрос лида не ждёт слотов: на прямой вопрос о цене услуги цену называем."""
+    @pytest.mark.parametrize("txt", ["La inversión es desde $10,000 USD.", "Son 3,000 dólares.",
+                                     "El paquete es de 14,000 USD.", "Un anticipo de 45,000 MXN.",
+                                     "Hay un plan de 5 mil mensuales.", "Cuesta 10 mil dólares."])
+    def test_service_price_never_even_on_direct_question(self, txt):
+        """2026-10-24: цену услуги не называем даже на прямой вопрос — ответ не уходит."""
         ya = memory.ya_hecho([], {}, SETTINGS, None, NOW)
         cal = memory.calificacion({"interest": "agency"}, ya, "x", None)
-        b, _, _ = check(["La inversión es desde $10,000 USD."], user_text="¿cuánto cuesta el servicio?",
-                        ya_hecho=ya, calificacion=cal, fichas=[BY_ID["tariff_service"]])
-        assert b == ["La inversión es desde $10,000 USD."]
+        b, reason, _ = check([txt], user_text="¿cuánto cuesta el servicio?",
+                             ya_hecho=ya, calificacion=cal, fichas=[BY_ID["tariff_service"]])
+        assert b == [] and reason == rag.MONEY_REASON
 
     def test_number_not_in_given_fichas_is_silent(self):
         """15 есть только в карточке услуги; без неё в источниках → число без источника."""
@@ -1292,7 +1298,7 @@ class TestPhotoQuestionReview2:
 class TestNumbersReview2:
     def test_service_price_not_allowed_in_event_answer(self):
         _, reason, _ = check(["El servicio cuesta 10,000 USD."], fichas=[BY_ID["event_price"]])
-        assert reason and "числа" in reason
+        assert reason == rag.MONEY_REASON
 
     def test_lead_age_is_not_a_fact_source(self):
         _, reason, _ = check(["Van 30 mujeres."], fichas=[BY_ID["event_price"]],

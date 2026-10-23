@@ -217,8 +217,12 @@ async def test_c_service_path(monkeypatch):
     assert "?" not in all_text(r)[0]
     r = await d.say("", photo=True)
     assert r["rag_meta"]["fuentes"] == ["service_pitch"]
-    assert any("10,000 USD" in x for x in r["messages"])
+    # 2026-10-24: питч без цены и предложение короткого звонка; «sí» — готов к созвону (Ане)
+    assert not any(rag.suma_no_evento(x) for x in r["messages"]), "цены услуги нет"
+    assert r["messages"][-1].endswith("¿Te parece?") and "llamada corta" in r["messages"][-1]
     assert not any("[event_link]" in x for x in all_text(r))
+    r = await d.say("sí")
+    assert r["messages"] == [rag.servicio.LLAMADA_OK] and r.get("llamada_lista") is True
 
 @pytest.mark.asyncio
 async def test_d_age_profession_answer(monkeypatch):

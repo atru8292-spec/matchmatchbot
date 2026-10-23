@@ -58,6 +58,8 @@ def es_objecion_precio(text: str | None) -> bool:
 
 
 _PRICE_OBJECTION_RE = PRICE_OBJECTION_RE
+# Пичт услуги уже был (без цены с 2026-10-24 — по цене его больше не узнать).
+PITCH_MARK = "elegidas a mano especialmente para ti"
 _HESITATION_RE = re.compile(r"\bpensar(?:lo|[eé])?\b|\bno\s+s[eé]\b|\btal\s+vez\b|"
                             r"\bquiz[aá]s?\b|\bluego\s+(?:te\s+)?(?:aviso|digo)\b", re.IGNORECASE)
 _FAREWELL_RE = re.compile(r"\b(?:adi[oó]s|bye|nos\s+vemos|hasta\s+luego|buenas\s+noches|"
@@ -282,7 +284,7 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
     out: dict = {
         "presentacion": False, "precio_evento_dado": None, "enlace_enviado": None,
         "direccion_dada": None, "halloween_mencionado": None, "video_enviado": None,
-        "foto_enviada": None, "precio_servicio_dado": None,
+        "foto_enviada": None, "precio_servicio_dado": None, "pitch_servicio_dado": None,
         "preguntas_calificacion": {k: 0 for k in SLOT_QUESTION_RE},
         "objeciones": [], "preguntas_sin_respuesta": [],
         "boleto_comprado": (bool(boleto_actual) if boleto_actual is not None
@@ -353,6 +355,8 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
             out["ana_escribio_a_mano"] = when
         if _SERVICE_PRICE_RE.search(text):
             out["precio_servicio_dado"] = when
+        if PITCH_MARK in text:
+            out["pitch_servicio_dado"] = when
         if cuestionario.es_compuesta(text):
             out["cuestionario"] = out["turnos_bot"]
             out["cuestionario_ruta"] = None   # текст одинаковый; путь — по интересу лида

@@ -28,6 +28,7 @@ import httpx
 import ai
 import conversation_rules
 import cuestionario
+import servicio
 import filters
 import db
 import knowledge
@@ -394,6 +395,8 @@ def situacion_ok(sit: dict, mem: dict, user_text: str, lead: dict) -> bool:
                        for s in ("name", "is_single", "age", "profession"))
         elif key == "precio_servicio_dado":
             have = bool(ya["precio_servicio_dado"])
+        elif key == "pitch_servicio_dado":
+            have = bool(ya.get("pitch_servicio_dado") or ya.get("precio_servicio_dado"))
         elif key == "auto_saludo":
             have = bool(ya.get("auto_saludo"))     # автоприветствие WhatsApp уже ушло
         else:
@@ -417,6 +420,30 @@ _QUESTION_SENT_RE = re.compile(r"¿[^?]*\?|[^.!¿?]*\?")
 _INTRO_RE = re.compile(r"\bsoy\s+anna\b[^.!?]*[.!?]?\s*", re.IGNORECASE)
 _HOLA_START_RE = re.compile(r"^\s*¡?\s*hola\b[^.!?,]*[.!?,]?\s*", re.IGNORECASE)
 _SERVICE_PRICE_RE = re.compile(r"10[.,]?000\s*(?:usd|d[oó]lares)?|\$\s*10", re.IGNORECASE)
+
+
+_EVENT_PRICE_TOKEN_RE = re.compile(r"\[event_price_[a-z_]+\]\s*(?:mxn|pesos)?|\[event_promo\]",
+                                   re.IGNORECASE)
+MONEY_REASON = "сумма или валюта в ответе (цена услуги не называется)"
+
+
+_FOREIGN_CURRENCY_RE = re.compile(r"usd|d[oó]lar|dlls?|euro", re.IGNORECASE)
+
+
+def suma_no_evento(text: str, settings: dict | None = None) -> bool:
+    """Сумма или валюта, кроме цены ивента (токены и числа карточки ивента в песо). Цена
+    услуги, пакеты и любые другие суммы лиду не уходят (решение Арины 2026-10-24)."""
+    t = _EVENT_PRICE_TOKEN_RE.sub(" ", text or "")
+    t = _TOKEN_RE.sub(" ", t)
+    event_nums = allowed_numbers([], settings or {}, {}, []) if settings else set()
+    for m in servicio.MONEY_RE.finditer(t):
+        frag = m.group(0)
+        if _FOREIGN_CURRENCY_RE.search(frag):
+            return True
+        nums = {_norm_num(n) for n in _NUM_RE.findall(frag)}
+        if not nums or not nums <= event_nums:
+            return True
+    return False
 
 
 def _norm_num(s: str) -> str:
@@ -518,6 +545,18 @@ def keep_emojis(bubbles: list[str], total: int = MAX_EMOJI_TOTAL,
             return m.group(0)
         out.append(re.sub(r"[ \t]{2,}", " ", _EMOJI_RE.sub(repl, b)).strip())
     return out
+
+
+def emojis_sin_tema(bubbles: list[str], settings: dict) -> list[str]:
+    """keep_emojis (не больше MAX_EMOJI_TOTAL на ход), фраза темы ивента (🎃) вне лимита."""
+    themes = [t for t in {(settings.get("event_theme_phrase") or "").strip(), HALLOWEEN_PHRASE} if t]
+    holds = {t: f"\u0000THEME{i}\u0000" for i, t in enumerate(themes)}
+    for t, h in holds.items():
+        bubbles = [b.replace(t, h) for b in bubbles]
+    bubbles = keep_emojis(bubbles)
+    for t, h in holds.items():
+        bubbles = [b.replace(h, t) for b in bubbles]
+    return bubbles
 
 
 def emoji_count(texts: list[str]) -> int:
@@ -988,6 +1027,8 @@ def check_reply(bubbles: list[str], *, mem: dict, fichas: list[dict], lead: dict
     text = "\n\n".join(bubbles)
     if _5500_RE.search(_TOKEN_RE.sub(" ", text)):
         return [], "в ответе 5,500", ["5500"]
+    if suma_no_evento(text, settings):
+        return [], MONEY_REASON, ["money"]
     link = (settings.get("event_link") or "").strip()
     for url in _URL_RE.findall(text):
         if not (link and _norm_url(url) == _norm_url(link)):
@@ -1617,7 +1658,16 @@ async def _literal_checked(result: dict, lead: dict, fuente: str, meta: dict) ->
     """Готовый ход без модели (приветствие, дословный сценарий, покупка, ход после фото):
     все токены должны подставиться до отправки. Хоть один не подставился — не шлём ничего:
     молчание (main: ручной режим и алерт Ане) и техалерт (ревью 2026-10-22)."""
-    problem = await unrendered_tokens((result.get("messages") or []) + (result.get("after_media") or []))
+    texts = (result.get("messages") or []) + (result.get("after_media") or [])
+    try:
+        ev_settings = await db.get_settings(list(memory.EVENT_KEYS))
+    except Exception:
+        logger.exception("rag: не прочитала настройки ивента для проверки сумм")
+        ev_settings = {}
+    if any(suma_no_evento(t, ev_settings) for t in texts):
+        logger.warning("rag: сумма в готовом тексте (%s) — не отправляю", fuente)
+        return _silent(MONEY_REASON, kind=VERIFICACION, rag_meta={**meta, "fuentes": [fuente]})
+    problem = await unrendered_tokens(texts)
     if problem:
         await _tech_alert(f"токен не подставился ({fuente}): {problem}", lead.get("phone"))
         return _silent(f"токен не подставился ({problem}) — ответь сама",
@@ -1633,7 +1683,7 @@ _KIND_PREFIX = {TECNICO: "Техническая ошибка", VERIFICACION: "�
                 FUERA_DE_BASE: "Вопрос вне базы", "filtro": "Лид не прошёл первый вопрос"}
 _KIND_BY_TEXT = [
     (TECNICO, ("сбой", "техническ", "недоступн", "лимит расхода", "токен не подставился")),
-    (VERIFICACION, ("утверждения без источника", "числа без источника", "в ответе 5,500",
+    (VERIFICACION, ("утверждения без источника", "числа без источника", "в ответе 5,500", "сумма или валюта",
                     "ссылка не из базы", "после проверок ответ пустой", "проверк")),
 ]
 SILENT_COUNTS: collections.Counter = collections.Counter()
@@ -2044,6 +2094,49 @@ def pago_paso(lead: dict, mem: dict, user_text: str) -> dict | str | None:
     return None
 FILTRO = "filtro"
 
+_OTRA_PREGUNTA_RE = re.compile(r"c[oó]mo\s+funciona|qu[eé]\s+incluye|d[oó]nde|cu[aá]ndo|es\s+real|"
+                               r"es\s+segur|garant|c[oó]mo\s+es\s+el\s+proceso", re.IGNORECASE)
+
+
+def _bot_ya_dijo(mem: dict, texto: str) -> bool:
+    """Этот готовый текст бот уже отправлял в этом диалоге."""
+    return any(memory.autor(m) == "anna_bot" and texto in (m.get("text") or "")
+               for m in mem.get("prior") or [])
+
+
+def servicio_paso(lead: dict, mem: dict, user_text: str) -> dict | None:
+    """Услуга в чате без цены (решения Арины 2026-10-24), кодом, без модели:
+    - согласие на предложенный звонок → короткий ответ, ручной режим и алерт «готов к созвону»;
+    - вопрос о цене услуги → «стоимость зависит от запроса, обсудим в коротком звонке»;
+      второй раз — молча Ане;
+    - «es muy caro» на пути услуги → тот же ход (звонок), цену не называем; второй раз — Ане;
+    - живёт не в CDMX или не может в среду (ивент) → персональный подбор и звонок, один раз.
+    None — не наш случай."""
+    text = user_text or ""
+    cal, settings = mem["calificacion"], mem["settings"]
+    ruta = cal.get("ruta") or memory.ruta(lead, text)
+    if servicio.ofrecio_llamada(mem.get("ultimo_mensaje_anna")) and servicio.acepta_llamada(text):
+        return _result([servicio.LLAMADA_OK], funnel_stage="pitched", llamada_lista=True,
+                       extracted={} if lead.get("interest") in ("agency", "both") else {"interest": "both"})
+    otra = bool(_OTRA_PREGUNTA_RE.search(text))
+    if servicio.pregunta_precio_servicio(text, ruta) and not otra:
+        if _bot_ya_dijo(mem, servicio.PRECIO):
+            return _silent("лид второй раз спрашивает цену услуги — ответь сама", kind=FUERA_DE_BASE)
+        return _result([servicio.PRECIO])
+    if memory.es_objecion_precio(text) and not otra and ruta != "evento" and (
+            ruta == "servicio" or _bot_ya_dijo(mem, servicio.PRECIO)
+            or mem["ya_hecho"].get("pitch_servicio_dado")):
+        if _bot_ya_dijo(mem, servicio.CARO):
+            return _silent("лид второй раз говорит, что услуга дорогая — реши сама", kind=FUERA_DE_BASE)
+        return _result([servicio.CARO])
+    motivo = servicio.fuera_o_miercoles(text)
+    # возраст и «холост» в том же сообщении — фильтры важнее (ответит модель с проверками)
+    if motivo and ruta != "servicio" and settings.get("event_active") == "1" \
+            and lead.get("is_single") is not False and not re.search(r"\d|casad|no\s+soy\s+soltero", text, re.I) \
+            and not _bot_ya_dijo(mem, servicio.FUERA):
+        return _result([servicio.FUERA], extracted={"interest": "both"})
+    return None
+
 
 def _foto(lead: dict, user_text: str) -> bool:
     return bool(lead.get("photo_received")) or "[фото одобрено" in (user_text or "")
@@ -2441,8 +2534,9 @@ async def _generate_core(lead: dict, user_text: str, prompt: str, cost: Cost, me
                     else [b.strip() for b in rec["contenido_es"].split("\n\n") if b.strip()])
             foto = bool(lead.get("photo_received")) or "[фото одобрено" in (user_text or "")
             if rid == "greeting_hola" and "[фото" in (user_text or ""):
-                # первым сообщением прислал фото — сначала спасибо (решение 2026-10-23)
-                text = [PHOTO_FIRST_THANKS] + text
+                # первым сообщением прислал фото — сначала спасибо (решение 2026-10-23);
+                # эмодзи на весь ход не больше двух, 🎃 темы не считается (2026-10-24)
+                text = emojis_sin_tema([PHOTO_FIRST_THANKS] + text, settings)
             if rid in ("greeting_event", "greeting_service"):
                 # анкета одним сообщением; фото уже есть — без просьбы о фото
                 ruta_q = "servicio" if rid == "greeting_service" else "evento"
@@ -2510,6 +2604,16 @@ async def _generate_core(lead: dict, user_text: str, prompt: str, cost: Cost, me
     if tema:
         return _silent(f"нет данных в базе знаний: {tema}", kind=FUERA_DE_BASE,
                        rag_meta={**meta, "fuentes": ["policy_fuera_de_base"]})
+
+    # 2.515. Услуга без цены: звонок вместо суммы, согласие на звонок — Ане (решения 2026-10-24);
+    # после скидок/оплаты (2.5) и тем вне базы (2.51) — они важнее (ревью 2026-10-24).
+    paso_srv = servicio_paso(lead, mem, user_text)
+    if paso_srv is not None:
+        if paso_srv["action"] == "silent":
+            paso_srv["rag_meta"] = {**meta, "fuentes": ["servicio_sin_precio"]}
+            return paso_srv
+        paso_srv["rag_meta"] = {**meta, "fuentes": ["servicio_sin_precio"], "literal": True}
+        return await _literal_checked(paso_srv, lead, "servicio_sin_precio", meta)
 
     # 2.52. «Está muy caro» (ивент): первый раз — утверждённый текст владелицы дословно, второй —
     # молча Ане (решение 2026-10-23). Возражение плюс другой вопрос — модель.
@@ -2644,7 +2748,7 @@ async def _generate_core(lead: dict, user_text: str, prompt: str, cost: Cost, me
                 return await _venta_por_compra_lista(compra, lead, meta)
 
         bubbles, reason, notes = revisar(out, mem, lead, merged, user_text, fichas)
-        if reason:
+        if reason and reason != MONEY_REASON:
             # весь ответ отклонён (число, ссылка, 5,500) — оставляем пузыри, прошедшие проверку
             good = [b for b in out["bubbles"]
                     if not revisar({**out, "bubbles": [b], "paso_extra": {}}, mem, lead, merged,
@@ -2698,6 +2802,11 @@ async def _generate_core(lead: dict, user_text: str, prompt: str, cost: Cost, me
                 "Tu respuesta anterior no pasó la verificación: " + str(fallo[0])[:300] +
                 ". Responde solo con datos de las fichas y del evento actual, sin repetir eso. "
                 "Si el dato no está: falta_dato=true.")
+            if fallo[0] == MONEY_REASON:
+                context["reintento"] = (
+                    "Tu respuesta anterior tenía un monto o una moneda. Del servicio nunca das "
+                    "precio, paquetes ni montos: depende de cada caso y se platica en una llamada "
+                    "corta. Escribe la respuesta sin ningún monto ni moneda.")
     else:
         reason, detail = fallo
         return _silent(reason, kind=VERIFICACION,
@@ -2729,15 +2838,7 @@ async def _generate_core(lead: dict, user_text: str, prompt: str, cost: Cost, me
     if out["send_event_photo"] and not mem["ya_hecho"].get("foto_enviada"):
         result["send_event_photo"] = True
     await _attach_media_captions(result, lead)
-    # Запись на звонок — только в этапе venta, с именем, почтой и показанной ценой услуги.
+    # Время звонка бот не назначает (решение Арины 2026-10-24): лид согласился — Аня сама.
     if out["proposed_videocall_at"]:
-        result["proposed_videocall_at"] = out["proposed_videocall_at"]
-        result = ai._enforce_videocall_proposal_needs_current_signal(result, user_text)
-        price_shown = mem["ya_hecho"].get("precio_servicio_dado") or any(
-            _SERVICE_PRICE_RE.search(b) for b in bubbles)
-        if result.get("proposed_videocall_at") and (
-                cal["etapa"] != "venta" or ai._missing_qualification_field(merged)
-                or not merged.get("email") or not price_shown):
-            result = ai._clear_videocall_proposal(result)
-            notes.append("отменила запись на звонок (не все данные)")
+        notes.append("запись на звонок не делаю (время назначает Аня)")
     return result

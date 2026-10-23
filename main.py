@@ -25,6 +25,7 @@ import filters
 import funnel
 import manager_bot
 import mini_api
+import pago_recibo
 import scheduler
 import sender
 import vision
@@ -250,6 +251,20 @@ async def _process_burst_impl(phone: str) -> None:
                               bypass_phones, whitelist_no_alert=wl_no_alert,
                               bot_paused=bot_paused)
 
+    # 0) Оплата (решение Арины 2026-10-24): «ya pagué» вместе с фото/документом — один ответ и
+    #    один алерт; чек (фото/документ без текста, «te mando el comprobante») после ссылки на
+    #    билет — «возможно оплатил», без модели и без просьбы о селфи.
+    if decision.action == "payment_claim":
+        media = pago_recibo.media_en_rafaga(msgs)
+        await _payment_reply(phone, lead, posible=False,
+                             detalle=f"Вместе с сообщением прислал: {', '.join(media)}" if media else None)
+        return
+    if decision.action == "needs_ai":
+        detalle = await _recibo_en_rafaga(phone, msgs)
+        if detalle:
+            await _payment_reply(phone, lead, posible=True, detalle=detalle)
+            return
+
     # 1) Любое детерминированное решение приоритетнее фото: whitelist/silent (молчим),
     #    blocked (escort/агрессия), а также opt-out, английский, отказ по фильтрам,
     #    заявление об оплате (фото = чек, не анкетное фото) и Instagram. ИСПРАВЛЕНО
@@ -311,6 +326,48 @@ async def _process_burst_impl(phone: str) -> None:
 
     # 3) текст → детерминированное решение (needs_ai/rejected).
     await _apply_decision(phone, decision, lead, combined)
+
+
+async def _recibo_en_rafaga(phone: str, msgs: list[dict]) -> str | None:
+    """Залп — возможный чек об оплате (после ссылки на билет или «ya pagué»)? Описание для
+    алерта или None. Сбой чтения истории — None: обычный путь, как раньше."""
+    if not any((m.get("meta") or {}).get("content_type") in ("photo", "document")
+               or pago_recibo.COMPROBANTE_RE.search(m.get("text") or "") for m in msgs):
+        return None
+    try:
+        history = await db.get_conversation_history(phone, pago_recibo.HISTORY_LIMIT)
+        link = (await db.get_settings(["event_link"])).get("event_link")
+    except Exception:
+        logger.exception("чек об оплате: не прочитала историю [%s] — обычный путь", phone)
+        return None
+    ctx = pago_recibo.contexto(history, {m.get("id") for m in msgs}, link)
+    return pago_recibo.es_recibo(msgs, ctx)
+
+
+async def _payment_reply(phone: str, lead: dict, *, posible: bool, detalle: str | None) -> None:
+    """Ответ лиду об оплате и алерт Ане и Арине с кнопкой «Подтвердить оплату». Повтор за
+    DEDUP_MIN минут (наш ответ уже в истории) — ни второго ответа, ни второго алерта."""
+    try:
+        history = await db.get_conversation_history(phone, pago_recibo.HISTORY_LIMIT)
+    except Exception:
+        logger.exception("оплата: не прочитала историю для дедупа [%s]", phone)
+        history = []
+    if pago_recibo.contexto(history, set(), None)["ack_reciente"]:
+        logger.info("оплата [%s]: повтор за %d мин — без ответа и алерта", phone, pago_recibo.DEDUP_MIN)
+        return
+    logger.info("РЕШЕНИЕ %s [%s] %s", "возможно оплатил" if posible else "payment_claim", phone,
+                detalle or "")
+    # Алерт первым и независимо от отправки: сбой ответа лиду не теряет оплату (ревью 2026-10-24).
+    try:
+        await escalation.notify_payment(lead, posible=posible, detalle=detalle)
+    except Exception as e:
+        logger.exception("оплата: алерт не ушёл [%s]", phone)
+        await escalation.notify_error("main._payment_reply.alert", repr(e), phone)
+    try:
+        await sender.send(phone, [pago_recibo.ACK])
+    except Exception as e:
+        logger.exception("оплата: ответ лиду не ушёл [%s]", phone)
+        await escalation.notify_error("main._payment_reply.send", repr(e), phone)
 
 
 async def _transcribe_voices(phone: str, msgs: list[dict]) -> None:
@@ -528,9 +585,7 @@ async def _apply_decision(phone: str, decision: "filters.Decision", lead: dict,
     if decision.action == "payment_claim":
         # Лид сообщил об оплате (блок 13). Бот НЕ меняет стадию сам — короткий ack +
         # эскалация Ане с кнопкой «Подтвердить оплату». Реальное действие — confirm_payment.
-        logger.info("РЕШЕНИЕ payment_claim [%s]", phone)
-        await sender.send(phone, ["¡Genial! 🤍 Ahora lo confirmo y te escribo"])
-        await escalation.notify_payment(lead)
+        await _payment_reply(phone, lead, posible=False, detalle=None)
         return
 
     if decision.action == "instagram_handoff":
@@ -712,6 +767,14 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
 
     sent = await sender.send(phone, messages,  # messages лиду
                              allow_repeat_links=sender._is_link_request(combined))
+    if result.get("llamada_lista"):
+        # Лид согласился на звонок: время назначает Аня — ручной режим и алерт (2026-10-24).
+        # До проверки прерывания: передачу Ане не теряем.
+        try:
+            await db.update_lead_fields(phone, mode="manual")
+        except Exception:
+            logger.exception("не смог поставить manual (готов к созвону) [%s]", phone)
+        await escalation.notify_call_ready(lead, combined)
     if sender.interrupted():
         # Лид написал ещё раз, пока бот отвечал: остаток ответа и медиа не шлём — новое
         # сообщение разберёт следующий проход с полной историей (уже ушедшее в ней есть).

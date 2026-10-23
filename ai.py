@@ -49,6 +49,7 @@ import db
 import escalation
 import funnel
 import reply_mode
+import servicio
 from config import settings
 from filters import MAX_AGE, MIN_AGE
 
@@ -997,6 +998,8 @@ async def _enforce_event_qualification_followup(result: dict, history: list[dict
     return result
 
 
+# Валюта услуги (USD/доллары) — ивент в MXN, его не трогаем.
+_SERVICE_CURRENCY_RE = re.compile(r"\busd\b|d[oó]lares|\bdlls?\b|\bus\$", re.IGNORECASE)
 _SERVICE_PRICE_PATTERN = re.compile(
     r"\b10[.,]?000\b|\b10\s*mil\b|\$?\s*10\s*k\b", re.IGNORECASE
 )  # code-review 2026-09-23: "$10,000"/"10.000" además de "10 mil"/"10k" (falso
@@ -1017,18 +1020,17 @@ async def _enforce_service_price_gate(result: dict, lead: dict) -> dict:
     """
     if result.get("action") != "respond":
         return result
-    if lead.get("is_single") is True:
+    if not any(_SERVICE_PRICE_PATTERN.search(m) or _SERVICE_CURRENCY_RE.search(m)
+               for m in result.get("messages", [])):
         return result
-    if not any(_SERVICE_PRICE_PATTERN.search(m) for m in result.get("messages", [])):
-        return result
-    row = await db.get_scenario_row(2)
-    if not row:
-        return result
-    logger.warning("guardrail: холодному лиду чуть не ушла цена сервиса ($10,000) → "
-                    "заменяю на крючок №2")
+    # 2026-10-24 (решение Арины): цену услуги бот не называет НИКОМУ — ни холодному, ни
+    # квалифицированному. Весь ответ заменяем на «зависит от случая, обсудим в звонке».
+    logger.warning("guardrail: в ответе цена/валюта услуги → заменяю на ответ без цены")
     result = dict(result)
-    result["messages"] = _split_template(row.get("template_es", ""))
-    result["used_scenario_id"] = 2
+    result["messages"] = [servicio.PRECIO]
+    result["used_scenario_id"] = None
+    result["send_event_photo"] = False
+    result["send_event_video"] = False
     return result
 
 
@@ -1137,59 +1139,9 @@ def _enforce_qualification_before_booking(result: dict, lead: dict) -> dict:
 
 
 def _enforce_price_shown_before_booking(result: dict, history: list[dict], lead: dict) -> dict:
-    """Гарантия (2026-09-23, pedido directo de la dueña: "перед записью на звонок надо
-    сказать цену точно"): proposed_videocall_at (dispara reserva 100% automática en
-    Google Calendar, sin revisión humana, ver _enforce_videocall_proposal_needs_current_signal
-    abajo) nunca se confirma sin que el precio del servicio ($10,000 USD) se haya
-    mencionado AL MENOS una vez en la conversación, ni en el historial de Anna ni en
-    este mismo turno.
-
-    Encontrado en test real: un lead ya calificado (name/is_single/age/profession/foto)
-    dijo "va, me interesa, agendemos el jueves a las 5pm" — el precio NUNCA se había
-    mencionado en toda la conversación, y el bot agendó directo, pidiendo solo el
-    correo. El lead llegaría a la llamada sin saber la inversión.
-
-    IMPORTANTE (code-review 2026-09-23): si el lead NO está confirmado soltero
-    (is_single != True), NO inyectamos el precio aquí — sería repetir exactamente lo
-    que _enforce_service_price_gate (arriba) ya se encargó de bloquear para leads
-    fríos. En ese caso solo cancelamos la reserva en silencio, sin agregar precio.
-
-    TAMBIÉN (code-review 2026-09-23): si el mensaje ya trae contenido real del EVENTO
-    ([event_link]/http — mismo marcador que _EVENT_CONTENT_MARKER_RE), NO lo pisamos
-    con la burbuja de precio del servicio — sonaría fuera de tono mezclado con un
-    pitch de evento. Solo cancelamos la reserva, dejamos el contenido del evento tal
-    cual (caso teórico: el lead mezcló "sí quiero el evento" con un día/hora concreto)."""
-    if result.get("action") != "respond":
-        return result
-    if not result.get("proposed_videocall_at"):
-        return result
-    current_text = " ".join(result.get("messages") or [])
-    if _SERVICE_PRICE_PATTERN.search(current_text):
-        return result
-    if any(t.get("sender") == "anna" and _SERVICE_PRICE_PATTERN.search(t.get("text") or "")
-           for t in history or []):
-        return result
-    result = _clear_videocall_proposal(result)
-    if (lead or {}).get("is_single") is not True:
-        logger.warning("guardrail: proposed_videocall_at sin precio Y sin is_single "
-                        "confirmado → bloqueo reserva, NO doy el precio (lead frío)")
-        return result
-    if _EVENT_CONTENT_MARKER_RE.search(current_text):
-        logger.warning("guardrail: proposed_videocall_at sin precio, pero el mensaje "
-                        "ya es del EVENTO → bloqueo reserva, NO piso el contenido")
-        return result
-    logger.warning("guardrail: proposed_videocall_at sin precio mencionado nunca en la "
-                    "conversación → bloqueo reserva, doy precio primero")
-    result["messages"] = [
-        "¡Perfecto! Antes de agendar, te cuento: la inversión en el acompañamiento "
-        "personal es desde $10,000 USD, con 15 mujeres eslavas (hasta 20) elegidas a "
-        "mano a lo largo de unos 6 meses.",
-        "¿Seguimos con la videollamada? Dime otra vez qué día y hora te queda 🤍",
-    ]
-    result["send_event_photo"] = False
-    result["send_event_video"] = False
-    result.pop("video_caption", None)
-    result.pop("photo_caption", None)
+    """Было (2026-09-23): запись на звонок только после того, как прозвучала цена услуги, иначе
+    бот сам вставлял «la inversión es desde $10,000 USD». С 2026-10-24 цену услуги бот не
+    называет никому (решение Арины) — проверка снята, цену не вставляем. Вызов оставлен."""
     return result
 
 

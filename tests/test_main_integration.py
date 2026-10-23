@@ -2031,6 +2031,7 @@ class TestDecisionBeatsPhoto:
         monkeypatch.setattr(db, "get_unprocessed_inbound", AsyncMock(return_value=msgs))
         monkeypatch.setattr(db, "mark_messages_processed", AsyncMock())
         monkeypatch.setattr(db, "get_lead_by_phone", AsyncMock(return_value={"whatsapp_name": "T"}))
+        monkeypatch.setattr(db, "get_conversation_history", AsyncMock(return_value=[]))
         monkeypatch.setattr(db, "is_whitelisted", AsyncMock(return_value=False))
         monkeypatch.setattr(db, "bypass_phone_set", AsyncMock(return_value=frozenset()))
         monkeypatch.setattr(db, "get_settings", AsyncMock(return_value={"bot_paused": "0"}))
@@ -2039,12 +2040,22 @@ class TestDecisionBeatsPhoto:
         apply = AsyncMock(); monkeypatch.setattr(main, "_apply_decision", apply)
         return photos, apply
 
-    @pytest.mark.parametrize("action", ["optout", "silent_language", "payment_claim", "rejected", "instagram_handoff"])
+    @pytest.mark.parametrize("action", ["optout", "silent_language", "rejected", "instagram_handoff"])
     async def test_non_ai_decision_skips_photo_branch(self, monkeypatch, action):
         photos, apply = self._setup(monkeypatch, "x", filters.Decision(action, "r"))
         await main._process_burst("wa_5215512345678")
         photos.assert_not_awaited()
         apply.assert_awaited_once()
+
+    async def test_payment_claim_with_photo_one_reply_no_vision(self, monkeypatch):
+        """«ya pagué» + фото в одном залпе (2026-10-24): один ответ и один алерт, фото не в Vision."""
+        photos, apply = self._setup(monkeypatch, "x", filters.Decision("payment_claim", "r"))
+        pay = AsyncMock(); monkeypatch.setattr(main, "_payment_reply", pay)
+        await main._process_burst("wa_5215512345678")
+        photos.assert_not_awaited()
+        apply.assert_not_awaited()
+        pay.assert_awaited_once()
+        assert "фото" in pay.call_args.kwargs["detalle"]
 
     async def test_needs_ai_goes_to_photo_branch(self, monkeypatch):
         photos, apply = self._setup(monkeypatch, "soy soltero", filters.Decision("needs_ai", "r"))

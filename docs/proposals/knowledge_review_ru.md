@@ -611,22 +611,6 @@
 - **Источник:** №22
 
 
-## Тариф
-
-### `tariff_service` · Inversión del servicio · ✅ подтверждено
-
-**Текст (es):**
-
-> La inversión en el servicio personalizado es desde $10,000 USD.
-
-**Перевод:** Вложение в персональный сервис от $10,000 USD.
-
-- **Когда:** ¿cuánto cuesta el servicio?, precio de la agencia, ¿cuánto cobran?, ¿cuánto cuesta el matchmaking?
-- **Как отвечать (для модели):** Dala si el lead la pide directamente o muestra interés claro, y siempre en el pitch después de la foto (etapa venta). Sin descuentos. Los niveles superiores se ven en la videollamada.
-- **Флаги:** действие: ответить; можно почти дословно
-- **Источник:** промпт, CLAUDE.md, №6, №14
-
-
 ## Заготовки (base_script)
 
 ### `greeting_hola` · Primer mensaje: «hola» o solicitud general · ✅ подтверждено
@@ -716,22 +700,22 @@
 - **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["agency"]}`
 - **Источник:** №3 (убраны «Gracias por tu interés!», «platicarte», «Antes de contarte más»; вопрос возраста перенесён в слоты); 2026-10-23: анкета одним сообщением (как пишет Аня); 2026-10-23 (после живого теста): анкета короче — без Россия/Украина/Беларусь и серьёзных отношений, фото отдельно после ответа
 
-### `service_pitch` · Pitch del servicio con precio (después de la foto) · ✅ подтверждено
+### `service_pitch` · Pitch del servicio (después de la foto), sin precio · ✅ подтверждено
 
 **Текст (es):**
 
 > Gracias por tu foto 🤍 Te explico cómo puedo ayudarte: soy matchmaker personal y mi trabajo es encontrarte mujeres eslavas que de verdad encajen contigo, por sus valores, su forma de ser y lo que buscan en una relación.
 >
-> Te presento a 15 mujeres elegidas a mano especialmente para ti, según tus valores, tu personalidad y tus preferencias de físico. Te acompaño en cada paso hasta que encuentres a la indicada, y ya hemos formado más de 180 parejas así. La inversión es desde $10,000 USD.
+> Te presento a 15 mujeres elegidas a mano especialmente para ti, según tus valores, tu personalidad y tus preferencias de físico. Te acompaño en cada paso hasta que encuentres a la indicada, y ya hemos formado más de 180 parejas así.
 >
-> Me gustaría platicar contigo en una videollamada para conocerte mejor. ¿Qué día te queda bien? Atiendo de [horario_llamada].
+> Me gustaría platicar contigo en una llamada corta para conocerte mejor y contarte cómo sería en tu caso. ¿Te parece?
 
-**Перевод:** «Спасибо за фото. Расскажу, чем могу помочь: я личный матчмейкер и моя работа — найти тебе славянок, которые действительно подходят тебе по ценностям, характеру и тому, что они ищут в отношениях.» / «Я знакомлю тебя с 15 женщинами, подобранными вручную специально для тебя, по твоим ценностям, характеру и предпочтениям во внешности. Сопровождаю на каждом шаге, пока не найдёшь ту самую; так мы уже составили больше 180 пар. Вложение от $10,000 USD.» / «Хотелось бы поговорить с тобой по видеозвонку, чтобы узнать тебя лучше. Какой день тебе удобен? Я на связи [часы].»
+**Перевод:** «Спасибо за фото. Расскажу, чем могу помочь: я личный матчмейкер и моя работа — найти тебе славянок, которые действительно подходят тебе по ценностям, характеру и тому, что они ищут в отношениях.» / «Я знакомлю тебя с 15 женщинами, подобранными вручную специально для тебя, по твоим ценностям, характеру и предпочтениям во внешности. Сопровождаю на каждом шаге, пока не найдёшь ту самую; так мы уже составили больше 180 пар.» / «Хотелось бы поговорить с тобой коротко по звонку, чтобы узнать тебя лучше и рассказать, как это было бы в твоём случае. Как тебе?»
 
 - **Когда:** (ruta servicio: foto aprobada y slots name, is_single, age, profession completos)
 - **Как отвечать (для модели):** Casi literal cuando se cumple la situación. Si el lead pregunta otra cosa en el mismo mensaje, responde primero eso.
-- **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"ruta": "servicio", "foto_aprobada": true, "slots_completos": true, "precio_servicio_dado": false}`
-- **Источник:** №6 (убрана конструкция «no solo… sino…», «Me encantaría» → «Me gustaría»)
+- **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"ruta": "servicio", "foto_aprobada": true, "slots_completos": true, "pitch_servicio_dado": false}`
+- **Источник:** №6; 2026-10-24: без цены, звонок без назначения времени
 
 ### `agency_trust` · ¿Es real? ¿Es seguro? · ✅ подтверждено
 
@@ -870,6 +854,19 @@
 
 
 ## Политики (эскалация, фильтры, блоки)
+
+### `tariff_service` · Precio del servicio: no se da por chat · ✅ подтверждено
+
+**Текст (es):**
+
+> El servicio es personalizado: la inversión depende de lo que busca cada persona y se platica en una llamada corta.
+
+**Перевод:** Услуга персональная: стоимость зависит от запроса, обсуждается на коротком звонке. Цену, пакеты и суммы бот не называет.
+
+- **Когда:** ¿cuánto cuesta el servicio?, precio de la agencia, ¿cuánto cobran?, ¿cuánto cuesta el matchmaking?
+- **Как отвечать (для модели):** Nunca des precio, paquetes ni montos del servicio, aunque lo pida directo. Explica que depende de su caso y propón una llamada corta. La hora la acuerda Anna.
+- **Флаги:** действие: ответить; можно почти дословно
+- **Источник:** решение Арины 2026-10-24: цену услуги бот не называет
 
 ### `service_women_contact` · Contacto de las mujeres · ✅ подтверждено
 

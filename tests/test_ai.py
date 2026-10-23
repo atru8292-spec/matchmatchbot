@@ -11,6 +11,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import ai
+import servicio
 import sender
 
 
@@ -1447,12 +1448,12 @@ class TestEnforceLinkPresence:
     async def test_noop_for_unrelated_scenario(self, lead, history):
         """used_scenario_id no в {51,52} — гейт не трогает ответ вообще."""
         scenario = _make_scenario(id=16, ai_allowed=True, mode="bot_auto", score=0.80)
-        ai_response = {**_VALID_AI_RESPONSE, "messages": ["La inversión es $10,000 USD."],
+        ai_response = {**_VALID_AI_RESPONSE, "messages": ["Te presento a mujeres elegidas a mano."],
                        "used_scenario_id": 16}
         with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
              patch("ai._call_openai", AsyncMock(return_value=ai_response)):
-            result = await ai.generate_reply(lead, history, "cuanto cuesta el servicio")
-        assert result["messages"] == ["La inversión es $10,000 USD."]
+            result = await ai.generate_reply(lead, history, "como funciona el servicio")
+        assert result["messages"] == ["Te presento a mujeres elegidas a mano."]
 
     async def test_replaces_last_bubble_at_max_messages(self, lead, history):
         """Уже MAX_MESSAGES бабблов без ссылки → заменяем последний, не превышаем лимит."""
@@ -2112,93 +2113,15 @@ class TestEnforceQualificationBeforeBooking:
 
 
 class TestEnforcePriceShownBeforeBooking:
-    """(2026-09-23, pedido directo de la dueña: "перед записью на звонок надо сказать
-    цену точно") proposed_videocall_at nunca se confirma sin que el precio del
-    servicio ($10,000 USD) se haya mencionado al menos una vez, ni en el historial ni
-    en este turno — encontrado en test real: lead ya calificado dijo "va, me interesa,
-    agendemos el jueves a las 5pm" sin que el precio se hubiera mencionado NUNCA, y el
-    bot agendó directo pidiendo solo el correo."""
+    """С 2026-10-24 цену услуги бот не называет: проверка «цена до записи» снята, цену в
+    ответ не вставляем."""
 
-    def test_blocks_and_gives_price_when_never_mentioned(self):
-        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
-                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"]}
-        history = [{"sender": "lead", "text": "va, me interesa, agendemos"}]
-        out = ai._enforce_price_shown_before_booking(result, history, {"is_single": True})
-        assert out["proposed_videocall_at"] is None
-        text = " ".join(out["messages"])
-        assert "10,000" in text
-
-    def test_keeps_when_price_already_in_history(self):
-        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
-                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"]}
-        history = [{"sender": "anna", "text": "La inversión es desde $10,000 USD."}]
-        out = ai._enforce_price_shown_before_booking(result, history, {"is_single": True})
-        assert out["proposed_videocall_at"] == "2026-09-25T17:00:00"
-        assert out["messages"] == result["messages"]
-
-    def test_keeps_when_price_in_current_message(self):
-        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
-                  "messages": ["La inversión es desde $10,000 USD. Te confirmo el jueves a las 5pm 🤍"]}
-        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
-        assert out["proposed_videocall_at"] == "2026-09-25T17:00:00"
-
-    def test_noop_when_no_proposal(self):
-        result = {"action": "respond", "proposed_videocall_at": None, "messages": ["ok"]}
+    def test_noop_never_injects_price(self):
+        result = {"action": "respond", "messages": ["Va, el jueves a las 5."],
+                  "proposed_videocall_at": "2026-10-29T17:00:00-06:00"}
         out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
         assert out == result
-
-    def test_noop_when_action_not_respond(self):
-        """(code-review 2026-09-23) escalate/block no deben pisarse — mismo patrón
-        que el resto de guardrails del archivo."""
-        result = {"action": "escalate", "proposed_videocall_at": "2026-09-25T17:00:00",
-                  "messages": ["te escalo con Anna"]}
-        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
-        assert out == result
-
-    def test_cold_lead_no_price_leaked_booking_silently_cancelled(self):
-        """(code-review 2026-09-23) is_single != True — NO inyectamos el precio aquí,
-        sería repetir exactamente lo que _enforce_service_price_gate ya bloqueó para
-        leads fríos. Solo cancelamos la reserva, sin agregar el precio al mensaje."""
-        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
-                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"]}
-        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": None})
-        assert out["proposed_videocall_at"] is None
-        text = " ".join(out["messages"])
-        assert "10,000" not in text
-        assert out["messages"] == result["messages"]  # no reescribe el contenido
-
-    def test_does_not_overwrite_event_content_with_price_bubble(self):
-        """(code-review 2026-09-23, caso teórico) el mensaje ya trae contenido real
-        del evento ([event_link]) — no lo pisamos con la burbuja de precio del
-        servicio, solo cancelamos la reserva."""
-        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
-                  "messages": ["El precio del evento es 6,000 MXN: [event_link]"]}
-        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
-        assert out["proposed_videocall_at"] is None
-        assert out["messages"] == result["messages"]
-
-    def test_resets_stale_videocall_set_funnel_stage(self):
-        """(code-review 2026-09-23) si el modelo puso funnel_stage='videocall_set' en
-        el mismo turno que la reserva que acabamos de cancelar, debe resetearse — ese
-        stage solo es válido tras una reserva REAL (booking.py), no solo porque el
-        modelo lo mencionó junto a una propuesta descartada."""
-        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
-                  "funnel_stage": "videocall_set",
-                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"]}
-        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
-        assert out["funnel_stage"] is None
-
-    def test_resets_media_flags_when_giving_price(self):
-        """(code-review 2026-09-23) mismo patrón que _enforce_age_block: al reemplazar
-        el mensaje con la burbuja de precio, apaga foto/video huérfanos."""
-        result = {"action": "respond", "proposed_videocall_at": "2026-09-25T17:00:00",
-                  "messages": ["¡Perfecto! El jueves a las 5pm. ¿Me pasas tu correo?"],
-                  "send_event_photo": True, "send_event_video": True,
-                  "photo_caption": "x", "video_caption": "y"}
-        out = ai._enforce_price_shown_before_booking(result, [], {"is_single": True})
-        assert out["send_event_photo"] is False and out["send_event_video"] is False
-        assert "photo_caption" not in out and "video_caption" not in out
-
+        assert not any("10,000" in m for m in out["messages"])
 
 class TestEnforceVideocallProposalNeedsCurrentSignal:
     """proposed_videocall_at dispara reserva TOTALMENTE AUTOMÁTICA (evento real de
@@ -2376,8 +2299,8 @@ class TestEnforceNoAvanzarCliche:
 
 
 class TestEnforceServicePriceGate:
-    """Guardrail: холодному лиду (is_single != True) нельзя раскрывать цену сервиса
-    ($10,000) — даже если AI ошибся вопреки промпту, заменяем весь ответ на крючок №2."""
+    """Guardrail (2026-10-24): цену услуги не раскрываем НИКОМУ — ни холодному, ни
+    квалифицированному. Сумма или USD в ответе → весь ответ «зависит от случая, звонок»."""
 
     async def test_replaces_whole_reply_for_cold_lead(self, history):
         cold_lead = _make_lead(is_single=False)
@@ -2385,25 +2308,23 @@ class TestEnforceServicePriceGate:
         ai_response = {**_VALID_AI_RESPONSE,
                        "messages": ["La inversión es desde $10,000 USD."],
                        "used_scenario_id": 16}
-        hook_row = {"id": 2, "template_es": "Te cuento del evento.\n\n¿Eres soltero?"}
         with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
-             patch("ai._call_openai", AsyncMock(return_value=ai_response)), \
-             patch("db.get_scenario_row", AsyncMock(return_value=hook_row)):
+             patch("ai._call_openai", AsyncMock(return_value=ai_response)):
             result = await ai.generate_reply(cold_lead, history, "cuanto cuesta el servicio")
-        assert result["messages"] == ["Te cuento del evento.", "¿Eres soltero?"]
-        assert result["used_scenario_id"] == 2
+        assert result["messages"] == [servicio.PRECIO]
         assert not any("10,000" in m or "10000" in m for m in result["messages"])
 
-    async def test_allows_price_for_qualified_lead(self, lead, history):
-        """lead из фикстуры is_single=True → цену НЕ трогаем."""
+    @pytest.mark.parametrize("msg", ["La inversión es desde $10,000 USD.",
+                                     "Son 3,000 dólares por 3 matches.",
+                                     "El paquete cuesta 14,000 USD."])
+    async def test_qualified_lead_never_gets_price(self, lead, history, msg):
+        """lead из фикстуры is_single=True → цену тоже не называем (раньше называли)."""
         scenario = _make_scenario(id=16, ai_allowed=True, mode="bot_auto", score=0.80)
-        ai_response = {**_VALID_AI_RESPONSE,
-                       "messages": ["La inversión es desde $10,000 USD."],
-                       "used_scenario_id": 16}
+        ai_response = {**_VALID_AI_RESPONSE, "messages": [msg], "used_scenario_id": 16}
         with patch("ai.search_scenarios", AsyncMock(return_value=[scenario])), \
              patch("ai._call_openai", AsyncMock(return_value=ai_response)):
             result = await ai.generate_reply(lead, history, "cuanto cuesta el servicio")
-        assert result["messages"] == ["La inversión es desde $10,000 USD."]
+        assert result["messages"] == [servicio.PRECIO]
 
     async def test_noop_when_no_price_mentioned(self):
         result = {"action": "respond", "messages": ["Hola, cuéntame más de ti."]}
