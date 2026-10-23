@@ -113,8 +113,6 @@ _SOLO_ANYA_RE = re.compile(
     r"\bpag(?:o|ar|ue|u[eé]|os)\b|tarjeta|transferencia|transferir|dep[oó]sito|depositar|efectivo|"
     r"anticipo|factura|meses\s+sin\s+intereses|mensualidad|plazos|cuotas|reembolso|descuento",
     re.IGNORECASE)
-_ES_REAL_RE = re.compile(r"\bes\s+real\b|\bson\s+reales\b|estafa|fraude|\bfake\b|confiable|"
-                         r"garant[ií]a|garantiza|\bscam\b|\bseguro\s+que\b", re.IGNORECASE)
 
 # ── не из CDMX / не может в среду ──
 # Белый список мест вне CDMX (чёрный список районов CDMX ловил «vivo en la Narvarte»).
@@ -143,9 +141,7 @@ _FUERA_CDMX_RE = re.compile(
 _NO_MIERCOLES_RE = re.compile(
     r"no\s+(?:puedo|podr[eé]|voy\s+a\s+poder)\s+(?:ir\s+|asistir\s+)?(?:(?:el|los|en)\s+)?mi[eé]rcoles|"
     r"mi[eé]rcoles\s+(?:no\s+puedo|se\s+me\s+complica|(?:es|est[aá])\s+(?:muy\s+)?dif[ií]cil|imposible|trabajo)|"
-    r"(?:ese|el)\s+d[ií]a\s+no\s+puedo|no\s+puedo\s+(?:ese|el)\s+d[ií]a|"
-    r"no\s+(?:puedo|podr[eé]|voy\s+a\s+poder)\s+(?:ir|asistir)\s+(?:esa\s+fecha|en\s+esa\s+fecha)|"
-    r"esa\s+fecha\s+no\s+puedo",
+    r"(?:en|los|el)\s+mi[eé]rcoles\s+(?:es|est[aá])\s+(?:muy\s+)?(?:dif[ií]cil|complicado)",
     re.IGNORECASE)
 
 # ── согласие на звонок ──
@@ -208,10 +204,6 @@ def ya_sale_con_alguien(text: str) -> bool:
 def solo_anya(text: str) -> bool:
     """Контракт, документы, оплата, пакеты, суммы — ведёт только Аня."""
     return bool(_SOLO_ANYA_RE.search(text or ""))
-
-
-def pregunta_es_real(text: str) -> bool:
-    return bool(_ES_REAL_RE.search(text or ""))
 
 
 def fuera_o_miercoles(text: str) -> str | None:
@@ -277,6 +269,14 @@ def acepta_llamada(text: str, ofrecida: bool = True) -> bool:
     if "?" in text and not _TIME_Q_RE.search(text):
         return False
     return True
+
+
+_NO_DATOS_RE = re.compile(r"\?|¿|\bno\b|para\s+qu[eé]|ll[aá]m|mejor|despu[eé]s|luego", re.IGNORECASE)
+
+
+def no_son_datos(text: str) -> bool:
+    """Ответ на «cual es tu nombre completo y tu email?» — не данные (вопрос, отказ, «luego»)."""
+    return not EMAIL_RE.search(text or "") and bool(_NO_DATOS_RE.search(text or ""))
 
 
 def es_no(text: str) -> bool:

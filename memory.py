@@ -59,7 +59,7 @@ def es_objecion_precio(text: str | None) -> bool:
 
 _PRICE_OBJECTION_RE = PRICE_OBJECTION_RE
 # Пичт услуги уже был (без цены с 2026-10-24 — по цене его больше не узнать).
-PITCH_MARK = "estas disponible para una breve llamada"
+PITCH_MARK = "para una breve llamada?"      # её приглашение после фото (не «…llamada y te platico»)
 _HESITATION_RE = re.compile(r"\bpensar(?:lo|[eé])?\b|\bno\s+s[eé]\b|\btal\s+vez\b|"
                             r"\bquiz[aá]s?\b|\bluego\s+(?:te\s+)?(?:aviso|digo)\b", re.IGNORECASE)
 _FAREWELL_RE = re.compile(r"\b(?:adi[oó]s|bye|nos\s+vemos|hasta\s+luego|buenas\s+noches|"
@@ -361,7 +361,9 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
         if cuestionario.es_compuesta(text):
             out["cuestionario"] = out["turnos_bot"]
             out["cuestionario_ruta"] = None   # текст одинаковый; путь — по интересу лида
-        if "mándame 2 o 3 fotos" in text and out["pregunta_turno"].get("photo") != out["turnos_bot"] \
+        # «mándame unas fotos de ti» — её просьба в ветке агентства (2026-10-24), тоже без «?»
+        if ("mándame 2 o 3 fotos" in text or "mándame unas fotos de ti" in text) \
+                and out["pregunta_turno"].get("photo") != out["turnos_bot"] \
                 and not pregunta_slot("photo", text):
             # просьба о фото после анкеты — утверждение, но это вопрос про фото (один раз)
             out["preguntas_calificacion"]["photo"] += 1

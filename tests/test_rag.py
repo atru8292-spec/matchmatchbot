@@ -1825,9 +1825,10 @@ class TestVentaTrasFoto:
         lead = {"name": "Luis", "is_single": True, "interest": "agency", "photo_received": True}
         hist = [msg("lead", "Luis, soltero", 20), msg("anna", "¿Me mandas una foto tuya?", 19)]
         p = Pipe(monkeypatch, history=hist, lead_extra=lead)
-        p.chat_replies = [reply(["¡Gracias por tu foto, Luis! 😊"])]
         r = await rag.generate_reply(p.lead, hist, "[фото одобрено]")
-        assert len(p.model_calls()) == 1 and not r.get("after_media")
+        # 2026-10-24: ветка агентства её словами, без модели — её вопрос по недостающему
+        assert p.model_calls() == [] and not r.get("after_media")
+        assert r["messages"] == [rag.servicio.P_EDAD_PROFESION]
 
     async def test_without_single_goes_to_model(self, monkeypatch):
         lead = {"name": "Carlos", "interest": "event", "photo_received": True}

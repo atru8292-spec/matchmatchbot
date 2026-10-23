@@ -2138,6 +2138,9 @@ def servicio_paso(lead: dict, mem: dict, user_text: str) -> dict | None:
     # (ручной режим и алерт, лиду ничего: время и приглашение делает она).
     # последний ход бота может быть из нескольких пузырей — смотрим, чем он закончился
     if last.endswith(servicio.NOMBRE_EMAIL) or last.endswith(servicio.CORREO):
+        if servicio.no_son_datos(text):
+            return _silent(f"лид не дал имя и почту для звонка: «{text[:150]}» — ответь сама",
+                           kind=FUERA_DE_BASE)
         nombre, email = servicio.nombre_y_email(text)
         nombre = nombre or estado.get("nombre_completo")
         if not email and last.endswith(servicio.NOMBRE_EMAIL):
@@ -2155,10 +2158,10 @@ def servicio_paso(lead: dict, mem: dict, user_text: str) -> dict | None:
             return _result([servicio.SUERTE], pasar_a_manual=True, funnel_stage="nurture")
 
     # Согласие на звонок: её вопрос про имя и почту, без времени.
+    # интерес лида не меняем (ревью: «both» уводил вопросы про ивент в ветку услуги)
     ofrecida = servicio.ofrecio_llamada(last)
-    if servicio.acepta_llamada(text, ofrecida=ofrecida):
-        return _result([servicio.NOMBRE_EMAIL],
-                       extracted={} if lead.get("interest") in ("agency", "both") else {"interest": "both"})
+    if servicio.acepta_llamada(text, ofrecida=ofrecida) and (ofrecida or lead.get("interest") == "agency"):
+        return _result([servicio.NOMBRE_EMAIL])
 
     if ruta == "servicio" and servicio.ya_sale_con_alguien(text):
         return _result([servicio.SUERTE], pasar_a_manual=True, funnel_stage="nurture")
@@ -2166,15 +2169,20 @@ def servicio_paso(lead: dict, mem: dict, user_text: str) -> dict | None:
     # Не из CDMX — её ответ (Канкун): подбор и регистрация; не может в среду — её три сообщения.
     motivo = servicio.fuera_o_miercoles(text)
     filtros = lead.get("is_single") is not False and not re.search(r"\d|casad|no\s+soy\s+soltero", text, re.I)
-    if motivo == "fuera" and filtros and not _bot_ya_dijo(mem, servicio.FUERA_REGISTRO):
-        return _result(servicio.fuera_bubbles(text),
-                       extracted={} if lead.get("interest") in ("agency", "both") else {"interest": "both"})
+    # ответ на анкету («soy de Monterrey, abogado, soltero») — сначала анкета (ревью 2026-10-24)
+    en_anketa = cuestionario.es_compuesta(last) or last.endswith(tuple(servicio.preguntas_faltantes(
+        ["is_single", "age", "profession"]) + [servicio.P_EDAD, servicio.P_PROFESION]))
+    if motivo == "fuera" and filtros and not en_anketa and not _bot_ya_dijo(mem, servicio.FUERA_REGISTRO):
+        return _result(servicio.fuera_bubbles(text))
     if motivo == "miercoles" and filtros and ruta != "servicio" and settings.get("event_active") == "1" \
             and not _bot_ya_dijo(mem, servicio.MIERCOLES[1]):
-        return _result(list(servicio.MIERCOLES), extracted={"interest": "both"})
+        return _result(list(servicio.MIERCOLES))
 
-    if ruta != "servicio" and not servicio.pregunta_precio(text, ruta):
+    # Дальше — только лиды агентства (interest=agency); «both» и ивент — как раньше (ревью).
+    agencia = lead.get("interest") == "agency" or (ruta == "servicio" and lead.get("interest") != "both")
+    if not agencia and not servicio.pregunta_precio(text, "sin_definir"):
         return None
+    ruta = "servicio" if agencia else ruta
     sin_pago = re.sub(r"\bpag\w*", " ", text, flags=re.IGNORECASE)
     if servicio.pregunta_precio(text, ruta) and not servicio.solo_anya(sin_pago):
         if _bot_ya_dijo(mem, servicio.PRECIO):
@@ -2188,18 +2196,20 @@ def servicio_paso(lead: dict, mem: dict, user_text: str) -> dict | None:
         if _bot_ya_dijo(mem, servicio.CARO):
             return _silent("лид второй раз говорит, что услуга дорогая — реши сама", kind=FUERA_DE_BASE)
         return _result([servicio.CARO])
-    if servicio.pregunta_para_que_foto(text):
-        return _result([servicio.PARA_QUE_FOTO])
-    if servicio.pregunta_cuantas_fotos(text):
-        return _result([servicio.CUANTAS_FOTOS])
+    # её короткие ответы — один раз; повтор того же вопроса — Ане
+    for asks, reply in ((servicio.pregunta_para_que_foto, servicio.PARA_QUE_FOTO),
+                        (servicio.pregunta_cuantas_fotos, servicio.CUANTAS_FOTOS),
+                        (servicio.pide_catalogo, servicio.CATALOGO)):
+        if asks(text):
+            if _bot_ya_dijo(mem, reply):
+                return _silent("лид снова спрашивает то же — ответь сама", kind=FUERA_DE_BASE)
+            return _result([reply])
     if servicio.pregunta_como_funciona(text):
         if _bot_ya_dijo(mem, servicio.COMO_FUNCIONA[0]):
             return _silent("лид снова спрашивает, как работает услуга — ответь сама", kind=FUERA_DE_BASE)
         return _result(list(servicio.COMO_FUNCIONA))
-    if servicio.pide_catalogo(text):
-        return _result([servicio.CATALOGO])
     tipo = servicio.tipo_buscado(text)
-    if tipo:
+    if tipo and not _bot_ya_dijo(mem, servicio.TIPO[0]):
         return _result([servicio.TIPO[0], servicio.TIPO[1].format(tipo=tipo), servicio.TIPO[2]])
     return None
 
@@ -2763,6 +2773,22 @@ async def _generate_core(lead: dict, user_text: str, prompt: str, cost: Cost, me
         venta["rag_meta"] = {**meta, "fuentes": ["venta_tras_foto"]}
         await _attach_media_captions(venta, lead)
         return venta
+
+    # 2.8. Ветка агентства только её словами (решение 2026-10-24): на что у Ани нет готового
+    # ответа — не модель, а тишина, ручной режим и алерт Ане.
+    if lead.get("interest") == "agency" or (cal.get("ruta") == "servicio" and lead.get("interest") != "both"):
+        if "[фото" in (user_text or ""):
+            # фото без анкеты в истории — тот же её порядок: недостающий вопрос или приглашение
+            datos = {k: lead.get(k) for k in ("is_single", "age", "profession")}
+            bubbles = cuestionario_servicio(lead, mem, datos, _foto(lead, user_text), "", {}, {})
+            if bubbles:
+                pitch = bubbles[-1] == servicio.INVITACION
+                literal = _result(bubbles, funnel_stage="pitched" if pitch else "qualifying",
+                                  rag_meta={**meta, "fuentes": ["service_pitch" if pitch else "cuestionario"],
+                                            "literal": True})
+                return await _literal_checked(literal, lead, "cuestionario", meta)
+        return _silent("в ветке агентства на это нет ответа Ани — ответь сама", kind=FUERA_DE_BASE,
+                       rag_meta={**meta, "fuentes": ["agencia_sin_texto_de_anya"]})
 
     # 3. Поиск по базе знаний и вызов модели.
     async def embed_records(texts):

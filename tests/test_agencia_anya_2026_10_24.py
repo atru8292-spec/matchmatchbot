@@ -257,14 +257,19 @@ async def test_already_dating_suerte_and_manual(monkeypatch):
 @pytest.mark.asyncio
 async def test_fuera(monkeypatch, text, first):
     d = started(Dialog(monkeypatch, lead={"interest": "event", "name": "Luis", "is_single": True}))
+    d._add("lead", "ok")
+    d._add("anna", "Te espero el 18 de noviembre.")
     r = await d.say(text)
     assert all_text(r) == [first, servicio.FUERA_REGISTRO, servicio.SITE]
 
 
-@pytest.mark.parametrize("text", ["no puedo los miércoles", "el miércoles se me complica", "ese día no puedo"])
+@pytest.mark.parametrize("text", ["no puedo los miércoles", "el miércoles se me complica",
+                                  "en miércoles es muy difícil para mí"])
 @pytest.mark.asyncio
 async def test_miercoles_three_messages(monkeypatch, text):
     d = started(Dialog(monkeypatch, lead={"interest": "event", "name": "Luis", "is_single": True}))
+    d._add("lead", "ok")
+    d._add("anna", "Te espero el 18 de noviembre.")
     r = await d.say(text)
     assert all_text(r) == servicio.MIERCOLES
     r = await d.say("sí")
@@ -340,11 +345,64 @@ async def test_dogon_reply_yes_suerte(monkeypatch):
 # ───────────────────────── сумма не звучит ─────────────────────────
 
 @pytest.mark.asyncio
-async def test_model_sum_retry_then_silent(monkeypatch):
+async def test_unknown_question_silent_no_model(monkeypatch):
     d = started(Dialog(monkeypatch, lead={**AGENCIA, "is_single": True, "age": 35, "profession": "abogado",
                                           "photo_received": True}))
     d._add("anna", servicio.INVITACION)
-    d.models["¿y qué tan rápido encuentran a alguien?"] = model(["El plan de 3 matches son 3,000 USD."])
+    # вопроса нет в её переписке — модель в ветке агентства не зовём: тишина и Аня
     r = await d.say("¿y qué tan rápido encuentran a alguien?")
-    assert r["action"] == "silent" and r["messages"] == []
-    assert len(d.model_calls) == 2 and rag.MONEY_REASON in r["silent_reason"]
+    assert r["action"] == "silent" and r["messages"] == [] and d.model_calls == []
+
+
+@pytest.mark.asyncio
+async def test_anketa_answer_with_city_continues_anketa(monkeypatch):
+    """«soy de Monterrey, abogado, soltero» на её анкету — анкета, а не ответ «не из CDMX»."""
+    d = started(Dialog(monkeypatch, lead=AGENCIA))
+    r = await d.say("soy de Monterrey, abogado, soltero")
+    assert servicio.FUERA_REGISTRO not in all_text(r)
+
+
+@pytest.mark.asyncio
+async def test_photo_request_not_repeated(monkeypatch):
+    """Её просьба о фото без «?» — считается вопросом; на «ok» второй раз не уходит (ревью)."""
+    d = started(Dialog(monkeypatch, lead=AGENCIA))
+    r = await d.say("35, abogado, soltero")
+    assert all_text(r) == [servicio.FOTOS]
+    r = await d.say("ok")
+    assert servicio.FOTOS not in all_text(r)
+
+
+@pytest.mark.parametrize("text", ["¿para qué quieres mi correo?", "no, mejor después", "mejor llámame tú"])
+@pytest.mark.asyncio
+async def test_name_email_step_not_data_goes_to_anya(monkeypatch, text):
+    d = started(Dialog(monkeypatch, lead=AGENCIA))
+    d._add("anna", servicio.NOMBRE_EMAIL)
+    r = await d.say(text)
+    assert r["action"] == "silent" and not r.get("llamada_lista")
+
+
+@pytest.mark.asyncio
+async def test_caro_before_photo_does_not_block_invitation(monkeypatch):
+    d = started(Dialog(monkeypatch, lead=AGENCIA))
+    await d.say("está muy caro")
+    await d.say("35, abogado, soltero")
+    r = await d.say("", photo=True)
+    assert all_text(r) == [servicio.GRACIAS, servicio.INVITACION]
+
+
+@pytest.mark.asyncio
+async def test_event_lead_after_fuera_keeps_event_route(monkeypatch):
+    """После «no vivo en CDMX» интерес не меняется: вопрос про оплату билета — путь ивента."""
+    d = started(Dialog(monkeypatch, lead={"interest": "event", "name": "Luis", "is_single": True}))
+    d._add("lead", "ok")
+    d._add("anna", "Te espero el 18 de noviembre.")
+    await d.say("no vivo en CDMX")
+    assert d.lead["interest"] == "event"
+
+
+@pytest.mark.asyncio
+async def test_repeat_para_que_foto_goes_to_anya(monkeypatch):
+    d = started(Dialog(monkeypatch, lead=AGENCIA))
+    await d.say("¿para qué la foto?")
+    r = await d.say("¿para qué la foto?")
+    assert r["action"] == "silent"

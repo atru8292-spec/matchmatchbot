@@ -717,10 +717,13 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
             await db.update_lead_fields(phone, mode="manual")
         except Exception:
             logger.exception("не смог поставить manual (готов к созвону) [%s]", phone)
-        if result.get("funnel_stage"):
-            await db.set_funnel_stage(phone, result["funnel_stage"], meta={"scenario_id": None})
         await escalation.notify_call_ready(lead, combined, nombre=datos.get("nombre"),
                                            email=datos.get("email"))
+        if result.get("funnel_stage"):
+            try:
+                await db.set_funnel_stage(phone, result["funnel_stage"], meta={"scenario_id": None})
+            except Exception:
+                logger.exception("не смог поставить стадию (готов к созвону) [%s]", phone)
         if messages:
             await sender.send(phone, messages)
         return
