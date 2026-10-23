@@ -74,37 +74,33 @@ def test_seed_service_records_are_anya_or_off():
 
 @pytest.mark.asyncio
 async def test_full_agency_dialog(monkeypatch):
-    """Диалог для живого прогона: услуга → анкета → фото → для чего фото → цена ×2 → как
-    работает → реально ли → дорого → не из CDMX → «sí, llámame» → имя и почта."""
+    """Сухой прогон (2026-10-24, третья итерация): услуга → анкета → фото → для чего фото → цена →
+    для чего звонок → как работает → Канкун → «sí, llámame» → имя и почта."""
     d = Dialog(monkeypatch, settings=EV)
     r = await d.say("Hola, busco conocer una mujer eslava para algo serio")
     assert all_text(r) == [servicio.BIENVENIDA, servicio.ANKETA]
-    assert d.lead.get("interest") == "agency"
     r = await d.say("35, abogado, soltero")
     assert all_text(r) == [servicio.FOTOS]
-    r = await d.say("¿para qué la foto?")
-    assert all_text(r) == [servicio.PARA_QUE_FOTO]
     r = await d.say("", photo=True)
     assert all_text(r) == [servicio.GRACIAS, servicio.INVITACION]
+    r = await d.say("¿para qué la foto?")
+    assert all_text(r) == [servicio.PARA_QUE_FOTO]
     r = await d.say("¿cuánto cuesta?")
-    assert all_text(r) == [servicio.PRECIO]
-    r = await d.say("¿cuánto cuesta?")
-    assert r["action"] == "silent" and r["silent_kind"] == rag.FUERA_DE_BASE
+    assert all_text(r) == [servicio.PRECIO], "приглашение было 2 ответа назад — без нового"
+    r = await d.say("¿para qué la llamada?")
+    assert all_text(r) == servicio.PARA_QUE_LLAMADA + [servicio.INVITACION_CORTA]
     r = await d.say("¿cómo funciona?")
-    assert all_text(r) == servicio.COMO_FUNCIONA
-    r = await d.say("¿es real?")
-    assert r["action"] == "silent"
-    r = await d.say("es muy caro")
-    assert all_text(r) == [servicio.CARO]
-    r = await d.say("no vivo en CDMX")
-    assert all_text(r) == [servicio.FUERA_SIN_CIUDAD, servicio.FUERA_REGISTRO, servicio.SITE]
+    assert all_text(r) == servicio.COMO_FUNCIONA, "приглашение было в прошлом ответе"
+    r = await d.say("no vivo en CDMX, estoy en Cancún")
+    assert all_text(r) == ["en Cancún te podemos ayudar con matchmaking personalizado"]
     r = await d.say("sí, llámame")
     assert all_text(r) == [servicio.NOMBRE_EMAIL]
     r = await d.say("Luis Pérez García, luis.perez@gmail.com")
-    assert r["messages"] == [] and r["llamada_lista"] is True
+    assert r["messages"] == [servicio.GRACIAS] and r["llamada_lista"] is True
     assert r["llamada_datos"] == {"nombre": "Luis Pérez García", "email": "luis.perez@gmail.com"}
-    assert d.model_calls == [], "весь путь кодом, без модели"
-    assert no_sums([m["text"] for m in d.history if m["sender"] == "anna"])
+    assert d.model_calls == []
+    sent = [m["text"] for m in d.history if m["sender"] == "anna"]
+    assert no_sums(sent) and not any("registro" in t.lower() for t in sent)
 
 
 @pytest.mark.asyncio
@@ -230,7 +226,7 @@ async def test_caro_twice_silent(monkeypatch):
 async def test_catalog(monkeypatch):
     d = started(Dialog(monkeypatch, lead=AGENCIA))
     r = await d.say("¿puedo ver a las chicas?")
-    assert all_text(r) == [servicio.CATALOGO]
+    assert all_text(r) == [servicio.CATALOGO, servicio.CATALOGO_LLAMADA]
 
 
 @pytest.mark.asyncio
@@ -238,7 +234,7 @@ async def test_tipo(monkeypatch):
     d = started(Dialog(monkeypatch, lead=AGENCIA))
     r = await d.say("¿tienes judía en tu universo?")
     assert all_text(r) == ["muchas!", "con mucho gusto te podemos presentar con una judía",
-                           "tienes tiempo para una llamada y platicamos?"]
+                           servicio.TIPO_LLAMADA]
 
 
 @pytest.mark.asyncio
@@ -260,7 +256,7 @@ async def test_fuera(monkeypatch, text, first):
     d._add("lead", "ok")
     d._add("anna", "Te espero el 18 de noviembre.")
     r = await d.say(text)
-    assert all_text(r) == [first, servicio.FUERA_REGISTRO, servicio.SITE]
+    assert all_text(r) == [first, servicio.INVITACION]
 
 
 @pytest.mark.parametrize("text", ["no puedo los miércoles", "el miércoles se me complica",
@@ -271,7 +267,7 @@ async def test_miercoles_three_messages(monkeypatch, text):
     d._add("lead", "ok")
     d._add("anna", "Te espero el 18 de noviembre.")
     r = await d.say(text)
-    assert all_text(r) == servicio.MIERCOLES
+    assert all_text(r) == servicio.MIERCOLES + [servicio.MIERCOLES_LLAMADA]
     r = await d.say("sí")
     assert all_text(r) == [servicio.NOMBRE_EMAIL]
 
@@ -287,7 +283,7 @@ async def test_fuera_with_age_goes_to_filters(monkeypatch):
     d = started(Dialog(monkeypatch, lead={"interest": "event", "name": "Luis", "is_single": True}))
     d.models["tengo 80 años, vivo en Monterrey"] = model(["Gracias."], extracted={"age": 80})
     r = await d.say("tengo 80 años, vivo en Monterrey")
-    assert servicio.FUERA_REGISTRO not in all_text(r)
+    assert not any("te podemos ayudar con matchmaking" in t for t in all_text(r))
 
 
 # ───────────────────────── согласие на звонок ─────────────────────────
@@ -359,7 +355,7 @@ async def test_anketa_answer_with_city_continues_anketa(monkeypatch):
     """«soy de Monterrey, abogado, soltero» на её анкету — анкета, а не ответ «не из CDMX»."""
     d = started(Dialog(monkeypatch, lead=AGENCIA))
     r = await d.say("soy de Monterrey, abogado, soltero")
-    assert servicio.FUERA_REGISTRO not in all_text(r)
+    assert not any("te podemos ayudar con matchmaking" in t for t in all_text(r))
 
 
 @pytest.mark.asyncio
@@ -384,10 +380,13 @@ async def test_name_email_step_not_data_goes_to_anya(monkeypatch, text):
 @pytest.mark.asyncio
 async def test_caro_before_photo_does_not_block_invitation(monkeypatch):
     d = started(Dialog(monkeypatch, lead=AGENCIA))
-    await d.say("está muy caro")
+    await d.say("está muy caro")           # её фраза с приглашением
     await d.say("35, abogado, soltero")
     r = await d.say("", photo=True)
-    assert all_text(r) == [servicio.GRACIAS, servicio.INVITACION]
+    # «es muy caro» не блокирует шаг после фото; приглашение было 2 ответа назад — только спасибо
+    assert all_text(r) == [servicio.GRACIAS]
+    r = await d.say("ok")
+    assert servicio.GRACIAS not in all_text(r), "«Muchas gracias!» после фото — один раз"
 
 
 @pytest.mark.asyncio
@@ -406,3 +405,82 @@ async def test_repeat_para_que_foto_goes_to_anya(monkeypatch):
     await d.say("¿para qué la foto?")
     r = await d.say("¿para qué la foto?")
     assert r["action"] == "silent"
+
+
+# ───────────────────────── третья итерация (2026-10-24) ─────────────────────────
+
+def test_no_registration_ask_anywhere():
+    for t in servicio.TEXTOS:
+        assert "registro" not in t.lower(), t
+    by = {r["id"]: r for r in knowledge.load_seed()}
+    for r in by.values():
+        if r.get("activo", True):
+            assert "registro aqui" not in (r.get("contenido_es") or "").lower(), r["id"]
+    prompt = open("anna_prompt_conversation.md", encoding="utf-8").read().lower()
+    assert "registro aqui" not in prompt and "ayudame con tu registro" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_invitation_counter_once_per_three_answers(monkeypatch):
+    """Приглашение — не чаще раза за 3 ответа бота: после него два ответа без приглашения."""
+    d = started(Dialog(monkeypatch, lead={**AGENCIA, "is_single": True, "age": 35, "profession": "abogado"}))
+    r = await d.say("¿cuánto cuesta?")
+    assert all_text(r)[-1] == servicio.INVITACION
+    r = await d.say("¿para qué la foto?")
+    assert not any(servicio.es_invitacion(t) for t in all_text(r))
+    r = await d.say("¿puedo ver a las chicas?")
+    assert all_text(r) == [servicio.CATALOGO], "приглашение было 2 ответа назад"
+    r = await d.say("¿tienes rubia?")
+    assert all_text(r)[-1] == servicio.TIPO_LLAMADA, "прошло 2 ответа без приглашения — можно"
+
+
+@pytest.mark.asyncio
+async def test_no_invitation_after_refusal(monkeypatch):
+    d = started(Dialog(monkeypatch, lead=AGENCIA))
+    d._add("anna", servicio.INVITACION)
+    d._add("lead", "no gracias, prefiero por aquí")
+    d._add("anna", servicio.PARA_QUE_FOTO)
+    d._add("lead", "ok")
+    d._add("anna", servicio.CUANTAS_FOTOS)
+    r = await d.say("¿cuánto cuesta?")
+    assert all_text(r) == [servicio.PRECIO]
+
+
+@pytest.mark.parametrize("text", ["¿para qué la llamada?", "¿y para qué es la videollamada?",
+                                  "¿de qué se trata la llamada?"])
+@pytest.mark.asyncio
+async def test_para_que_la_llamada(monkeypatch, text):
+    d = started(Dialog(monkeypatch, lead=AGENCIA))
+    r = await d.say(text)
+    assert all_text(r)[:2] == servicio.PARA_QUE_LLAMADA and r["action"] == "respond"
+
+
+@pytest.mark.asyncio
+async def test_de_que_trata_after_invitation(monkeypatch):
+    d = started(Dialog(monkeypatch, lead=AGENCIA))
+    d._add("lead", "ok")
+    d._add("anna", servicio.INVITACION)
+    r = await d.say("¿de qué trata?")
+    assert all_text(r) == servicio.PARA_QUE_LLAMADA      # приглашение было только что — без нового
+
+
+@pytest.mark.asyncio
+async def test_after_email_one_thanks_then_manual(monkeypatch):
+    send = AsyncMock(return_value=1); monkeypatch.setattr(main.sender, "send", send)
+    upd = AsyncMock(); monkeypatch.setattr(db, "update_lead_fields", upd)
+    monkeypatch.setattr(db, "set_funnel_stage", AsyncMock())
+    alert = AsyncMock(); monkeypatch.setattr(escalation, "notify_call_ready", alert)
+    result = rag._result([servicio.GRACIAS], llamada_lista=True,
+                         llamada_datos={"nombre": "Luis", "email": "l@x.com"}, rag_meta={})
+    await main._apply_ai_result("wa_5215512345678", {"phone": "wa_5215512345678"}, "Luis, l@x.com", result)
+    send.assert_awaited_once_with("wa_5215512345678", [servicio.GRACIAS])
+    upd.assert_any_await("wa_5215512345678", mode="manual")
+    alert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_call_ready_alert_urgent(monkeypatch):
+    monkeypatch.setattr(escalation.settings, "tg_alerts_chat_id", "111")
+    send = AsyncMock(); monkeypatch.setattr(escalation, "_send_telegram", send)
+    await escalation.notify_call_ready({"phone": "wa_5215512345678"}, "x", nombre="Luis", email="l@x.com")
+    assert "Ответь лиду, он ждёт времени звонка" in send.await_args_list[0].args[2]

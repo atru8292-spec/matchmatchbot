@@ -693,13 +693,9 @@
 >
 > Nuestros servicios tienen una duración a partir de 6 meses e incluyen un proceso muy personalizado, en el que te presentamos mujeres cuidadosamente seleccionadas que cumplen con tus preferencias y requisitos.
 >
-> Por favor ayudame con tu registro aqui:
->
-> https://matchmatchagency.com/es/
->
 > Platicame de ti - eres soltero? tu edad? a que te dedicas?
 
-**Перевод:** Её первый ответ: бутик-агентство, услуга от 6 месяцев, регистрация по ссылке; затем её анкета «расскажи о себе — холост? возраст? чем занимаешься?»
+**Перевод:** Её первый ответ: бутик-агентство, услуга от 6 месяцев (без просьбы о регистрации — анкета в чате); затем её анкета
 
 - **Когда:** quiero conocer rusas, me gustan las eslavas, mujeres rusas, ucranianas, busco pareja eslava
 - **Как отвечать (для модели):** DOSLOVNO solo si se cumple la situación; en otro caso, referencia de tono.
@@ -712,9 +708,9 @@
 
 > Muchas gracias!
 >
-> estas disponible para una breve llamada?
+> tienes tiempo para una llamada y te platico en mas detalles como este funciona?
 
-**Перевод:** «Большое спасибо!» / «Свободен для короткого звонка?»
+**Перевод:** «Большое спасибо!» / «Есть время на звонок? Расскажу подробнее, как это работает»
 
 - **Когда:** (ruta servicio: foto aprobada y slots name, is_single, age, profession completos)
 - **Как отвечать (для модели):** Casi literal cuando se cumple la situación. Si el lead pregunta otra cosa en el mismo mensaje, responde primero eso.

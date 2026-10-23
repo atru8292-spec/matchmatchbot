@@ -59,7 +59,7 @@ def es_objecion_precio(text: str | None) -> bool:
 
 _PRICE_OBJECTION_RE = PRICE_OBJECTION_RE
 # Пичт услуги уже был (без цены с 2026-10-24 — по цене его больше не узнать).
-PITCH_MARK = "para una breve llamada?"      # её приглашение после фото (не «…llamada y te platico»)
+PITCH_MARK = "tienes tiempo para una llamada y te platico"   # её приглашение после фото
 _HESITATION_RE = re.compile(r"\bpensar(?:lo|[eé])?\b|\bno\s+s[eé]\b|\btal\s+vez\b|"
                             r"\bquiz[aá]s?\b|\bluego\s+(?:te\s+)?(?:aviso|digo)\b", re.IGNORECASE)
 _FAREWELL_RE = re.compile(r"\b(?:adi[oó]s|bye|nos\s+vemos|hasta\s+luego|buenas\s+noches|"

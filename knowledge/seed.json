@@ -1305,7 +1305,7 @@
       "id": "greeting_service",
       "tipo": "base_script",
       "titulo": "Primer mensaje con interés en mujeres eslavas o el servicio",
-      "contenido_es": "Hola! Muchas gracias por tu mensaje! Sí, somos una agencia boutique de matchmaking. Ayudamos a personas a encontrar pareja y construir relaciones serias.\n\nTrabajamos principalmente con hombres mexicanos, tanto en México como en Estados Unidos, que están interesados en conocer mujeres de Rusia, Ucrania y Bielorrusia.\n\nNuestros servicios tienen una duración a partir de 6 meses e incluyen un proceso muy personalizado, en el que te presentamos mujeres cuidadosamente seleccionadas que cumplen con tus preferencias y requisitos.\n\nPor favor ayudame con tu registro aqui:\n\nhttps://matchmatchagency.com/es/\n\nPlaticame de ti - eres soltero? tu edad? a que te dedicas?",
+      "contenido_es": "Hola! Muchas gracias por tu mensaje! Sí, somos una agencia boutique de matchmaking. Ayudamos a personas a encontrar pareja y construir relaciones serias.\n\nTrabajamos principalmente con hombres mexicanos, tanto en México como en Estados Unidos, que están interesados en conocer mujeres de Rusia, Ucrania y Bielorrusia.\n\nNuestros servicios tienen una duración a partir de 6 meses e incluyen un proceso muy personalizado, en el que te presentamos mujeres cuidadosamente seleccionadas que cumplen con tus preferencias y requisitos.\n\nPlaticame de ti - eres soltero? tu edad? a que te dedicas?",
       "cuando_usar": "quiero conocer rusas, me gustan las eslavas, mujeres rusas, ucranianas, busco pareja eslava",
       "como_responder": "DOSLOVNO solo si se cumple la situación; en otro caso, referencia de tono.",
       "notas_tono": null,
@@ -1331,13 +1331,13 @@
       "valid_to": null,
       "activo": true,
       "fuente": "переписка Ани 2026-10-20…23 (дословно, опечатки исправлены); решение Арины 2026-10-24",
-      "ru": "Её первый ответ: бутик-агентство, услуга от 6 месяцев, регистрация по ссылке; затем её анкета «расскажи о себе — холост? возраст? чем занимаешься?»"
+      "ru": "Её первый ответ: бутик-агентство, услуга от 6 месяцев (без просьбы о регистрации — анкета в чате); затем её анкета"
     },
     {
       "id": "service_pitch",
       "tipo": "base_script",
       "titulo": "Después de la foto (servicio): invitación a una breve llamada",
-      "contenido_es": "Muchas gracias!\n\nestas disponible para una breve llamada?",
+      "contenido_es": "Muchas gracias!\n\ntienes tiempo para una llamada y te platico en mas detalles como este funciona?",
       "cuando_usar": "(ruta servicio: foto aprobada y slots name, is_single, age, profession completos)",
       "como_responder": "Casi literal cuando se cumple la situación. Si el lead pregunta otra cosa en el mismo mensaje, responde primero eso.",
       "notas_tono": null,
@@ -1361,7 +1361,7 @@
       "valid_to": null,
       "activo": true,
       "fuente": "переписка Ани (её «muchas gracias!» после фото и «estas disponible … para una breve llamada?» без дня и часа); решение Арины 2026-10-24",
-      "ru": "«Большое спасибо!» / «Свободен для короткого звонка?»"
+      "ru": "«Большое спасибо!» / «Есть время на звонок? Расскажу подробнее, как это работает»"
     },
     {
       "id": "agency_trust",

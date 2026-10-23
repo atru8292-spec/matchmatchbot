@@ -124,8 +124,8 @@ def test_only_known_tokens(r):
 def test_link_only_in_purchase_records():
     """Ссылка на билет — только в записи «как купить» (и в паре-образце про покупку)."""
     with_link = {r["id"] for r in RECORDS if any(LINK_RE.search(t) for t in _lead_facing(r))}
-    # 2026-10-24: в первом ответе про агентство — ссылка на регистрацию (как у Ани), не на билет
-    assert with_link == {"event_how_to_buy", "pair_opener_perfecto", "pair_slang", "greeting_service"}
+    # 2026-10-24: ссылку на регистрацию из первого ответа про агентство убрали (анкета в чате)
+    assert with_link == {"event_how_to_buy", "pair_opener_perfecto", "pair_slang"}
 
 
 def test_base_scripts():

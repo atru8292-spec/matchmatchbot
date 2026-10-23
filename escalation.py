@@ -324,6 +324,7 @@ async def notify_call_ready(lead: dict, last_msg: str, nombre: str | None = None
     digits = "+" + phone[3:] if phone.startswith("wa_") else phone
     text = (
         "📞 Лид готов к созвону\n"
+        "⏰ Ответь лиду, он ждёт времени звонка\n"
         f"Имя: {nombre or _lead_name(lead)}\n"
         f"Email: {email or 'не дал'}\n"
         f"Номер: {digits}\n"

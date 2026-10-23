@@ -17,7 +17,8 @@ import re
 SITE = "https://matchmatchagency.com/es/"
 
 # ── тексты Ани (испанский как у неё) ──
-# Первый ответ на интерес к услуге — её текст целиком, одним сообщением, как она шлёт всем.
+# Первый ответ на интерес к услуге — её текст одним сообщением, как она шлёт всем; строку
+# «Por favor ayudame con tu registro aqui» и ссылку убрали: анкета и фото — в чате (2026-10-24).
 BIENVENIDA = (
     "Hola! Muchas gracias por tu mensaje! Sí, somos una agencia boutique de matchmaking. "
     "Ayudamos a personas a encontrar pareja y construir relaciones serias.\n\n"
@@ -25,8 +26,7 @@ BIENVENIDA = (
     "que están interesados en conocer mujeres de Rusia, Ucrania y Bielorrusia.\n\n"
     "Nuestros servicios tienen una duración a partir de 6 meses e incluyen un proceso muy "
     "personalizado, en el que te presentamos mujeres cuidadosamente seleccionadas que cumplen "
-    "con tus preferencias y requisitos.\n\n"
-    f"Por favor ayudame con tu registro aqui:\n\n{SITE}")
+    "con tus preferencias y requisitos.")
 ANKETA = "Platicame de ti - eres soltero? tu edad? a que te dedicas?"
 # Недостающее — только её вопрос по каждому слоту.
 P_SOLTERO = "Eres soltero?"
@@ -37,29 +37,38 @@ FOTOS = "Muchas gracias! Y por último, mándame unas fotos de ti por favor"
 CUANTAS_FOTOS = "2 o 3"
 PARA_QUE_FOTO = "para que podamos invitar mujeres para ti"
 GRACIAS = "Muchas gracias!"
-INVITACION = "estas disponible para una breve llamada?"
+# Приглашение на звонок с причиной — её фраза (без «esta semana»): лиду понятно, зачем звонок.
+INVITACION = "tienes tiempo para una llamada y te platico en mas detalles como este funciona?"
+# Короткое приглашение — её же, когда причина уже сказана (ответ на «¿para qué la llamada?»).
+INVITACION_CORTA = "estas disponible para una breve llamada?"
+# «¿Para qué la llamada?» — собрано из её фраз: «nos gustaría conocerte un poco mejor» (приглашение
+# на звонок перед ивентом), «te platico en mas detalles como este funciona», «te enseño los perfiles
+# que te puede funcionar» (каталог).
+PARA_QUE_LLAMADA = ["nos gustaría conocerte un poco mejor",
+                    "te platico en mas detalles como este funciona y te enseño los perfiles que te puede funcionar"]
 COMO_FUNCIONA = [
     "Cuando hacemos una busqueda personalizada buscamos parejas basado en tus necesidades y "
     "deseos, tus valores y estilo de vida. Te presentamos mujeres que cumplen con todo esto y "
     "tu eliges con quien salir.",
     "aqui puedes verlo en mas detalle:",
     SITE,
-    "que te parece si agendamos una llamada y platicamos en mas detalle?",
 ]
+COMO_FUNCIONA_LLAMADA = "que te parece si agendamos una llamada y platicamos en mas detalle?"
 PRECIO = "es un servicio 100% personalizado, se depende de tus necesidades"
 CARO = "ah ok ok entiendo... estas disponible para una breve llamada y te platico del costo?"
+CARO_SIN_LLAMADA = "ah ok ok entiendo"      # её начало той же фразы, когда звать на звонок рано
 MIERCOLES = [
     "ufff! lo siento!",
     "tal vez el servicio de matchmaking personalizado es la mejor opción para ti?",
-    "tienes tiempo esta semana para una llamada y te platico en mas detalles como este funciona?",
 ]
+MIERCOLES_LLAMADA = "tienes tiempo esta semana para una llamada y te platico en mas detalles como este funciona?"
 FUERA_CIUDAD = "en {ciudad} te podemos ayudar con matchmaking personalizado"
 FUERA_SIN_CIUDAD = "te podemos ayudar con matchmaking personalizado"
-FUERA_REGISTRO = "ayudame con tu registro aqui por favor"
 CATALOGO = ("no manejamos un catalogo de mujeres donde 'eliges' a una pareja. Que te parece si te "
-            "enseño los perfiles que te puede funcionar... estas disponible para una video llamada?")
-TIPO = ["muchas!", "con mucho gusto te podemos presentar con una {tipo}",
-        "tienes tiempo para una llamada y platicamos?"]
+            "enseño los perfiles que te puede funcionar...")
+CATALOGO_LLAMADA = "estas disponible para una video llamada?"
+TIPO = ["muchas!", "con mucho gusto te podemos presentar con una {tipo}"]
+TIPO_LLAMADA = "tienes tiempo para una llamada y platicamos?"
 SUERTE = "Suerte! 😍"
 NOMBRE_EMAIL = "cual es tu nombre completo y tu email?"
 CORREO = "cual es correo electronico?"
@@ -69,9 +78,13 @@ DOGON_NO = ["me gustaría enseñarte unos perfiles de nuevas mujeres que llegaro
             "estas disponible para una video llamada?"]
 
 TEXTOS = ([BIENVENIDA, ANKETA, P_SOLTERO, P_EDAD, P_PROFESION, P_EDAD_PROFESION, FOTOS,
-           CUANTAS_FOTOS, PARA_QUE_FOTO, GRACIAS, INVITACION, PRECIO, CARO, FUERA_CIUDAD,
-           FUERA_SIN_CIUDAD, FUERA_REGISTRO, CATALOGO, SUERTE, NOMBRE_EMAIL, CORREO]
-          + COMO_FUNCIONA + MIERCOLES + TIPO + DOGON + DOGON_NO)
+           CUANTAS_FOTOS, PARA_QUE_FOTO, GRACIAS, INVITACION, INVITACION_CORTA, PRECIO, CARO,
+           CARO_SIN_LLAMADA, FUERA_CIUDAD, FUERA_SIN_CIUDAD, CATALOGO, CATALOGO_LLAMADA, SUERTE, NOMBRE_EMAIL, CORREO,
+           COMO_FUNCIONA_LLAMADA, MIERCOLES_LLAMADA, TIPO_LLAMADA]
+          + COMO_FUNCIONA + MIERCOLES + TIPO + DOGON + DOGON_NO + PARA_QUE_LLAMADA)
+# Приглашения на звонок — для счётчика «не чаще раза за 3 ответа».
+INVITACIONES = (INVITACION, INVITACION_CORTA, COMO_FUNCIONA_LLAMADA, CATALOGO_LLAMADA,
+                TIPO_LLAMADA, MIERCOLES_LLAMADA, CARO, DOGON_NO[-1])
 
 # ── сумма или валюта в ответе (услуга: не звучит никогда) ──
 MONEY_RE = re.compile(
@@ -230,9 +243,32 @@ def ciudad_fuera(text: str) -> str | None:
 
 
 def fuera_bubbles(text: str) -> list[str]:
+    """Её ответ лиду не из CDMX без просьбы о регистрации (анкета в чате, 2026-10-24)."""
     ciudad = ciudad_fuera(text)
-    first = FUERA_CIUDAD.format(ciudad=ciudad) if ciudad else FUERA_SIN_CIUDAD
-    return [first, FUERA_REGISTRO, SITE]
+    return [FUERA_CIUDAD.format(ciudad=ciudad) if ciudad else FUERA_SIN_CIUDAD]
+
+
+_PARA_QUE_LLAMADA_RE = re.compile(
+    r"para\s+qu[eé]\s+(?:es\s+|ser[ií]a\s+|quieres\s+|sirve\s+)?(?:la\s+|una\s+|el\s+)?"
+    r"(?:llamada|videollamada|video\s*llamada|zoom|meet)|"
+    r"(?:de|sobre)\s+qu[eé]\s+(?:se\s+)?(?:trata|es|ser[ií]a|vamos\s+a\s+hablar)\s+(?:la\s+)?"
+    r"(?:llamada|videollamada)|qu[eé]\s+vamos\s+a\s+(?:ver|hablar|platicar)", re.IGNORECASE)
+_DE_QUE_TRATA_RE = re.compile(r"^\W*(?:y\s+)?(?:de|sobre)\s+qu[eé]\s+(?:se\s+)?trata\W*$", re.IGNORECASE)
+
+
+def pregunta_para_que_llamada(text: str, invitacion_reciente: bool = False) -> bool:
+    """«¿Para qué la llamada?» / «¿de qué trata?» (если бот только что звал на звонок)."""
+    text = text or ""
+    return bool(_PARA_QUE_LLAMADA_RE.search(text)) or (
+        invitacion_reciente and bool(_DE_QUE_TRATA_RE.search(text)))
+
+
+def es_invitacion(text: str) -> bool:
+    return any(inv in (text or "") for inv in INVITACIONES)
+
+
+def rechaza_llamada(text: str) -> bool:
+    return bool(_CALL_NO_RE.search(text or ""))
 
 
 def preguntas_faltantes(falta: list[str]) -> list[str]:
