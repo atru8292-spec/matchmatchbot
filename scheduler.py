@@ -25,6 +25,7 @@ import db
 import escalation
 import funnel
 import sender
+import servicio
 from config import settings
 from phones import canonical_phone
 
@@ -126,6 +127,21 @@ async def run_followups() -> int:
             if scenario_id is None:
                 continue
             next_days = funnel.FOLLOWUP_INTERVALS[count]
+            if ld.get("interest") == "agency":
+                # Ветка агентства — её догон дословно, один раз (решение 2026-10-24); дальше
+                # лестницу не продолжаем: ответ лида ведёт ai_conversation.servicio_paso.
+                if count >= 1:
+                    await db.mark_followup_sent(phone, None)
+                    continue
+                sent = await sender.send(phone, list(servicio.DOGON))
+                if sent == 0:
+                    logger.warning("followup: send=0 для %s — не помечаю, повтор позже", phone)
+                    continue
+                await db.mark_followup_sent(phone, None)
+                await db.incr_daily_counter(COLD_COUNTER)
+                done += 1
+                await _lead_pause(COLD_LEAD_PAUSE)
+                continue
             tmpl = await db.get_scenario_template(scenario_id)
             if not tmpl:
                 logger.error("followup: нет template сценария %s", scenario_id)

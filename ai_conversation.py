@@ -395,6 +395,8 @@ def situacion_ok(sit: dict, mem: dict, user_text: str, lead: dict) -> bool:
                        for s in ("name", "is_single", "age", "profession"))
         elif key == "precio_servicio_dado":
             have = bool(ya["precio_servicio_dado"])
+        elif key == "datos_servicio":
+            have = lead.get("is_single") is True and bool(lead.get("age")) and bool(lead.get("profession"))
         elif key == "pitch_servicio_dado":
             have = bool(ya.get("pitch_servicio_dado") or ya.get("precio_servicio_dado"))
         elif key == "auto_saludo":
@@ -896,6 +898,19 @@ def slot_question(cal: dict) -> str | None:
     часть пары — недостающая часть коротко: «¿Y a qué te dedicas?» (решение 2026-10-23)."""
     nxt = cal.get("siguiente")
     if not nxt or not cal.get("puede_preguntar"):
+        return None
+    if cal.get("ruta") == "servicio":
+        # услуга: её вопросы, имя не спрашиваем (решение 2026-10-24)
+        if nxt == "photo":
+            return servicio.FOTOS
+        tenemos = cal.get("tenemos") or {}
+        falta = [s for s in ("is_single", "age", "profession")
+                 if not (tenemos.get(s) is True if s == "is_single" else tenemos.get(s))]
+        # один её вопрос за ход (в ответе модели остаётся только последний вопрос)
+        for slot, q in (("is_single", servicio.P_SOLTERO), ("age", servicio.P_EDAD),
+                        ("profession", servicio.P_PROFESION)):
+            if slot in falta:
+                return q
         return None
     if cal.get("pregunta_corta"):
         return _SLOT_QUESTIONS_CORTAS.get(nxt)
@@ -1922,6 +1937,11 @@ _PEOPLE = r"(?:invitad\w*|asistent\w*|participant\w*|gente|personas)"
 _FUERA_DE_BASE = [
     ("безопасность", re.compile(r"\bes\s+segur[oa]\b|\bqu[eé]\s+tan\s+segur[oa]\b|\bseguridad\b|"
                                 r"\bpeligr\w*|\briesgos[oa]?\b", re.IGNORECASE)),
+    # «¿es real? ¿no es estafa?» — реальных ответов Ани нет ни в базе, ни в выгрузках: молча Ане
+    # (решение Арины 2026-10-24, не выдумывать).
+    ("реально ли это / не обман", re.compile(
+        r"\bes\s+real\b|\bson\s+reales\b|estafa|fraude|\bfake\b|confiable|\bscam\b|"
+        r"garant[ií]a|garantiza", re.IGNORECASE)),
     ("отзывы", re.compile(r"testimoni\w*|\brese[ñn]as?\b|\bopiniones\b|\breferencias\b|"
                           r"\bqui[eé]n(?:es)?\s+(?:ya\s+)?(?:ha|han)\s+(?:ido|asistido)\b", re.IGNORECASE)),
     ("отбор гостей", re.compile(r"\b(?:seleccion\w*|escog\w*|elig\w*|filtr\w*|verific\w*)\b[^.?!]{0,30}\b"
@@ -2105,38 +2125,113 @@ def _bot_ya_dijo(mem: dict, texto: str) -> bool:
 
 
 def servicio_paso(lead: dict, mem: dict, user_text: str) -> dict | None:
-    """Услуга в чате без цены (решения Арины 2026-10-24), кодом, без модели:
-    - согласие на предложенный звонок → короткий ответ, ручной режим и алерт «готов к созвону»;
-    - вопрос о цене услуги → «стоимость зависит от запроса, обсудим в коротком звонке»;
-      второй раз — молча Ане;
-    - «es muy caro» на пути услуги → тот же ход (звонок), цену не называем; второй раз — Ане;
-    - живёт не в CDMX или не может в среду (ивент) → персональный подбор и звонок, один раз.
+    """Ветка агентства словами Ани (решения Арины 2026-10-24), кодом, без модели.
+    До звонка с Аней и не дальше: время, контракт, документы, оплата, суммы — только Аня.
     None — не наш случай."""
     text = user_text or ""
-    cal, settings = mem["calificacion"], mem["settings"]
+    cal, settings, ya = mem["calificacion"], mem["settings"], mem["ya_hecho"]
     ruta = cal.get("ruta") or memory.ruta(lead, text)
-    if servicio.ofrecio_llamada(mem.get("ultimo_mensaje_anna")) and servicio.acepta_llamada(text):
-        return _result([servicio.LLAMADA_OK], funnel_stage="pitched", llamada_lista=True,
+    last = (mem.get("ultimo_mensaje_anna") or "").strip()
+    estado = dict(lead.get("rag_estado") or {})
+
+    # Имя и почта для звонка (её «cual es tu nombre completo y tu email?»): есть почта — Ане
+    # (ручной режим и алерт, лиду ничего: время и приглашение делает она).
+    # последний ход бота может быть из нескольких пузырей — смотрим, чем он закончился
+    if last.endswith(servicio.NOMBRE_EMAIL) or last.endswith(servicio.CORREO):
+        nombre, email = servicio.nombre_y_email(text)
+        nombre = nombre or estado.get("nombre_completo")
+        if not email and last.endswith(servicio.NOMBRE_EMAIL):
+            if nombre:
+                estado["nombre_completo"] = nombre
+            return _result([servicio.CORREO], rag_estado=estado)
+        return _result([], llamada_lista=True, llamada_datos={"nombre": nombre, "email": email},
+                       extracted={"email": email} if email else {}, funnel_stage="pitched")
+
+    # Догон (её цепочка): «Estas saliendo con alguien?» → «no» — профили и видеозвонок.
+    if last.endswith(servicio.DOGON[-1]):
+        if servicio.es_no(text):
+            return _result(list(servicio.DOGON_NO))
+        if servicio.ya_sale_con_alguien(text) or re.match(r"^\W*s[ií]\b", text, re.IGNORECASE):
+            return _result([servicio.SUERTE], pasar_a_manual=True, funnel_stage="nurture")
+
+    # Согласие на звонок: её вопрос про имя и почту, без времени.
+    ofrecida = servicio.ofrecio_llamada(last)
+    if servicio.acepta_llamada(text, ofrecida=ofrecida):
+        return _result([servicio.NOMBRE_EMAIL],
                        extracted={} if lead.get("interest") in ("agency", "both") else {"interest": "both"})
-    otra = bool(_OTRA_PREGUNTA_RE.search(text))
-    if servicio.pregunta_precio_servicio(text, ruta) and not otra:
+
+    if ruta == "servicio" and servicio.ya_sale_con_alguien(text):
+        return _result([servicio.SUERTE], pasar_a_manual=True, funnel_stage="nurture")
+
+    # Не из CDMX — её ответ (Канкун): подбор и регистрация; не может в среду — её три сообщения.
+    motivo = servicio.fuera_o_miercoles(text)
+    filtros = lead.get("is_single") is not False and not re.search(r"\d|casad|no\s+soy\s+soltero", text, re.I)
+    if motivo == "fuera" and filtros and not _bot_ya_dijo(mem, servicio.FUERA_REGISTRO):
+        return _result(servicio.fuera_bubbles(text),
+                       extracted={} if lead.get("interest") in ("agency", "both") else {"interest": "both"})
+    if motivo == "miercoles" and filtros and ruta != "servicio" and settings.get("event_active") == "1" \
+            and not _bot_ya_dijo(mem, servicio.MIERCOLES[1]):
+        return _result(list(servicio.MIERCOLES), extracted={"interest": "both"})
+
+    if ruta != "servicio" and not servicio.pregunta_precio(text, ruta):
+        return None
+    sin_pago = re.sub(r"\bpag\w*", " ", text, flags=re.IGNORECASE)
+    if servicio.pregunta_precio(text, ruta) and not servicio.solo_anya(sin_pago):
         if _bot_ya_dijo(mem, servicio.PRECIO):
+            # на сайте цен нет (проверено 2026-10-24) — «precios iniciales» не шлём, решает Аня
             return _silent("лид второй раз спрашивает цену услуги — ответь сама", kind=FUERA_DE_BASE)
         return _result([servicio.PRECIO])
-    if memory.es_objecion_precio(text) and not otra and ruta != "evento" and (
-            ruta == "servicio" or _bot_ya_dijo(mem, servicio.PRECIO)
-            or mem["ya_hecho"].get("pitch_servicio_dado")):
+    if servicio.solo_anya(text):
+        return _silent("контракт, документы, оплата или пакеты услуги — ведёшь только ты",
+                       kind=FUERA_DE_BASE)
+    if memory.es_objecion_precio(text):
         if _bot_ya_dijo(mem, servicio.CARO):
             return _silent("лид второй раз говорит, что услуга дорогая — реши сама", kind=FUERA_DE_BASE)
         return _result([servicio.CARO])
-    motivo = servicio.fuera_o_miercoles(text)
-    # возраст и «холост» в том же сообщении — фильтры важнее (ответит модель с проверками)
-    if motivo and ruta != "servicio" and settings.get("event_active") == "1" \
-            and lead.get("is_single") is not False and not re.search(r"\d|casad|no\s+soy\s+soltero", text, re.I) \
-            and not _bot_ya_dijo(mem, servicio.FUERA):
-        return _result([servicio.FUERA], extracted={"interest": "both"})
+    if servicio.pregunta_para_que_foto(text):
+        return _result([servicio.PARA_QUE_FOTO])
+    if servicio.pregunta_cuantas_fotos(text):
+        return _result([servicio.CUANTAS_FOTOS])
+    if servicio.pregunta_como_funciona(text):
+        if _bot_ya_dijo(mem, servicio.COMO_FUNCIONA[0]):
+            return _silent("лид снова спрашивает, как работает услуга — ответь сама", kind=FUERA_DE_BASE)
+        return _result(list(servicio.COMO_FUNCIONA))
+    if servicio.pide_catalogo(text):
+        return _result([servicio.CATALOGO])
+    tipo = servicio.tipo_buscado(text)
+    if tipo:
+        return _result([servicio.TIPO[0], servicio.TIPO[1].format(tipo=tipo), servicio.TIPO[2]])
     return None
 
+
+def cuestionario_servicio(lead: dict, mem: dict, datos: dict, foto: bool, rest: str,
+                          extracted: dict, extra: dict) -> list[str] | None:
+    """Анкета услуги словами Ани: имя не спрашиваем; недостающее — только её вопрос по слоту
+    (каждый не больше MAX_SLOT_TRIES раз вместе с анкетой); потом фото; после фото — «Muchas
+    gracias!» и приглашение на короткий звонок. None — отвечает модель (вопрос лида и т.п.)."""
+    ya = mem["ya_hecho"]
+    tries = ya.get("preguntas_calificacion") or {}
+    falta = [s for s in ("is_single", "age", "profession")
+             if not (datos.get(s) is True if s == "is_single" else datos.get(s))]
+    pend = [s for s in falta if tries.get(s, 0) < memory.MAX_SLOT_TRIES]
+    foto_pedida = tries.get("photo", 0) >= 1
+    if has_question(rest):
+        pedir = " ".join(servicio.preguntas_faltantes(pend)) or (
+            servicio.FOTOS if not foto and not foto_pedida else None)
+        mem["cuestionario_modo"] = {"ruta": "servicio", "falta": falta, "extra": extra, "pedir": pedir}
+        return None
+    if foto and not pend:
+        if ya.get("pitch_servicio_dado"):
+            return None
+        return [servicio.GRACIAS, servicio.INVITACION]
+    if pend:
+        return servicio.preguntas_faltantes(pend)
+    if not foto and not foto_pedida:
+        return [servicio.FOTOS]
+    if extracted:
+        return [servicio.GRACIAS]
+    mem["cuestionario_modo"] = {"ruta": "servicio", "falta": falta, "extra": extra, "pedir": None}
+    return None
 
 def _foto(lead: dict, user_text: str) -> bool:
     return bool(lead.get("photo_received")) or "[фото одобрено" in (user_text or "")
@@ -2159,11 +2254,14 @@ def interes_tras_saludo(lead: dict, mem: dict, by_id: dict, user_text: str) -> d
     rid = "greeting_event" if interes == "event" else "greeting_service"
     if interes == "event" and mem["settings"].get("event_active") != "1":
         return None
+    if interes == "agency":
+        # её первый ответ про агентство целиком и её анкета (решение 2026-10-24)
+        return _result([servicio.BIENVENIDA, servicio.ANKETA], funnel_stage="qualifying",
+                       extracted={"interest": interes})
     desc = [b for b in _bubbles_of(by_id.get(rid))[1:] if not cuestionario.es_compuesta(b)]
     if not desc:
         return None
-    ruta = "evento" if interes == "event" else "servicio"
-    return _result(desc + [cuestionario.pregunta_compuesta(ruta, _foto(lead, user_text))],
+    return _result(desc + [cuestionario.pregunta_compuesta("evento", _foto(lead, user_text))],
                    funnel_stage="qualifying", extracted={"interest": interes})
 
 
@@ -2236,6 +2334,15 @@ async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
         reply.update(rag_meta={**meta, "fuentes": ["cuestionario"]}, **extra)
         return reply
     foto = _foto(lead, user_text)
+    if ruta == "servicio":
+        bubbles = cuestionario_servicio(lead, mem, datos, foto, rest, extracted, extra)
+        if bubbles is None:
+            return None
+        pitch = bubbles[-1] == servicio.INVITACION
+        literal = _result(bubbles, funnel_stage="pitched" if pitch else "qualifying",
+                          rag_meta={**meta, "fuentes": ["service_pitch" if pitch else "cuestionario"],
+                                    "literal": True}, **extra)
+        return await _literal_checked(literal, lead, "cuestionario", meta)
     falta = cuestionario.faltantes(datos, ruta, foto)
     if ruta != "servicio" and r.get("seria") == "duda" and not has_question(rest):
         # «solo curiosidad», «no sé»: тепло, информация об ивенте, один мягкий возврат к анкете
@@ -2537,10 +2644,12 @@ async def _generate_core(lead: dict, user_text: str, prompt: str, cost: Cost, me
                 # первым сообщением прислал фото — сначала спасибо (решение 2026-10-23);
                 # эмодзи на весь ход не больше двух, 🎃 темы не считается (2026-10-24)
                 text = emojis_sin_tema([PHOTO_FIRST_THANKS] + text, settings)
-            if rid in ("greeting_event", "greeting_service"):
+            if rid == "greeting_service":
+                # её первый ответ про агентство целиком и её анкета (решение 2026-10-24)
+                text = [servicio.BIENVENIDA, servicio.ANKETA]
+            elif rid == "greeting_event":
                 # анкета одним сообщением; фото уже есть — без просьбы о фото
-                ruta_q = "servicio" if rid == "greeting_service" else "evento"
-                text = [cuestionario.pregunta_compuesta(ruta_q, foto) if cuestionario.es_compuesta(b)
+                text = [cuestionario.pregunta_compuesta("evento", foto) if cuestionario.es_compuesta(b)
                         else b for b in text]
             literal = _result(text,
                               funnel_stage=stage, extracted={"interest": interest} if interest else {},

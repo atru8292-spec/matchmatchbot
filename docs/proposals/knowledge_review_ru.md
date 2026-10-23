@@ -442,14 +442,14 @@
 
 **Текст (es):**
 
-> Soy matchmaker personal: te presento a 15 mujeres eslavas (hasta 20 según el caso), elegidas a mano según tus valores, tu personalidad y tus preferencias de físico, y te acompaño en todo el proceso hasta que encuentres a la indicada.
+> Cuando hacemos una busqueda personalizada buscamos parejas basado en tus necesidades y deseos, tus valores y estilo de vida. Te presentamos mujeres que cumplen con todo esto y tu eliges con quien salir.
 
-**Перевод:** Я личный матчмейкер: знакомлю тебя с 15 славянками (до 20, в зависимости от случая), подобранными вручную по твоим ценностям, характеру и предпочтениям во внешности, и сопровождаю весь процесс, пока ты не найдёшь ту самую.
+**Перевод:** При персональном поиске подбираем пару по твоим запросам, ценностям и образу жизни; знакомим с подходящими, а ты выбираешь, с кем встречаться.
 
 - **Когда:** ¿cómo funciona?, ¿qué ofrecen?, ¿en qué consiste el servicio?, explícame, ¿qué incluye el servicio?, quiero conocer rusas
-- **Как отвечать (для модели):** Al describir la selección menciona SIEMPRE los tres criterios: valores, personalidad y físico. Sin comparaciones con otras formas de conocer gente. Precio solo según tariff_service.
+- **Как отвечать (для модели):** Su texto tal cual; luego el sitio y la invitación a la llamada. Sin números de mujeres ni de parejas.
 - **Флаги:** действие: ответить
-- **Источник:** промпт «Las mujeres y el servicio», №6, №14, №19
+- **Источник:** переписка Ани 2026-10-20 (дословно, опечатки исправлены); решение Арины 2026-10-24
 
 ### `service_origin` · Origen de las mujeres · ✅ подтверждено
 
@@ -487,7 +487,7 @@
 - **Когда:** ¿cuál es el siguiente paso?, ¿cómo empiezo?, me interesa el servicio
 - **Как отвечать (для модели):** Para agendar pide nombre completo y correo (si faltan) y usa [horario_llamada]. Nunca propongas tú una hora concreta.
 - **Флаги:** действие: ответить
-- **Источник:** №14, промпт
+- **Источник:** №14, промпт; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)
 
 ### `service_vip` · Niveles superiores · ✅ подтверждено
 
@@ -499,7 +499,7 @@
 
 - **Когда:** ¿hay plan VIP?, ¿hay otros paquetes?, ¿hay algo más completo?
 - **Флаги:** действие: ответить
-- **Источник:** промпт
+- **Источник:** промпт; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)
 
 ### `service_international` · Fuera de México · ✅ подтверждено
 
@@ -511,7 +511,7 @@
 
 - **Когда:** vivo en Estados Unidos, estoy en Colombia, no estoy en México, ¿trabajan en otros países?
 - **Флаги:** действие: ответить
-- **Источник:** №18, №31
+- **Источник:** №18, №31; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)
 
 ### `service_courses` · Cursos en línea · ✅ подтверждено
 
@@ -584,7 +584,7 @@
 
 - **Когда:** ¿cuánto dura?, ¿en cuánto tiempo?
 - **Флаги:** действие: ответить
-- **Источник:** CLAUDE.md, ai.py:1146
+- **Источник:** CLAUDE.md, ai.py:1146; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)
 
 ### `agency_clients_countries` · Clientes en otros países · ⏳ ждёт Аню
 
@@ -687,35 +687,39 @@
 
 **Текст (es):**
 
-> Hola, soy Anna, fundadora de Match Match Agency 🤍
+> Hola! Muchas gracias por tu mensaje! Sí, somos una agencia boutique de matchmaking. Ayudamos a personas a encontrar pareja y construir relaciones serias.
 >
-> Justo a eso me dedico: como matchmaker personal, te presento a mujeres eslavas (rusas, ucranianas o bielorrusas) que también buscan una relación seria, y te acompaño durante todo el proceso. ✨
+> Trabajamos principalmente con hombres mexicanos, tanto en México como en Estados Unidos, que están interesados en conocer mujeres de Rusia, Ucrania y Bielorrusia.
 >
-> Platícame de ti: ¿cómo te llamas, cuántos años tienes, a qué te dedicas y estás soltero? 🤍
+> Nuestros servicios tienen una duración a partir de 6 meses e incluyen un proceso muy personalizado, en el que te presentamos mujeres cuidadosamente seleccionadas que cumplen con tus preferencias y requisitos.
+>
+> Por favor ayudame con tu registro aqui:
+>
+> https://matchmatchagency.com/es/
+>
+> Platicame de ti - eres soltero? tu edad? a que te dedicas?
 
-**Перевод:** «Привет, я Анна, основательница Match Match Agency» / «Именно этим я и занимаюсь: как личный матчмейкер знакомлю тебя со славянками (русскими, украинками или белорусками), которые тоже ищут серьёзных отношений, и сопровождаю весь процесс.» / «Как тебя зовут и ты холост?»
+**Перевод:** Её первый ответ: бутик-агентство, услуга от 6 месяцев, регистрация по ссылке; затем её анкета «расскажи о себе — холост? возраст? чем занимаешься?»
 
 - **Когда:** quiero conocer rusas, me gustan las eslavas, mujeres rusas, ucranianas, busco pareja eslava
 - **Как отвечать (для модели):** DOSLOVNO solo si se cumple la situación; en otro caso, referencia de tono.
 - **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"primer_mensaje_del_lead": true, "pregunta_concreta": false, "presentacion_hecha": false, "interes": ["agency"]}`
-- **Источник:** №3 (убраны «Gracias por tu interés!», «platicarte», «Antes de contarte más»; вопрос возраста перенесён в слоты); 2026-10-23: анкета одним сообщением (как пишет Аня); 2026-10-23 (после живого теста): анкета короче — без Россия/Украина/Беларусь и серьёзных отношений, фото отдельно после ответа
+- **Источник:** переписка Ани 2026-10-20…23 (дословно, опечатки исправлены); решение Арины 2026-10-24
 
-### `service_pitch` · Pitch del servicio (después de la foto), sin precio · ✅ подтверждено
+### `service_pitch` · Después de la foto (servicio): invitación a una breve llamada · ✅ подтверждено
 
 **Текст (es):**
 
-> Gracias por tu foto 🤍 Te explico cómo puedo ayudarte: soy matchmaker personal y mi trabajo es encontrarte mujeres eslavas que de verdad encajen contigo, por sus valores, su forma de ser y lo que buscan en una relación.
+> Muchas gracias!
 >
-> Te presento a 15 mujeres elegidas a mano especialmente para ti, según tus valores, tu personalidad y tus preferencias de físico. Te acompaño en cada paso hasta que encuentres a la indicada, y ya hemos formado más de 180 parejas así.
->
-> Me gustaría platicar contigo en una llamada corta para conocerte mejor y contarte cómo sería en tu caso. ¿Te parece?
+> estas disponible para una breve llamada?
 
-**Перевод:** «Спасибо за фото. Расскажу, чем могу помочь: я личный матчмейкер и моя работа — найти тебе славянок, которые действительно подходят тебе по ценностям, характеру и тому, что они ищут в отношениях.» / «Я знакомлю тебя с 15 женщинами, подобранными вручную специально для тебя, по твоим ценностям, характеру и предпочтениям во внешности. Сопровождаю на каждом шаге, пока не найдёшь ту самую; так мы уже составили больше 180 пар.» / «Хотелось бы поговорить с тобой коротко по звонку, чтобы узнать тебя лучше и рассказать, как это было бы в твоём случае. Как тебе?»
+**Перевод:** «Большое спасибо!» / «Свободен для короткого звонка?»
 
 - **Когда:** (ruta servicio: foto aprobada y slots name, is_single, age, profession completos)
 - **Как отвечать (для модели):** Casi literal cuando se cumple la situación. Si el lead pregunta otra cosa en el mismo mensaje, responde primero eso.
-- **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"ruta": "servicio", "foto_aprobada": true, "slots_completos": true, "pitch_servicio_dado": false}`
-- **Источник:** №6; 2026-10-24: без цены, звонок без назначения времени
+- **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"ruta": "servicio", "foto_aprobada": true, "datos_servicio": true, "pitch_servicio_dado": false}`
+- **Источник:** переписка Ани (её «muchas gracias!» после фото и «estas disponible … para una breve llamada?» без дня и часа); решение Арины 2026-10-24
 
 ### `agency_trust` · ¿Es real? ¿Es seguro? · ✅ подтверждено
 
@@ -730,7 +734,7 @@
 - **Когда:** ¿es seguro?, ¿es real?, ¿no es estafa?, no confío, ¿es confiable?, suena raro
 - **Как отвечать (для модели):** Casi literal, solo con los datos de este texto. Si la ruta es evento, la segunda parte puede omitirse.
 - **Флаги:** действие: ответить; можно почти дословно; дословно без модели при условии `{"pregunta_de_confianza": true}`
-- **Источник:** №22 (неподтверждённые цифры вынесены в confirmado=false)
+- **Источник:** №22 (неподтверждённые цифры вынесены в confirmado=false); 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)
 
 
 ## Возражения
@@ -772,7 +776,7 @@
 - **Когда:** es muy caro, 10 mil es mucho, no tengo tanto, está caro el servicio
 - **Как отвечать (для модели):** Primera objeción: defiende el valor. Si insiste o se despide: ofrece el evento ([event_price_nonmember] MXN) como opción más accesible. Si tampoco: cursos en línea. Un escalón a la vez.
 - **Флаги:** действие: ответить
-- **Источник:** №16, промпт (лестница сервис → ивент → курсы)
+- **Источник:** №16, промпт (лестница сервис → ивент → курсы); 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)
 
 ### `obj_service_think` · «Lo voy a pensar» (servicio) · ✅ подтверждено
 
@@ -785,7 +789,7 @@
 - **Когда:** lo voy a pensar (servicio), déjame pensarlo, necesito pensarlo
 - **Как отвечать (для модели):** Sin urgencia.
 - **Флаги:** действие: ответить
-- **Источник:** №43
+- **Источник:** №43; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)
 
 ### `obj_videocall` · No quiere videollamada · ✅ подтверждено
 
@@ -798,7 +802,7 @@
 - **Когда:** ¿es necesaria la videollamada?, ¿podemos por mensaje?, no quiero videollamada
 - **Как отвечать (для модели):** Si de verdad no quiere: ofrece seguir un poco por mensaje, sin presionar.
 - **Флаги:** действие: ответить
-- **Источник:** №45
+- **Источник:** №45; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)
 
 ### `obj_no_interest` · No le interesa · ✅ подтверждено
 
@@ -859,14 +863,14 @@
 
 **Текст (es):**
 
-> El servicio es personalizado: la inversión depende de lo que busca cada persona y se platica en una llamada corta.
+> es un servicio 100% personalizado, se depende de tus necesidades
 
-**Перевод:** Услуга персональная: стоимость зависит от запроса, обсуждается на коротком звонке. Цену, пакеты и суммы бот не называет.
+**Перевод:** Это полностью персональная услуга, зависит от твоих запросов.
 
 - **Когда:** ¿cuánto cuesta el servicio?, precio de la agencia, ¿cuánto cobran?, ¿cuánto cuesta el matchmaking?
-- **Как отвечать (для модели):** Nunca des precio, paquetes ni montos del servicio, aunque lo pida directo. Explica que depende de su caso y propón una llamada corta. La hora la acuerda Anna.
+- **Как отвечать (для модели):** Su frase tal cual. Nunca montos, paquetes ni moneda. Si vuelve a preguntar: silencio y aviso a Anna (en el sitio no hay precios).
 - **Флаги:** действие: ответить; можно почти дословно
-- **Источник:** решение Арины 2026-10-24: цену услуги бот не называет
+- **Источник:** переписка Ани 2026-10-21 (дословно); решение Арины 2026-10-24
 
 ### `service_women_contact` · Contacto de las mujeres · ✅ подтверждено
 
@@ -879,7 +883,7 @@
 - **Когда:** ¿me pasas el número de alguna chica?, dame su teléfono, ¿puedo ver fotos de las chicas?
 - **Как отвечать (для модели):** Nunca des teléfonos ni fotos de mujeres. Explícalo como parte del servicio, sin sonar a cobro por un número.
 - **Флаги:** действие: ответить
-- **Источник:** промпт, №26
+- **Источник:** промпт, №26; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)
 
 ### `policy_companion` · Amigo, pareja, grupo, precio para dos · ✅ подтверждено
 

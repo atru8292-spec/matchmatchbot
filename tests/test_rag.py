@@ -1672,8 +1672,9 @@ class TestConversationLogic:
                  msg("anna", "¿Cómo te llamas y estás soltero?", 4)]
         b, _, _ = revisar(["¡Gracias, Luis! 😊"], "Luis", {"interest": "agency"}, prior,
                           extracted={"name": "Luis"})
-        # 2026-10-23 (второй прогон): недостающая часть пары — один раз сразу и коротко
-        assert b == ["¡Gracias, Luis! 😊", "¿Y estás soltero?"]
+        # 2026-10-24: в услуге — её вопросы, имя не спрашиваем
+        assert b == ["¡Gracias, Luis! 😊", rag.servicio.P_SOLTERO]
+        assert not any("llamas" in x for x in b)
 
     def test_after_age_photo_request(self):
         prior = RUN2_BASE + [msg("anna", "¿Cuántos años tienes y a qué te dedicas?", 10)]
@@ -1940,7 +1941,7 @@ class TestVerifierSmallTalkRun5:
 
     @pytest.mark.parametrize("texto", [
         "Van 40 mujeres y 40 hombres.", "La entrada es gratis.", "Termina a la medianoche.",
-        "Aquí nos enfocamos en ayudarte a conocer pareja.", "El evento tiene barra libre.",
+        "Aquí te conseguimos pareja en una semana.", "El evento tiene barra libre.",
         "Las chicas son todas modelos."])
     async def test_domain_claims_still_checked(self, monkeypatch, texto):
         assert await self._verify(monkeypatch, texto) == [texto]
@@ -2069,8 +2070,9 @@ class TestCompraDirecta:
     async def test_service_lead_not_affected(self, monkeypatch):
         p = Pipe(monkeypatch, lead_extra={"name": "Luis", "is_single": True, "interest": "agency"})
         p.chat_replies = [reply(["La inversión es desde $10,000 USD."])] * 2   # + повторная попытка
-        await rag.generate_reply(p.lead, [], "¿cómo pago el servicio?")
-        assert len(p.model_calls()) >= 1      # в модель, а не готовым ходом покупки
+        r = await rag.generate_reply(p.lead, [], "¿cómo pago el servicio?")
+        # 2026-10-24: оплата услуги — только Аня: молча, без модели и без ссылки на билет
+        assert r["action"] == "silent" and not any("[event_link]" in m for m in r["messages"])
 
     async def test_old_payment_question_does_not_trigger_link(self, monkeypatch):
         p = Pipe(monkeypatch, history=OLD_LIES, lead_extra={"name": "Carlos", "is_single": True,

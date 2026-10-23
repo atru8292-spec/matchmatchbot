@@ -316,15 +316,19 @@ async def notify_payment(lead: dict, posible: bool = False, detalle: str | None 
                                phone=(lead or {}).get("phone"), also_dev=True)
 
 
-async def notify_call_ready(lead: dict, last_msg: str) -> None:
-    """Лид согласился на звонок про услугу — время назначает Аня (2026-10-24). Ане и Арине."""
+async def notify_call_ready(lead: dict, last_msg: str, nombre: str | None = None,
+                            email: str | None = None) -> None:
+    """Лид согласился на звонок и дал имя и почту — время и приглашение делает Аня
+    (2026-10-24). Ане и Арине."""
     phone = (lead or {}).get("phone", "")
     digits = "+" + phone[3:] if phone.startswith("wa_") else phone
     text = (
         "📞 Лид готов к созвону\n"
-        f"{_lead_name(lead)} {digits}\n"
+        f"Имя: {nombre or _lead_name(lead)}\n"
+        f"Email: {email or 'не дал'}\n"
+        f"Номер: {digits}\n"
         f"Последнее сообщение: «{(last_msg or '')[:200]}»\n"
-        f"👉 Напиши ему про время: {_wa_link(phone)}"
+        f"👉 Назначь время и пришли приглашение: {_wa_link(phone)}"
     )
     await _send_business_alert(text, lead_action_kb(phone) if phone else None,
                                phone=phone, also_dev=True)

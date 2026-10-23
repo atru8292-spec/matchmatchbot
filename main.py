@@ -709,6 +709,22 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
     action = result["action"]
     messages = result["messages"]
 
+    if result.get("llamada_lista"):
+        # Лид дал имя и почту для звонка (её «cual es tu nombre completo y tu email?»): время и
+        # приглашение делает Аня — ручной режим и алерт, лиду ничего (решение 2026-10-24).
+        datos = result.get("llamada_datos") or {}
+        try:
+            await db.update_lead_fields(phone, mode="manual")
+        except Exception:
+            logger.exception("не смог поставить manual (готов к созвону) [%s]", phone)
+        if result.get("funnel_stage"):
+            await db.set_funnel_stage(phone, result["funnel_stage"], meta={"scenario_id": None})
+        await escalation.notify_call_ready(lead, combined, nombre=datos.get("nombre"),
+                                           email=datos.get("email"))
+        if messages:
+            await sender.send(phone, messages)
+        return
+
     if action == "block":
         # AI-блок через fixed-сценарий. reason из сценария (за что), без escort-инкремента
         # (escort-счётчик ведёт filters). block_lead сам ставит стадию 'lost' в транзакции.
@@ -767,14 +783,12 @@ async def _apply_ai_result(phone: str, lead: dict, combined: str, result: dict) 
 
     sent = await sender.send(phone, messages,  # messages лиду
                              allow_repeat_links=sender._is_link_request(combined))
-    if result.get("llamada_lista"):
-        # Лид согласился на звонок: время назначает Аня — ручной режим и алерт (2026-10-24).
-        # До проверки прерывания: передачу Ане не теряем.
+    if result.get("pasar_a_manual"):
+        # «Suerte! 😍» лиду, который уже с кем-то встречается, — дальше бот молчит (2026-10-24).
         try:
             await db.update_lead_fields(phone, mode="manual")
         except Exception:
-            logger.exception("не смог поставить manual (готов к созвону) [%s]", phone)
-        await escalation.notify_call_ready(lead, combined)
+            logger.exception("не смог поставить manual (pasar_a_manual) [%s]", phone)
     if sender.interrupted():
         # Лид написал ещё раз, пока бот отвечал: остаток ответа и медиа не шлём — новое
         # сообщение разберёт следующий проход с полной историей (уже ушедшее в ней есть).

@@ -201,28 +201,25 @@ async def test_b2_buy_without_name(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_c_service_path(monkeypatch):
-    """(в) услуга: «hola» → «quiero conocer mujeres rusas» → описание услуги и анкета одним
-    сообщением (без фразы про Россию/Украину) → данные → фото → питч с ценой (2026-10-23)."""
+    """(в) услуга словами Ани (2026-10-24): «hola» → «quiero conocer mujeres rusas» → её первый
+    ответ и её анкета → её вопрос по недостающему → фото → «Muchas gracias!» и приглашение на
+    звонок без времени → «sí» → её вопрос про имя и почту."""
     d = Dialog(monkeypatch)
     await d.say("hola")
     r = await d.say("quiero conocer mujeres rusas")
     assert d.lead.get("interest") == "agency"
-    assert all_text(r)[-1] == rag.cuestionario.COMPOUND_SERVICE
+    assert all_text(r) == [rag.servicio.BIENVENIDA, rag.servicio.ANKETA]
     r = await d.say("Luis, soy soltero")
-    t = all_text(r)
-    assert len(t) == 1 and "Me falta saber cuántos años tienes y a qué te dedicas" in t[0]
-    assert "relación seria" not in t[0]
+    assert all_text(r) == [rag.servicio.P_EDAD_PROFESION]
     r = await d.say("tengo 41, soy abogado")
     assert d.lead["age"] == 41 and d.lead["profession"] == "abogado"
-    assert "?" not in all_text(r)[0]
+    assert all_text(r) == [rag.servicio.FOTOS]
     r = await d.say("", photo=True)
     assert r["rag_meta"]["fuentes"] == ["service_pitch"]
-    # 2026-10-24: питч без цены и предложение короткого звонка; «sí» — готов к созвону (Ане)
+    assert all_text(r) == [rag.servicio.GRACIAS, rag.servicio.INVITACION]
     assert not any(rag.suma_no_evento(x) for x in r["messages"]), "цены услуги нет"
-    assert r["messages"][-1].endswith("¿Te parece?") and "llamada corta" in r["messages"][-1]
-    assert not any("[event_link]" in x for x in all_text(r))
     r = await d.say("sí")
-    assert r["messages"] == [rag.servicio.LLAMADA_OK] and r.get("llamada_lista") is True
+    assert r["messages"] == [rag.servicio.NOMBRE_EMAIL]
 
 @pytest.mark.asyncio
 async def test_d_age_profession_answer(monkeypatch):

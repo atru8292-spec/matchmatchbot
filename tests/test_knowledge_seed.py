@@ -124,13 +124,16 @@ def test_only_known_tokens(r):
 def test_link_only_in_purchase_records():
     """Ссылка на билет — только в записи «как купить» (и в паре-образце про покупку)."""
     with_link = {r["id"] for r in RECORDS if any(LINK_RE.search(t) for t in _lead_facing(r))}
-    assert with_link == {"event_how_to_buy", "pair_opener_perfecto", "pair_slang"}
+    # 2026-10-24: в первом ответе про агентство — ссылка на регистрацию (как у Ани), не на билет
+    assert with_link == {"event_how_to_buy", "pair_opener_perfecto", "pair_slang", "greeting_service"}
 
 
 def test_base_scripts():
     for r in (r for r in RECORDS if r["tipo"] == "base_script" and r.get("activo", True)):
         assert r["literal"] and r["situacion"], r["id"]
-        assert len(r["contenido_es"].split("\n\n")) <= 4, r["id"]
+        # greeting_service — её одно сообщение с абзацами (код шлёт его одним пузырём) и анкета
+        if r["id"] != "greeting_service":
+            assert len(r["contenido_es"].split("\n\n")) <= 4, r["id"]
 
 
 def test_hola_script_is_scenario_1_verbatim():
@@ -185,8 +188,9 @@ def test_unconfirmed_numbers_not_served():
                            "pair_end_time"}
     for r in RECORDS:
         # 2026-10-23: «30 mujeres» и «180 parejas» — в тексте владелицы на «está muy caro»
+        # 2026-10-24: «a partir de 6 meses» — в её же первом ответе лидам (переписка 20–23.10)
         if r["confirmado"] and r["id"] not in ("event_attendees", "pair_attendees", "obj_event_price",
-                                               "event_owner_facts_2026_10_23"):
+                                               "event_owner_facts_2026_10_23", "greeting_service"):
             for t in _lead_facing(r) + [r["como_responder"] or ""]:
                 assert not re.search(r"30\s+(?:mujeres|hombres)|30\s+y\s+30|[uú]nico\s+en\s+Am[eé]rica|"
                                      r"medianoche|24\s+y\s+40|seguidores|6\s+meses|28\s+eventos",
@@ -246,7 +250,7 @@ def test_objections_without_praise():
 def test_greeting_service_asks_directly():
     t = next(r for r in RECORDS if r["id"] == "greeting_service")["contenido_es"]
     import cuestionario
-    # 2026-10-23: анкета одним сообщением (как пишет Аня), без вопроса про Россию/Украину
+    # 2026-10-24: её анкета дословно («Platicame de ti - eres soltero? tu edad? a que te dedicas?»)
     assert t.split("\n\n")[-1] == cuestionario.COMPOUND_SERVICE
 
 
@@ -269,8 +273,8 @@ def test_review_doc_is_current():
 
 def test_owner_emojis_in_base_scripts():
     by_id = {r["id"]: r for r in RECORDS}
-    assert "✨" in by_id["greeting_service"]["contenido_es"]
-    assert by_id["agency_trust"]["contenido_es"].endswith("😊")
+    # 2026-10-24: greeting_service — текст Ани без эмодзи; agency_trust выключен (не её текст)
+    assert by_id["agency_trust"]["contenido_es"].endswith("😊") and by_id["agency_trust"]["activo"] is False
 
 
 def test_lively_tone_and_laugh_pair():

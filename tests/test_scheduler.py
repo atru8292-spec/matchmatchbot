@@ -12,6 +12,7 @@ import pytest
 import db
 import funnel
 import scheduler
+import servicio
 import sender
 
 
@@ -45,6 +46,23 @@ class TestFillEvent:
 # ===== run_followups =====
 
 class TestRunFollowups:
+    async def test_agency_lead_gets_anya_chain_once(self, monkeypatch):
+        """Ветка агентства (2026-10-24): её догон «Hola! Como estas?» / «Estas saliendo con
+        alguien?» дословно, один раз; шаблоны сценариев не берём."""
+        lead = {"phone": "wa_1", "funnel_stage": "pitched", "followup_sent_count": 0,
+                "interest": "agency", "whatsapp_name": "X", "name": None}
+        monkeypatch.setattr(db, "due_followups", AsyncMock(return_value=[lead]))
+        tmpl = AsyncMock(return_value="Hola 🤍"); monkeypatch.setattr(db, "get_scenario_template", tmpl)
+        send = AsyncMock(return_value=2); monkeypatch.setattr(sender, "send", send)
+        mark = AsyncMock(); monkeypatch.setattr(db, "mark_followup_sent", mark)
+        monkeypatch.setattr(db, "get_daily_counter", AsyncMock(return_value=0))
+        monkeypatch.setattr(db, "incr_daily_counter", AsyncMock())
+        n = await scheduler.run_followups()
+        assert n == 1
+        assert send.call_args.args[1] == servicio.DOGON
+        tmpl.assert_not_awaited()
+        assert mark.call_args.args == ("wa_1", None)        # дальше лестницу не продолжаем
+
     async def test_stage_based_scenario_and_marks(self, monkeypatch):
         """Уже видел pitch (qualified, анкета не начата) → #59; next через 5 дней (1-й интервал)."""
         lead = {"phone": "wa_1", "funnel_stage": "qualified", "followup_sent_count": 0,

@@ -732,9 +732,9 @@
       "id": "service_what",
       "tipo": "service",
       "titulo": "Qué es el servicio personalizado",
-      "contenido_es": "Soy matchmaker personal: te presento a 15 mujeres eslavas (hasta 20 según el caso), elegidas a mano según tus valores, tu personalidad y tus preferencias de físico, y te acompaño en todo el proceso hasta que encuentres a la indicada.",
+      "contenido_es": "Cuando hacemos una busqueda personalizada buscamos parejas basado en tus necesidades y deseos, tus valores y estilo de vida. Te presentamos mujeres que cumplen con todo esto y tu eliges con quien salir.",
       "cuando_usar": "¿cómo funciona?, ¿qué ofrecen?, ¿en qué consiste el servicio?, explícame, ¿qué incluye el servicio?, quiero conocer rusas",
-      "como_responder": "Al describir la selección menciona SIEMPRE los tres criterios: valores, personalidad y físico. Sin comparaciones con otras formas de conocer gente. Precio solo según tariff_service.",
+      "como_responder": "Su texto tal cual; luego el sitio y la invitación a la llamada. Sin números de mujeres ni de parejas.",
       "notas_tono": null,
       "frases_ejemplo": [],
       "malo": null,
@@ -750,8 +750,8 @@
       "valid_from": "2026-10-21",
       "valid_to": null,
       "activo": true,
-      "fuente": "промпт «Las mujeres y el servicio», №6, №14, №19",
-      "ru": "Я личный матчмейкер: знакомлю тебя с 15 славянками (до 20, в зависимости от случая), подобранными вручную по твоим ценностям, характеру и предпочтениям во внешности, и сопровождаю весь процесс, пока ты не найдёшь ту самую."
+      "fuente": "переписка Ани 2026-10-20 (дословно, опечатки исправлены); решение Арины 2026-10-24",
+      "ru": "При персональном поиске подбираем пару по твоим запросам, ценностям и образу жизни; знакомим с подходящими, а ты выбираешь, с кем встречаться."
     },
     {
       "id": "service_origin",
@@ -782,9 +782,9 @@
       "id": "tariff_service",
       "tipo": "policy",
       "titulo": "Precio del servicio: no se da por chat",
-      "contenido_es": "El servicio es personalizado: la inversión depende de lo que busca cada persona y se platica en una llamada corta.",
+      "contenido_es": "es un servicio 100% personalizado, se depende de tus necesidades",
       "cuando_usar": "¿cuánto cuesta el servicio?, precio de la agencia, ¿cuánto cobran?, ¿cuánto cuesta el matchmaking?",
-      "como_responder": "Nunca des precio, paquetes ni montos del servicio, aunque lo pida directo. Explica que depende de su caso y propón una llamada corta. La hora la acuerda Anna.",
+      "como_responder": "Su frase tal cual. Nunca montos, paquetes ni moneda. Si vuelve a preguntar: silencio y aviso a Anna (en el sitio no hay precios).",
       "notas_tono": null,
       "frases_ejemplo": [],
       "malo": null,
@@ -800,8 +800,8 @@
       "valid_from": "2026-10-21",
       "valid_to": null,
       "activo": true,
-      "fuente": "решение Арины 2026-10-24: цену услуги бот не называет",
-      "ru": "Услуга персональная: стоимость зависит от запроса, обсуждается на коротком звонке. Цену, пакеты и суммы бот не называет."
+      "fuente": "переписка Ани 2026-10-21 (дословно); решение Арины 2026-10-24",
+      "ru": "Это полностью персональная услуга, зависит от твоих запросов."
     },
     {
       "id": "service_couples",
@@ -849,8 +849,8 @@
       "evento_id": null,
       "valid_from": "2026-10-21",
       "valid_to": null,
-      "activo": true,
-      "fuente": "№14, промпт",
+      "activo": false,
+      "fuente": "№14, промпт; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)",
       "ru": "Следующий шаг: видеозвонок 30 минут со мной. На нём я лучше тебя узнаю и начинаю персональный поиск."
     },
     {
@@ -874,8 +874,8 @@
       "evento_id": null,
       "valid_from": "2026-10-21",
       "valid_to": null,
-      "activo": true,
-      "fuente": "промпт",
+      "activo": false,
+      "fuente": "промпт; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)",
       "ru": "Более высокие уровни сервиса обсуждаем спокойно на видеозвонке."
     },
     {
@@ -899,8 +899,8 @@
       "evento_id": null,
       "valid_from": "2026-10-21",
       "valid_to": null,
-      "activo": true,
-      "fuente": "№18, №31",
+      "activo": false,
+      "fuente": "№18, №31; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)",
       "ru": "Персональный сервис работает онлайн, где бы ты ни был."
     },
     {
@@ -924,8 +924,8 @@
       "evento_id": null,
       "valid_from": "2026-10-21",
       "valid_to": null,
-      "activo": true,
-      "fuente": "промпт, №26",
+      "activo": false,
+      "fuente": "промпт, №26; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)",
       "ru": "Контакт с женщиной даём внутри сервиса, когда интерес взаимный."
     },
     {
@@ -1074,8 +1074,8 @@
       "evento_id": null,
       "valid_from": "2026-10-21",
       "valid_to": null,
-      "activo": true,
-      "fuente": "CLAUDE.md, ai.py:1146",
+      "activo": false,
+      "fuente": "CLAUDE.md, ai.py:1146; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)",
       "ru": "Знакомства идут примерно 6 месяцев."
     },
     {
@@ -1305,7 +1305,7 @@
       "id": "greeting_service",
       "tipo": "base_script",
       "titulo": "Primer mensaje con interés en mujeres eslavas o el servicio",
-      "contenido_es": "Hola, soy Anna, fundadora de Match Match Agency 🤍\n\nJusto a eso me dedico: como matchmaker personal, te presento a mujeres eslavas (rusas, ucranianas o bielorrusas) que también buscan una relación seria, y te acompaño durante todo el proceso. ✨\n\nPlatícame de ti: ¿cómo te llamas, cuántos años tienes, a qué te dedicas y estás soltero? 🤍",
+      "contenido_es": "Hola! Muchas gracias por tu mensaje! Sí, somos una agencia boutique de matchmaking. Ayudamos a personas a encontrar pareja y construir relaciones serias.\n\nTrabajamos principalmente con hombres mexicanos, tanto en México como en Estados Unidos, que están interesados en conocer mujeres de Rusia, Ucrania y Bielorrusia.\n\nNuestros servicios tienen una duración a partir de 6 meses e incluyen un proceso muy personalizado, en el que te presentamos mujeres cuidadosamente seleccionadas que cumplen con tus preferencias y requisitos.\n\nPor favor ayudame con tu registro aqui:\n\nhttps://matchmatchagency.com/es/\n\nPlaticame de ti - eres soltero? tu edad? a que te dedicas?",
       "cuando_usar": "quiero conocer rusas, me gustan las eslavas, mujeres rusas, ucranianas, busco pareja eslava",
       "como_responder": "DOSLOVNO solo si se cumple la situación; en otro caso, referencia de tono.",
       "notas_tono": null,
@@ -1330,14 +1330,14 @@
       "valid_from": "2026-10-21",
       "valid_to": null,
       "activo": true,
-      "fuente": "№3 (убраны «Gracias por tu interés!», «platicarte», «Antes de contarte más»; вопрос возраста перенесён в слоты); 2026-10-23: анкета одним сообщением (как пишет Аня); 2026-10-23 (после живого теста): анкета короче — без Россия/Украина/Беларусь и серьёзных отношений, фото отдельно после ответа",
-      "ru": "«Привет, я Анна, основательница Match Match Agency» / «Именно этим я и занимаюсь: как личный матчмейкер знакомлю тебя со славянками (русскими, украинками или белорусками), которые тоже ищут серьёзных отношений, и сопровождаю весь процесс.» / «Как тебя зовут и ты холост?»"
+      "fuente": "переписка Ани 2026-10-20…23 (дословно, опечатки исправлены); решение Арины 2026-10-24",
+      "ru": "Её первый ответ: бутик-агентство, услуга от 6 месяцев, регистрация по ссылке; затем её анкета «расскажи о себе — холост? возраст? чем занимаешься?»"
     },
     {
       "id": "service_pitch",
       "tipo": "base_script",
-      "titulo": "Pitch del servicio (después de la foto), sin precio",
-      "contenido_es": "Gracias por tu foto 🤍 Te explico cómo puedo ayudarte: soy matchmaker personal y mi trabajo es encontrarte mujeres eslavas que de verdad encajen contigo, por sus valores, su forma de ser y lo que buscan en una relación.\n\nTe presento a 15 mujeres elegidas a mano especialmente para ti, según tus valores, tu personalidad y tus preferencias de físico. Te acompaño en cada paso hasta que encuentres a la indicada, y ya hemos formado más de 180 parejas así.\n\nMe gustaría platicar contigo en una llamada corta para conocerte mejor y contarte cómo sería en tu caso. ¿Te parece?",
+      "titulo": "Después de la foto (servicio): invitación a una breve llamada",
+      "contenido_es": "Muchas gracias!\n\nestas disponible para una breve llamada?",
       "cuando_usar": "(ruta servicio: foto aprobada y slots name, is_single, age, profession completos)",
       "como_responder": "Casi literal cuando se cumple la situación. Si el lead pregunta otra cosa en el mismo mensaje, responde primero eso.",
       "notas_tono": null,
@@ -1348,7 +1348,7 @@
       "situacion": {
         "ruta": "servicio",
         "foto_aprobada": true,
-        "slots_completos": true,
+        "datos_servicio": true,
         "pitch_servicio_dado": false
       },
       "literal": true,
@@ -1360,8 +1360,8 @@
       "valid_from": "2026-10-21",
       "valid_to": null,
       "activo": true,
-      "fuente": "№6; 2026-10-24: без цены, звонок без назначения времени",
-      "ru": "«Спасибо за фото. Расскажу, чем могу помочь: я личный матчмейкер и моя работа — найти тебе славянок, которые действительно подходят тебе по ценностям, характеру и тому, что они ищут в отношениях.» / «Я знакомлю тебя с 15 женщинами, подобранными вручную специально для тебя, по твоим ценностям, характеру и предпочтениям во внешности. Сопровождаю на каждом шаге, пока не найдёшь ту самую; так мы уже составили больше 180 пар.» / «Хотелось бы поговорить с тобой коротко по звонку, чтобы узнать тебя лучше и рассказать, как это было бы в твоём случае. Как тебе?»"
+      "fuente": "переписка Ани (её «muchas gracias!» после фото и «estas disponible … para una breve llamada?» без дня и часа); решение Арины 2026-10-24",
+      "ru": "«Большое спасибо!» / «Свободен для короткого звонка?»"
     },
     {
       "id": "agency_trust",
@@ -1386,8 +1386,8 @@
       "evento_id": null,
       "valid_from": "2026-10-21",
       "valid_to": null,
-      "activo": true,
-      "fuente": "№22 (неподтверждённые цифры вынесены в confirmado=false)",
+      "activo": false,
+      "fuente": "№22 (неподтверждённые цифры вынесены в confirmado=false); 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)",
       "ru": "«Match Match Agency — агентство знакомств в Мехико. Мы уже составили больше 180 пар, а познакомиться со мной можно в Instagram: @rusaencdmx.» / «На видеозвонке спокойно расскажу, как всё устроено, и отвечу на вопросы.»"
     },
     {
@@ -1486,8 +1486,8 @@
       "evento_id": null,
       "valid_from": "2026-10-21",
       "valid_to": null,
-      "activo": true,
-      "fuente": "№16, промпт (лестница сервис → ивент → курсы)",
+      "activo": false,
+      "fuente": "№16, промпт (лестница сервис → ивент → курсы); 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)",
       "ru": "Каждую женщину я подбираю вручную под тебя и сопровождаю весь процесс."
     },
     {
@@ -1511,8 +1511,8 @@
       "evento_id": null,
       "valid_from": "2026-10-21",
       "valid_to": null,
-      "activo": true,
-      "fuente": "№43",
+      "activo": false,
+      "fuente": "№43; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)",
       "ru": "Это важное решение, не торопись. Если хочешь, расскажи, что смущает, и обсудим на коротком видеозвонке."
     },
     {
@@ -1536,8 +1536,8 @@
       "evento_id": null,
       "valid_from": "2026-10-21",
       "valid_to": null,
-      "activo": true,
-      "fuente": "№45",
+      "activo": false,
+      "fuente": "№45; 2026-10-24: текст не из переписок Ани — выключено (ветка агентства только её словами)",
       "ru": "Видеозвонок важен, потому что все клиенты разные: мне нужно узнать тебя и понять, что ты ищешь, чтобы подобрать пару. Это 30 минут."
     },
     {

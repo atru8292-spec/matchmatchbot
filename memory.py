@@ -59,7 +59,7 @@ def es_objecion_precio(text: str | None) -> bool:
 
 _PRICE_OBJECTION_RE = PRICE_OBJECTION_RE
 # Пичт услуги уже был (без цены с 2026-10-24 — по цене его больше не узнать).
-PITCH_MARK = "elegidas a mano especialmente para ti"
+PITCH_MARK = "estas disponible para una breve llamada"
 _HESITATION_RE = re.compile(r"\bpensar(?:lo|[eé])?\b|\bno\s+s[eé]\b|\btal\s+vez\b|"
                             r"\bquiz[aá]s?\b|\bluego\s+(?:te\s+)?(?:aviso|digo)\b", re.IGNORECASE)
 _FAREWELL_RE = re.compile(r"\b(?:adi[oó]s|bye|nos\s+vemos|hasta\s+luego|buenas\s+noches|"
@@ -69,7 +69,7 @@ _FAREWELL_RE = re.compile(r"\b(?:adi[oó]s|bye|nos\s+vemos|hasta\s+luego|buenas\
 SLOT_QUESTION_RE = {
     "name": re.compile(r"c[oó]mo\s+te\s+llamas|tu\s+nombre", re.IGNORECASE),
     "is_single": re.compile(r"soltero", re.IGNORECASE),
-    "age": re.compile(r"qu[eé]\s+edad|cu[aá]ntos\s+a[ñn]os", re.IGNORECASE),
+    "age": re.compile(r"qu[eé]\s+edad|tu\s+edad|cu[aá]ntos\s+a[ñn]os", re.IGNORECASE),
     "profession": re.compile(r"a\s+qu[eé]\s+te\s+dedicas|tu\s+profesi[oó]n|en\s+qu[eé]\s+trabajas",
                              re.IGNORECASE),
     # «mándame una foto», «que te mande una foto», «¿me pasas una foto tuya?», «compárteme
@@ -92,7 +92,8 @@ def pregunta_slot(slot: str, text: str | None) -> bool:
 # одобренного фото, как на практике в legacy (решение владелицы 2026-10-22).
 ORDER = ["name", "is_single", "age", "profession", "photo"]
 REQUIRED = {"evento": ["name", "is_single", "photo"],
-            "servicio": ["name", "is_single", "age", "profession", "photo"],
+            # услуга: имя не спрашиваем — у Ани в анкете его нет (решение 2026-10-24)
+            "servicio": ["is_single", "age", "profession", "photo"],
             "sin_definir": ["name", "is_single", "photo"]}
 OPTIONAL = {"evento": ["age", "profession"], "servicio": [], "sin_definir": ["age", "profession"]}
 MAX_SLOT_TRIES = 2
@@ -523,7 +524,7 @@ def calificacion(lead: dict, ya: dict, user_text: str, last_outbound: str | None
         escribio = (ya.get("lead_escribio_tras") or {}).get(slot) or bool((user_text or "").strip())
         return turnos_desde + 1 >= REASK_AFTER_TURNS and escribio
 
-    order = [s for s in ORDER if not (compra and s in OPTIONAL[r])]
+    order = [s for s in ORDER if not (compra and s in OPTIONAL[r]) and not (r == "servicio" and s == "name")]
     siguiente, pasar_a_llamada, bloqueado = None, False, None
     for slot in order:
         if have(slot):

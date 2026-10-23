@@ -17,7 +17,8 @@ FALTA_MARKS = ("Me falta saber", "Solo me falta")
 # отношения и без фото в первом сообщении — фото просим отдельно, когда лид ответил.
 COMPOUND = "Platícame de ti: ¿cómo te llamas, cuántos años tienes, a qué te dedicas y estás soltero? 🤍"
 COMPOUND_EVENT = COMPOUND
-COMPOUND_SERVICE = COMPOUND
+# Услуга — её анкета дословно, без имени (решение 2026-10-24).
+COMPOUND_SERVICE = "Platicame de ti - eres soltero? tu edad? a que te dedicas?"
 FOTO_PEDIDO = "Y por último, mándame 2 o 3 fotos tuyas, por favor 🤍"
 YA_TE_DIJE_REPLY = "Tienes razón, perdón 🤍"
 
@@ -33,7 +34,9 @@ def pedir_fotos(gracias_txt: str) -> str:
 
 
 def es_compuesta(text: str | None) -> bool:
-    return MARK in (text or "")
+    # «Platícame de ti» (ивент) и её «Platicame de ti - …» (услуга, 2026-10-24)
+    low = (text or "").lower().replace("í", "i")
+    return "platicame de ti" in low
 
 
 def es_faltante(text: str | None) -> bool:
