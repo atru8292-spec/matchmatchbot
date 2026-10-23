@@ -355,7 +355,13 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
             out["precio_servicio_dado"] = when
         if cuestionario.es_compuesta(text):
             out["cuestionario"] = out["turnos_bot"]
-            out["cuestionario_ruta"] = "evento" if "Rusia" in text else "servicio"
+            out["cuestionario_ruta"] = None   # текст одинаковый; путь — по интересу лида
+        if "mándame 2 o 3 fotos" in text and out["pregunta_turno"].get("photo") != out["turnos_bot"] \
+                and not pregunta_slot("photo", text):
+            # просьба о фото после анкеты — утверждение, но это вопрос про фото (один раз)
+            out["preguntas_calificacion"]["photo"] += 1
+            out["pregunta_turno"]["photo"] = out["turnos_bot"]
+            out["lead_escribio_tras"]["photo"] = False
         if cuestionario.es_faltante(text):
             out["faltante"] = out["turnos_bot"]
             # «Me falta saber …» — утверждение, но это повторный вопрос по названным пунктам

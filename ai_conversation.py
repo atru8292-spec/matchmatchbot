@@ -2082,14 +2082,34 @@ def _datos_cuestionario(lead: dict, r: dict, estado: dict) -> dict:
     return datos
 
 
+def _ruta_cuestionario(lead: dict, user_text: str) -> str:
+    return "servicio" if memory.ruta(lead, user_text) == "servicio" else "evento"
+
+
+def _datos_falta(falta: list[str]) -> list[str]:
+    return [f for f in falta if f != "photo"]
+
+
 def cuestionario_pendiente(lead: dict, mem: dict, user_text: str) -> bool:
     """Анкету задали, а для шага к покупке чего-то не хватает (ссылку ещё не давали)."""
     ya = mem["ya_hecho"]
     if ya.get("cuestionario") is None or ya.get("enlace_enviado") or ya.get("precio_servicio_dado"):
         return False
-    ruta = ya.get("cuestionario_ruta") or "evento"
+    ruta = _ruta_cuestionario(lead, user_text)
     datos = _datos_cuestionario(lead, {}, dict(lead.get("rag_estado") or {}))
     return bool(cuestionario.faltantes(datos, ruta, _foto(lead, user_text)))
+
+
+def _cola_cuestionario(falta: list[str], ya: dict, thanks: str) -> str | None:
+    """Что спросить после ответа на анкету (один раз каждое): недостающие данные одним
+    сообщением; потом — фото («Y por último, mándame 2 o 3 fotos…»), когда лид ответил."""
+    datos = _datos_falta(falta)
+    if datos and ya.get("faltante") is None:
+        return cuestionario.mensaje_faltante(datos, "", thanks).strip()
+    foto_pedida = (ya.get("preguntas_calificacion") or {}).get("photo", 0) >= 1
+    if "photo" in falta and not foto_pedida:
+        return cuestionario.pedir_fotos(thanks)
+    return None
 
 
 async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
@@ -2099,7 +2119,7 @@ async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
     ya = mem["ya_hecho"]
     if not cuestionario_pendiente(lead, mem, user_text):
         return None
-    ruta = ya.get("cuestionario_ruta") or "evento"
+    ruta = _ruta_cuestionario(lead, user_text)
     estado = dict(lead.get("rag_estado") or {})
     last = mem.get("ultimo_mensaje_anna") or ""
     r = cuestionario.analizar(user_text, cuestionario.es_compuesta(last) or cuestionario.es_faltante(last))
@@ -2131,8 +2151,8 @@ async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
                                     _bubbles_of(by_id.get("event_date_time"))) if b)
         if info:
             bubbles.append(info)
-        if falta and ya.get("faltante") is None:
-            back = cuestionario.mensaje_faltante(falta, ruta, "").strip()
+        if _datos_falta(falta) and ya.get("faltante") is None:
+            back = cuestionario.mensaje_faltante(_datos_falta(falta), ruta, "").strip()
             bubbles.append("Si te animas, " + back[0].lower() + back[1:])
         literal = _result(bubbles, funnel_stage="qualifying",
                           rag_meta={**meta, "fuentes": ["cuestionario", "event_what"], "literal": True},
@@ -2141,7 +2161,7 @@ async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
     if has_question(rest):
         # вопрос лида — отвечает модель по базе; недостающее — к её ответу, один раз
         mem["cuestionario_modo"] = {"ruta": ruta, "falta": falta, "extra": extra,
-                                    "pedir": bool(falta) and ya.get("faltante") is None}
+                                    "pedir": _cola_cuestionario(falta, ya, "")}
         return None
     merged = {**lead, **{k: v for k, v in extracted.items()}}
     thanks = cuestionario.gracias(ya.get("turnos_bot", 0), datos.get("name"))
@@ -2173,13 +2193,14 @@ async def cuestionario_paso(lead: dict, mem: dict, by_id: dict, user_text: str,
                 venta["rag_meta"] = {**meta, "fuentes": ["venta_tras_foto", "cuestionario"]}
                 await _attach_media_captions(venta, lead)
                 return venta
-    if falta and ya.get("faltante") is None:
-        bubbles = [cuestionario.mensaje_faltante(falta, ruta, thanks)]
+    cola = _cola_cuestionario(falta, ya, thanks)
+    if cola:
+        bubbles = [cola]
     elif extracted or r.get("seria"):
         bubbles = [thanks + " 😊"]           # дал новые данные — коротко спасибо
     else:
         # ничего нового («ok», «jaja»): не крутим «gracias», отвечает модель (без вопросов анкеты)
-        mem["cuestionario_modo"] = {"ruta": ruta, "falta": falta, "extra": extra, "pedir": False}
+        mem["cuestionario_modo"] = {"ruta": ruta, "falta": falta, "extra": extra, "pedir": None}
         return None
     literal = _result(bubbles, funnel_stage="qualifying",
                       rag_meta={**meta, "fuentes": ["cuestionario"], "literal": True}, **extra)
@@ -2669,7 +2690,7 @@ async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict
                                                              if v not in (None, "")}}
         estado = {**estado, **modo["extra"]["rag_estado"]}
         if modo["pedir"]:
-            bubbles = bubbles + [cuestionario.mensaje_faltante(modo["falta"], modo["ruta"], "").strip()]
+            bubbles = bubbles + [modo["pedir"]]
     result = _result(bubbles, extracted=out["extracted"], funnel_stage=out["funnel_stage"],
                      rag_estado=estado, rag_meta=meta)
     if cal["pasar_a_llamada"]:

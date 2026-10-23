@@ -50,7 +50,8 @@ async def test_yes_to_everything_in_one_message(monkeypatch):
     assert d.lead["name"] == "Luis" and d.lead["is_single"] is True
     assert d.lead["age"] == 35 and d.lead["profession"] == "abogado"
     t = all_text(r)
-    assert len(t) == 1 and "Solo me falta que me mandes 2 o 3 fotos" in t[0]
+    # анкета закрыта — отдельным сообщением фото (решение 2026-10-23)
+    assert len(t) == 1 and t[0].endswith(cq.FOTO_PEDIDO)
     r = await d.say("", photo=True)
     assert thanks_ok(r["messages"][0], "Luis") and rag.CTA_LINK in r["messages"]
     assert r["send_event_video"] and r["after_media"] == []
@@ -63,12 +64,13 @@ async def test_partial_answer_one_message_for_missing(monkeypatch):
     r = await d.say("Pedro, 40")
     t = all_text(r)
     assert len(t) == 1 and t[0].count("Me falta saber") == 1
-    assert "a qué te dedicas" in t[0] and "soltero" in t[0] and "2 o 3 fotos" in t[0]
+    assert "a qué te dedicas" in t[0] and "soltero" in t[0] and "fotos" not in t[0]
     assert "cómo te llamas" not in t[0] and "cuántos años" not in t[0]
     r = await d.say("ingeniero")
     t = all_text(r)
     assert d.lead["profession"] == "ingeniero"
-    assert len(t) == 1 and "falta" not in t[0] and "?" not in t[0], "недостающее — один раз"
+    # ответил — теперь фото; недостающее («soltero») второй раз не спрашиваем
+    assert len(t) == 1 and t[0].endswith(cq.FOTO_PEDIDO) and "falta" not in t[0]
     r = await d.say("", photo=True)
     assert rag.CTA_LINK in r["messages"], "после двух вопросов «холост» не блокирует покупку"
 
@@ -356,10 +358,12 @@ async def test_no_endless_thanks(monkeypatch):
     d = Dialog(monkeypatch, settings=EV)
     await first_contact(d)
     await d.say("Pedro, 40")                         # недостающее спросили
+    r = await d.say("ok")                            # теперь фото — один раз
+    assert all_text(r)[-1].endswith(cq.FOTO_PEDIDO)
     d.models["ok"] = model(["Perfecto, aquí estoy si tienes dudas."])
     r = await d.say("ok")                            # ничего нового — модель, не «gracias» по кругу
     assert d.model_calls[-1] == "ok"
-    assert not any(cq.MARK in x or "falta" in x for x in all_text(r))
+    assert not any(cq.MARK in x or "falta" in x or "fotos" in x for x in all_text(r))
 
 
 @pytest.mark.asyncio

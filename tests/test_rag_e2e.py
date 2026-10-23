@@ -143,7 +143,7 @@ async def test_a_event_path_photo_turn(monkeypatch):
     assert d.lead["name"] == "Luis" and d.lead["is_single"] is True
     t = all_text(r)
     assert len(t) == 1 and "Me falta saber cuántos años tienes y a qué te dedicas" in t[0]
-    assert "buscas una relación seria" in t[0] and "2 o 3 fotos" in t[0]
+    assert "fotos" not in t[0]                      # фото — отдельно, после ответа (2026-10-23)
 
     calls = len(d.model_calls)
     r = await d.say("", photo=True)

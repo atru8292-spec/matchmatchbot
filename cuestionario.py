@@ -13,21 +13,23 @@ import re
 MARK = "Platícame de ti"            # по этой фразе в истории видно, что анкету уже задали
 FALTA_MARKS = ("Me falta saber", "Solo me falta")
 
-_FOTOS = "Y por último, mándame 2 o 3 fotos tuyas, por favor 🤍"
-COMPOUND_EVENT = ("Platícame de ti: ¿eres soltero y buscas una relación seria con una mujer de "
-                  "Rusia, Ucrania o Bielorrusia que viva en CDMX? ¿Cómo te llamas, cuántos años "
-                  "tienes y a qué te dedicas? " + _FOTOS)
-COMPOUND_SERVICE = ("Platícame de ti: ¿eres soltero? ¿Cómo te llamas, cuántos años tienes y a qué "
-                    "te dedicas? " + _FOTOS)
+# Решение владелицы 2026-10-23 (после живого теста): без вопроса про Россию и серьёзные
+# отношения и без фото в первом сообщении — фото просим отдельно, когда лид ответил.
+COMPOUND = "Platícame de ti: ¿cómo te llamas, cuántos años tienes, a qué te dedicas y estás soltero? 🤍"
+COMPOUND_EVENT = COMPOUND
+COMPOUND_SERVICE = COMPOUND
+FOTO_PEDIDO = "Y por último, mándame 2 o 3 fotos tuyas, por favor 🤍"
 YA_TE_DIJE_REPLY = "Tienes razón, perdón 🤍"
 
 
-def pregunta_compuesta(ruta: str, foto_recibida: bool = False) -> str:
-    """Составной вопрос анкеты. Фото уже прислал — без просьбы о фото."""
-    text = COMPOUND_SERVICE if ruta == "servicio" else COMPOUND_EVENT
-    if foto_recibida:
-        text = text.replace(" " + _FOTOS, " 🤍")
-    return text
+def pregunta_compuesta(ruta: str = "evento", foto_recibida: bool = False) -> str:
+    """Анкета одним сообщением (одинаковая для ивента и услуги; фото в ней не просим)."""
+    return COMPOUND
+
+
+def pedir_fotos(gracias_txt: str) -> str:
+    """Просьба о фото после ответа на анкету: «¡Muchas gracias! Y por último, mándame…»."""
+    return f"{gracias_txt} {FOTO_PEDIDO}".strip()
 
 
 def es_compuesta(text: str | None) -> bool:
@@ -176,10 +178,10 @@ def analizar(text: str, responde_cuestionario: bool = True) -> dict:
 # ───────────────────────── недостающее ─────────────────────────
 
 def faltantes(datos: dict, ruta: str, foto: bool) -> list[str]:
-    """Чего не хватает по анкете: single (и серьёзные отношения для ивента), name, age,
-    profession, photo."""
+    """Чего не хватает по анкете: single, name, age, profession, photo. Про серьёзные
+    отношения не спрашиваем (решение 2026-10-23); явный отказ ловится разбором ответа."""
     out = []
-    if datos.get("is_single") is not True or (ruta != "servicio" and datos.get("seria") != "si"):
+    if datos.get("is_single") is not True:
         out.append("single")
     for k in ("name", "age", "profession"):
         if not datos.get(k):
@@ -197,9 +199,9 @@ def _join(items: list[str]) -> str:
 
 
 def mensaje_faltante(falta: list[str], ruta: str, gracias_txt: str) -> str:
-    """Одно сообщение: благодарность и всё недостающее сразу («Me falta saber …»)."""
-    single = ("si estás soltero" if ruta == "servicio"
-              else "si estás soltero y buscas una relación seria") if "single" in falta else None
+    """Одно сообщение: благодарность и все недостающие данные сразу («Me falta saber …»).
+    Фото здесь не просим — отдельно, после ответа (pedir_fotos)."""
+    single = "si estás soltero" if "single" in falta else None
     items = [_ITEM[k] for k in ("name", "age", "profession") if k in falta]
     parts = [gracias_txt]
     if items or single:
@@ -208,11 +210,7 @@ def mensaje_faltante(falta: list[str], ruta: str, gracias_txt: str) -> str:
         else:
             what = single or _join(items)
         parts.append(f"Me falta saber {what}.")
-        if "photo" in falta:
-            parts.append(_FOTOS)
-    if not (items or single) and "photo" in falta:
-        parts.append("Solo me falta que me mandes 2 o 3 fotos tuyas, por favor 🤍")
-    return " ".join(parts)
+    return " ".join(p for p in parts if p)
 
 
 _GRACIAS = ("¡Muchas gracias!", "¡Gracias, {name}!", "¡Qué bien, gracias!")
