@@ -152,7 +152,7 @@ async def test_a_event_path_photo_turn(monkeypatch):
     assert m[0] in ("¡Muchas gracias! 😊", "¡Gracias, Luis! 😊", "¡Qué bien, gracias! 😊")
     assert m[1].startswith("Te espero el [event_date] a las [event_start] en [event_address]")
     assert m[2] == "Aquí puedes apartar tu lugar: [event_link]"
-    assert r["send_event_video"] is True and r["send_event_photo"] is True
+    assert r["send_event_video"] is True and r["send_event_photo"] is False  # фото прошлых ивентов — только при сомнениях (2026-10-23)
     assert r["after_media"] == []
     assert not any("foto tuya" in x for x in all_text(r))
 

@@ -56,7 +56,7 @@ async def test_2_photo_first_then_all_data_goes_to_purchase(monkeypatch):
     m = r["messages"]
     assert m[0] in ("¡Muchas gracias! 😊", "¡Gracias, Jorge! 😊", "¡Qué bien, gracias! 😊")   # по очереди
     assert m[-1] == rag.CTA_LINK
-    assert r["send_event_video"] is True and r["send_event_photo"] is True
+    assert r["send_event_video"] is True and r["send_event_photo"] is False  # фото прошлых ивентов — только при сомнениях (2026-10-23)
     assert r["rag_meta"]["fuentes"] == ["venta_tras_datos"]   # подписи — общий путь с шагом после фото
     t = all_text(r)
     assert not slot_qs(t, "photo") and not slot_qs(t, "age") and not slot_qs(t, "profession")

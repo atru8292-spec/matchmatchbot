@@ -371,3 +371,44 @@ async def test_lock_dict_cleaned(monkeypatch):
     monkeypatch.setattr(main, "_process_burst_impl", AsyncMock())
     await main._process_burst("wa_9")
     assert not any(k[1] == "wa_9" for k in main._burst_locks)
+
+
+# ───────── тема ивента один раз, фото прошлых ивентов только при сомнениях (2026-10-23) ─────────
+
+@pytest.mark.asyncio
+async def test_theme_said_in_greeting_not_repeated_in_event_description(monkeypatch):
+    """Живой чат 2026-10-23: «Hola» → приветствие с Halloween → «Me interesa el evento» →
+    описание ивента снова с Halloween. Второй раз тему не говорим."""
+    d = Dialog(monkeypatch, settings=EV)
+    r = await d.say("Hola")
+    assert any("[event_theme_phrase]" in b or THEME in b for b in all_text(r))
+    r = await d.say("Me interesa el evento")
+    t = all_text(r)
+    assert t[-1] == cq.COMPOUND_EVENT
+    assert not any("[event_theme_phrase]" in b or THEME in b or "Halloween" in b for b in t)
+    assert any("18 de noviembre" in b or "[event_date]" in b for b in t), "описание ивента осталось"
+
+
+@pytest.mark.asyncio
+async def test_theme_kept_on_first_mention(monkeypatch):
+    d = Dialog(monkeypatch, settings=EV)
+    await first_contact(d)
+
+
+def test_sin_tema_repetido_unit():
+    mem = {"ya_hecho": {"halloween_mencionado": "hoy"}, "settings": {"event_theme_phrase": THEME}}
+    r = rag._result(["Es el 18 de noviembre. " + THEME, "[event_theme_phrase]", "¿Vienes?"])
+    out = rag.sin_tema_repetido(r, mem)
+    assert out["messages"] == ["Es el 18 de noviembre.", "¿Vienes?"]
+    mem["ya_hecho"]["halloween_mencionado"] = None
+    assert rag.sin_tema_repetido(r, mem)["messages"] == r["messages"]
+
+
+@pytest.mark.asyncio
+async def test_purchase_step_sends_video_not_photos(monkeypatch):
+    d = Dialog(monkeypatch, settings=EV)
+    await first_contact(d)
+    await d.say("Luis, 35, abogado, soltero")
+    r = await d.say("", photo=True)
+    assert rag.CTA_LINK in r["messages"]
+    assert r["send_event_video"] is True and r["send_event_photo"] is False

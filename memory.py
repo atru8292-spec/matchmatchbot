@@ -389,7 +389,8 @@ def ya_hecho(prior: list[dict], lead: dict, settings: dict,
             out["enlace_enviado"] = when
         if address and address in text.lower():
             out["direccion_dada"] = when
-        if "halloween" in text.lower():
+        theme = (settings.get("event_theme_phrase") or "").strip()
+        if "halloween" in text.lower() or "[event_theme_phrase]" in text or (theme and theme in text):
             out["halloween_mencionado"] = when
         for tema in hechos_en(text, settings):
             if tema not in out["hechos_dichos"]:

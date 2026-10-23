@@ -1957,7 +1957,7 @@ def venta_tras_foto(lead: dict, mem: dict, by_id: dict, user_text: str,
     return _result(bubbles, funnel_stage="qualified",
                    extracted={"interest": "event"} if desde_historia else {},
                    send_event_video=not ya.get("video_enviado"),
-                   send_event_photo=not ya.get("foto_enviada") and media_fits(mem),
+                   send_event_photo=False,   # фото — только при сомнениях (модель), видео хватает
                    after_media=[question] if question else [])
 
 
@@ -1994,7 +1994,7 @@ def venta_tras_datos(lead: dict, merged: dict, mem: dict, by_id: dict, user_text
     question = slot_question(cal) if cal.get("siguiente") in ("age", "profession") else None
     return _result(bubbles, funnel_stage="qualified",
                    send_event_video=not ya.get("video_enviado"),
-                   send_event_photo=not ya.get("foto_enviada") and media_fits(mem),
+                   send_event_photo=False,   # фото — только при сомнениях (модель), видео хватает
                    after_media=[question] if question else [])
 
 
@@ -2366,6 +2366,32 @@ async def generate_reply(lead: dict, history: list[dict], user_text: str) -> dic
 
 async def _generate(lead: dict, user_text: str, prompt: str, cost: Cost) -> dict:
     mem = await memory.build(lead, user_text)
+    result = await _generate_core(lead, user_text, prompt, cost, mem)
+    return sin_tema_repetido(result, mem)
+
+
+def sin_tema_repetido(result: dict, mem: dict) -> dict:
+    """Тему ивента («Esta vez es temática de Halloween 🎃») говорим один раз за диалог: уже
+    сказали — из нового ответа фразу убираем (решение Арины 2026-10-23: спросит — ответим)."""
+    if not mem["ya_hecho"].get("halloween_mencionado"):
+        return result
+    theme = (mem["settings"].get("event_theme_phrase") or "").strip()
+    out = []
+    for b in result.get("messages") or []:
+        b = b.replace("[event_theme_phrase]", "")
+        if theme:
+            b = b.replace(theme, "")
+        b = re.sub(r"[ \t]+(\n|$)", r"\1", b)
+        b = re.sub(r"[ \t]{2,}", " ", b).strip()
+        if b:
+            out.append(b)
+    if out != (result.get("messages") or []):
+        result = {**result, "messages": out}
+        result.setdefault("rag_meta", {}).setdefault("notas", []).append("убрала повтор темы ивента")
+    return result
+
+
+async def _generate_core(lead: dict, user_text: str, prompt: str, cost: Cost, mem: dict) -> dict:
     settings = mem["settings"]
     mem["compra_pendiente"] = compra_pendiente(mem, user_text)
     if mem["compra_pendiente"]:

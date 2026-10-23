@@ -912,7 +912,7 @@ class TestEventPhotoGate:
         r = await rag.generate_reply(p.lead, history, "[фото одобрено]")
         assert p.model_calls() == []          # ход после фото собирает код (решение 2026-10-22)
         assert r["messages"][-1] == rag.CTA_LINK
-        assert r["send_event_video"] is True and r["send_event_photo"] is True
+        assert r["send_event_video"] is True and r["send_event_photo"] is False  # фото прошлых ивентов — только при сомнениях (2026-10-23)
         assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
 
 
@@ -1741,7 +1741,7 @@ class TestVentaTrasFoto:
                                  "Te espero el [event_date] a las [event_start] en [event_address], con bebida de bienvenida y botanas.",
                                  "Aquí puedes apartar tu lugar: [event_link]"]
         assert not any("?" in m for m in r["messages"])
-        assert r["send_event_video"] and r["send_event_photo"]
+        assert r["send_event_video"] and not r["send_event_photo"]  # фото прошлых ивентов — только при сомнениях (2026-10-23)
         assert r["after_media"] == ["¿Cuántos años tienes y a qué te dedicas?"]
         assert r["rag_meta"]["fuentes"] == ["venta_tras_foto"]
 
@@ -1841,8 +1841,8 @@ class TestVentaTrasFoto:
         monkeypatch.setattr(ai, "_maybe_announce_event_video", video)
         monkeypatch.setattr(ai, "_maybe_announce_event_photo", photo)
         r = await rag.generate_reply(p.lead, RUN2_BASE, "[фото одобрено]")
-        assert r["video_caption"] == rag.VIDEO_CAPTION and r["photo_caption"] == "Así fue el evento pasado."
-        total = rag.emoji_count(r["messages"] + r["after_media"] + [r["video_caption"], r["photo_caption"]])
+        assert r["video_caption"] == rag.VIDEO_CAPTION and not r.get("photo_caption")  # фото прошлых ивентов — только при сомнениях (2026-10-23)
+        total = rag.emoji_count(r["messages"] + r["after_media"] + [r["video_caption"]])
         assert total <= 2
 
 
