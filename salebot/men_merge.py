@@ -1,5 +1,6 @@
 import json
 import ast
+import re
 
 # In Love bot, Salebot helper: adds one man to the mailing map without
 # erasing the other men's lists (so their "next profile" buttons keep working).
@@ -36,10 +37,28 @@ def _to_list(val):
     return []
 
 
+def _fallback(data):
+    # Salebot can render the map in a way that breaks parsing of the whole
+    # string; then pull the fields out one by one.
+    out = {}
+    if not isinstance(data, str):
+        return out
+    m = re.search(r'"man"\s*:\s*"?([0-9]+)"?', data)
+    if m:
+        out["man"] = m.group(1)
+    w = re.search(r'"women"\s*:\s*(\[[^\]]*\])', data)
+    if w:
+        out["women"] = w.group(1)
+    c = re.search(r'"current"\s*:\s*(\{.*\})\s*,\s*"man"', data, re.S)
+    if c:
+        out["current"] = c.group(1)
+    return out
+
+
 def handle(data):
     params = _loads(data)
     if not isinstance(params, dict):
-        params = {}
+        params = _fallback(data)
     current = _loads(params.get("current"))
     if not isinstance(current, dict):
         current = {}

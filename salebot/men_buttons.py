@@ -4,6 +4,7 @@ import ast
 # In Love bot, Salebot helper: buttons with men for /mailing_select.
 # Input (JSON or Python literal):
 #   {"names": ["Diego gonzalez serna", ...], "pids": ["1058923342", ...], "ages": ["61", ...]}
+#   or the same values as strings joined with "|": {"names": "Diego|Jonathan", "pids": "105|170"}
 # names, pids and ages go in the same order (as returned by the men table).
 # Output: JSON list of inline buttons, one man per line.
 # Each man button sends callback "<pid>_mansel_clbk".
@@ -41,7 +42,8 @@ def _to_list(val):
                 return [str(parsed)]
             except Exception:
                 pass
-        return [s]
+        # Salebot passes table columns joined with "|"
+        return [x.strip() for x in s.split("|")]
     return []
 
 
